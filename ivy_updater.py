@@ -368,7 +368,7 @@ def cheese_wheel(silent=True,
     icy.SILENT = silent
     cdlm = Candelabrum()
     get_candles = cdlm.load_candles
-    ivy_ndx = composite_index('./indexes/current.ndx')
+    ivy_ndx = composite_index('./indexes/custom.ndx')
     mice = icy.ThreeBlindMice(ivy_ndx, max_days=max_days)
     make_cheese = mice.get_cheese
     mstat = API.get_clock()
@@ -441,7 +441,7 @@ def spin_wheel():
             if ts in schedule:
                 total_spins += 1
                 print(f'Spin: {total_spins}')
-                s, mice = cheese_wheel(silent=False, max_days=8, chart_size=89)
+                s, mice = cheese_wheel(silent=False, max_days=8, chart_size=900)
                 status = s[0]
                 if mice:
                     with open('./all.cheese', 'wb') as f:

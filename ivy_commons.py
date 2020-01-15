@@ -220,20 +220,16 @@ def logic_block(candle):
     strength = int(candle.strength)
     rating = float(candle.thunderstruck)
     buy_logic = (
-        cls > money > median,
-        strength >= -2,
-        0.3819661 >= zscore >= -0.3819661,
-        rating >= 61.80339
+        opn > cls > median < money,
+        0.3819661 >= zscore >= -0.3819661
         ) # buy_logic
     sell_logic = (
-        rating <= 11.80339,
-        zscore >= 2,
-        zscore <= -2,
-        strength <= -3
+        opn < cls < median > money,
+        0.3819661 >= zscore >= -0.3819661
         ) # sell_logic
     if all(buy_logic):
         return 1
-    elif any(sell_logic):
+    elif all(sell_logic):
         return -1
     else:
         return 0
@@ -296,8 +292,15 @@ class ThreeBlindMice:
                     cost = price * shares
                 if self._cash - cost >= 0 and cost > 0 < self._cash:
                     self._cash -= cost
-                    self._positions[symbol] = (timestamp, cost, shares,
-                                               stop_loss, target)
+                    risk_adj = price * self._risk
+                    new_position = (
+                        timestamp,
+                        cost,
+                        shares,
+                        stop_loss - risk_adj,
+                        target + risk_adj
+                        ) # new_position
+                    self._positions[symbol] = new_position
                     self._signals = _SAPP(timestamp, self._signals)
                     self._signals[timestamp]['buy'].append(_SARGS)
         else:
@@ -310,8 +313,8 @@ class ThreeBlindMice:
             curr_day = self.__get_day__(timestamp)
             days = busday_count(entry_day, curr_day)
             trade_stops = any((
-                equity >= profit and signal == -1,
-                equity <= loss,
+                price >= profit and signal == -1,
+                price <= loss,
                 days >= self._max_days
                 )) # trade_stops
             time_check = (True if self._day_trade else days > 1)
