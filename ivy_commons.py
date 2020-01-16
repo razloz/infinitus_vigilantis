@@ -6,6 +6,7 @@ from time import strptime
 from time import strftime
 from time import mktime
 from time import localtime
+from time import gmtime
 from statistics import stdev
 from statistics import mean
 from datetime import datetime
@@ -284,7 +285,19 @@ class ThreeBlindMice:
         _SAPP = self.__sorted_append__
         _SARGS = (symbol, price, stop_loss, target)
         if symbol not in self._positions:
-            if signal == 1:
+            valid = self._day_trade
+            ts_day = timestamp.split(' ')[0]
+            if not valid:
+                valid = True
+                for ts in self._signals.keys():
+                    if ts_day in ts:
+                        s = self._signals[ts]['sell']
+                        if len(s) > 0:
+                            for cheese in s:
+                                if cheese[0] == symbol:
+                                    valid = False
+                                    break
+            if valid and signal == 1:
                 shares = int(safe_div(self._buyin, price))
                 cost = price * shares
                 if cost > self._cash:
@@ -468,6 +481,6 @@ class UpdateSchedule(object):
         if self._current <= self._last:
             ts = self._dates[self._current]
             self._current += 1
-            return float(ts.timestamp())
+            return strftime('%Y-%m-%d %H:%M:%S', gmtime(ts.timestamp()))
         else:
             raise StopIteration()

@@ -100,7 +100,7 @@ class Candelabrum:
             ) # self._CSV_ARGS
         _date_args = dict(
             start='2017-1-1 00:00:00',
-            end=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+            end=time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime()),
             tz=_tz,
             freq='15min',
             name='time'
@@ -144,10 +144,7 @@ class Candelabrum:
             return None
         ivy = self._TEMPLATE.copy()
         if self._VERBOSE: self._TIMER.reset
-        barset = API.get_barset(symbol,
-                                timeframe,
-                                after=after,
-                                limit=limit)
+        barset = API.get_barset(symbol, timeframe, after=after, limit=limit)
         ivy.update(barset[symbol].df)
         ivy.dropna(inplace=True)
         if ivy.empty: return None
@@ -167,11 +164,7 @@ class Candelabrum:
         return ivy.copy()
 
     @SILENCE
-    def update_candles(self,
-                       symbol,
-                       timeframe,
-                       new_data,
-                       local_data=None):
+    def update_candles(self, symbol, timeframe, new_data, local_data=None):
         """Combine old data with new data."""
         if local_data is None:
             _old = self.load_candles(symbol, timeframe)
@@ -238,13 +231,8 @@ class Candelabrum:
             self._VERBOSE = not self._VERBOSE
 
     @SILENCE
-    def cartography(self,
-                    symbol,
-                    timeframe,
-                    dataframe,
-                    status,
-                    cheese=None,
-                    chart_path='./charts/active.png'):
+    def cartography(self, symbol, timeframe, dataframe, status,
+                    cheese=None, chart_path='./charts/active.png'):
         """Charting for IVy candles."""
         global plt
         plt.close('all')
@@ -358,11 +346,8 @@ class Candelabrum:
         plt.close(fig)
 
 
-def cheese_wheel(silent=True,
-                 chart_size=0,
-                 timeframe='15Min',
-                 max_days=34,
-                 do_update=True):
+def cheese_wheel(silent=True, chart_size=0, timeframe='15Min',
+                 max_days=34, do_update=True):
     """Update and test historical data."""
     global icy
     icy.SILENT = silent
@@ -428,20 +413,18 @@ def spin_wheel():
     today = ''
     schedule = list()
     keeper = icy.TimeKeeper()
-    get_day = lambda t: str(time.strftime('%Y-%m-%d', t))
     try:
         print('Spinning the cheese wheel...')
         while spinning:
-            utc_now = time.gmtime()
-            ts = int(time.mktime(utc_now))
-            check_day = str(get_day(utc_now))
+            utc_now = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())
+            check_day = utc_now.split(' ')[0]
             if check_day != today:
-                today = str(check_day)
+                today = check_day
                 schedule = list(get_schedule(today, freq='5min'))
-            if ts in schedule:
+            if utc_now in schedule:
                 total_spins += 1
                 print(f'Spin: {total_spins}')
-                s, mice = cheese_wheel(silent=False, max_days=8, chart_size=900)
+                s, mice = cheese_wheel(silent=False, max_days=8, chart_size=89)
                 status = s[0]
                 if mice:
                     with open('./all.cheese', 'wb') as f:
@@ -456,7 +439,7 @@ def spin_wheel():
                     else:
                         print('Spin! Spin! Spin!')
             if spinning:
-                time.sleep(0.34)
+                time.sleep(1)
     except KeyboardInterrupt:
         print('Keyboard Interrupt: Stopping loop.')
         looping = False
