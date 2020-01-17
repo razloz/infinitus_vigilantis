@@ -81,11 +81,9 @@ class IVyApp(Tk):
         """Setup menu entries."""
         m = lambda: self.set_vista('main')
         c = lambda: self.set_vista('chart')
-        self.menu_view = Menu(self, tearoff=0)
-        self.menu_view.add_command(label='Candelabrum', command=m)
-        self.menu_view.add_command(label='Cartography', command=c)
         self.menu_root = Menu(self)
-        self.menu_root.add_cascade(label='View', menu=self.menu_view)
+        self.menu_root.add_command(label='Candelabrum', command=m)
+        self.menu_root.add_command(label='Cartography', command=c)
         self.menu_root.add_command(label='Exit', command=self.destroy)
         self.config(menu=self.menu_root)
 
