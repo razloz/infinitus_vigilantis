@@ -346,7 +346,7 @@ class Candelabrum:
         plt.close(fig)
 
 
-def cheese_wheel(silent=True, chart_size=0, timeframe='15Min',
+def cheese_wheel(silent=False, chart_size=0, timeframe='15Min',
                  max_days=34, do_update=True):
     """Update and test historical data."""
     global icy
@@ -424,7 +424,7 @@ def spin_wheel():
             if utc_now in schedule:
                 total_spins += 1
                 print(f'Spin: {total_spins}')
-                s, mice = cheese_wheel(silent=False, max_days=8, chart_size=89)
+                s, mice = cheese_wheel(max_days=8, chart_size=610)
                 status = s[0]
                 if mice:
                     with open('./all.cheese', 'wb') as f:

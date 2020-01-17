@@ -27,11 +27,6 @@ def silence(fn):
             return fn(*args, **kwargs)
         except Exception as details:
             if not SILENT:
-                #fname = fn.__name__
-                #etype = type(details).__name__
-                #edets = details.args
-                #exc = f'{fname} encountered {etype} with\n{edets}\n'
-                #print(exc)
                 traceback.print_exc()
             return None
     return proxy_fn
@@ -104,22 +99,26 @@ def money_line(points, fast=8, weight=34):
     except Exception as details:
         if not SILENT:
             print(f'money_line encountered {details.args}')
+            traceback.print_exc()
         return (0, 0, 0, 0, 0, 0)
 
 
-def get_money(points, sample_size=55):
+def get_money(points, sample=233, fast=34, weight=89):
     """Compile money line from points."""
     points_range = range(len(points))
     points_end = points_range[-1]
     money = list()
-    s = sample_size * -1
+    sample = int(sample)
+    s = sample * -1
+    min_size = sample - 1
+    weights = dict(fast=int(fast), weight=int(weight))
     for i in points_range:
         if i == points_end:
-            money.append(money_line(points[s:]))
-        elif i >= 54:
+            money.append(money_line(points[s:], **weights))
+        elif i >= min_size:
             si = i + (s + 1)
             ei = i + 1
-            money.append(money_line(points[si:ei]))
+            money.append(money_line(points[si:ei], **weights))
         else:
             money.append((0, 0, 0, 0, 0, 0))
     return money
@@ -217,20 +216,25 @@ def logic_block(candle):
     opn = float(candle.open)
     zscore = float(candle.zscore)
     money = float(candle.wema)
+    dh = float(candle.dh)
+    dl = float(candle.dl)
     median = float(candle.mid)
-    strength = int(candle.strength)
-    rating = float(candle.thunderstruck)
+    near_money = 0.3819661 >= zscore >= -0.3819661
+    bullish = 0 != cls > money > median < dl != 0
+    bearish = 0 != cls < money < median > dh != 0
+    price_up = cls > opn
+    price_down = not price_up
     buy_logic = (
-        opn > cls > median < money,
-        0.3819661 >= zscore >= -0.3819661
+        all((price_down, bullish, near_money)),
+        all((price_down, bullish, zscore <= -1.6180339))
         ) # buy_logic
     sell_logic = (
-        opn < cls < median > money,
-        0.3819661 >= zscore >= -0.3819661
+        all((price_up, bearish, near_money)),
+        all((price_up, bullish, zscore >= 1.6180339))
         ) # sell_logic
-    if all(buy_logic):
+    if any(buy_logic):
         return 1
-    elif all(sell_logic):
+    elif any(sell_logic):
         return -1
     else:
         return 0
@@ -243,7 +247,7 @@ class ThreeBlindMice:
                 stats, benchmark, symbols,
                 pending, positions, ledger
     """
-    def __init__(self, symbols, cash=5e5, risk=0.3819661,
+    def __init__(self, symbols, cash=5e5, risk=0.0381966,
                  max_days=34, day_trade=False):
         """Set local variables."""
         self._symbols = list(symbols)
@@ -317,23 +321,21 @@ class ThreeBlindMice:
                     self._signals = _SAPP(timestamp, self._signals)
                     self._signals[timestamp]['buy'].append(_SARGS)
         else:
-            position = self._positions[symbol]
-            equity = price * position[2]
-            entry = position[1]
-            profit = position[4]
-            loss = position[3]
-            entry_day = self.__get_day__(position[0])
+            ts, entry, shares, adj_stop, adj_target = self._positions[symbol]
+            equity = price * shares
+            entry_day = self.__get_day__(ts)
             curr_day = self.__get_day__(timestamp)
             days = busday_count(entry_day, curr_day)
             trade_stops = any((
-                price >= profit and signal == -1,
-                price <= loss,
-                days >= self._max_days
+                price >= adj_target,
+                price <= adj_stop,
+                days >= self._max_days,
+                signal == -1 and equity > entry
                 )) # trade_stops
-            time_check = (True if self._day_trade else days > 1)
+            time_check = True if self._day_trade else days > 1
             if time_check and trade_stops:
                 self._cash += equity
-                roi = percent_change(equity, position[1])
+                roi = percent_change(equity, entry)
                 if roi > 0:
                     self._gain += 1
                 elif roi < 0:
