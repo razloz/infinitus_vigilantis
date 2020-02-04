@@ -168,7 +168,7 @@ class CandelabrumFrame(TemplateFrame):
         selected = w.item(w.focus(), option='text')
         if selected in self.ivy_ndx:
             sym = str(selected).lower()
-            chart_path = abspath(f'./charts/{sym}_15MIN.png')
+            chart_path = abspath(f'./charts/{sym}_1D.png')
             self.parent.frames['chart'].chart_path = chart_path
             self.parent.set_vista('chart')
 

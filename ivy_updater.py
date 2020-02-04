@@ -66,12 +66,13 @@ class Spanner:
         return self.span
 
 
-def thunderstruck(s, a):
+def thunderstruck(s, a, z):
     """Thunderstruck Rating System."""
     t = list()
     for i in range(len(s)):
         span = s[i]
         savg = a[i]
+        zscore = z[i]
         r = 0
         if span > savg:
             r = span - savg
@@ -217,7 +218,11 @@ class Candelabrum:
                 self._SPANNER.span = 0
                 ivy['span'] = ivy['zscore'].apply(self._SPANNER.expand)
                 ivy['avg_span'] = ivy['span'].expanding().mean()
-                targs = (ivy['span'].tolist(), ivy['avg_span'].tolist())
+                targs = (
+                    ivy['span'].tolist(),
+                    ivy['avg_span'].tolist(),
+                    ivy['zscore'].tolist()
+                    ) # targs
                 ivy['thunderstruck'] = thunderstruck(*targs)
                 self.save_candles(symbol, timeframe, ivy)
             elapsed = tk.update[1]
@@ -346,7 +351,7 @@ class Candelabrum:
         plt.close(fig)
 
 
-def cheese_wheel(silent=False, chart_size=0, timeframe='15Min',
+def cheese_wheel(silent=False, chart_size=0, timeframe='1D',
                  max_days=34, do_update=True):
     """Update and test historical data."""
     global icy
@@ -361,7 +366,18 @@ def cheese_wheel(silent=False, chart_size=0, timeframe='15Min',
     if not silent:
         print(f'Market Status: {status[0]}')
     if do_update:
-        cdlm.do_update(ivy_ndx, timeframe)
+        passed_check = False
+        if timeframe == '1D':
+            if bool(status[0]) is False:
+                passed_check = True
+        else:
+            passed_check = True
+        if passed_check:
+            if not silent:
+                print('Passed check, doing update...')
+            cdlm.do_update(ivy_ndx, timeframe)
+        elif not silent:
+            print(f'Check failed, skipping update...(timeframe: {timeframe})')
     if not silent:
         l = len(ivy_ndx)
         print(f'Starting quest for the ALL CHEESE using {l} symbols.')

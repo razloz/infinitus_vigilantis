@@ -103,7 +103,7 @@ def money_line(points, fast=8, weight=34):
         return (0, 0, 0, 0, 0, 0)
 
 
-def get_money(points, sample=233, fast=34, weight=89):
+def get_money(points, sample=89, fast=13, weight=34):
     """Compile money line from points."""
     points_range = range(len(points))
     points_end = points_range[-1]
@@ -219,22 +219,23 @@ def logic_block(candle):
     dh = float(candle.dh)
     dl = float(candle.dl)
     median = float(candle.mid)
-    near_money = 0.3819661 >= zscore >= -0.3819661
-    bullish = 0 != cls > money > median < dl != 0
-    bearish = 0 != cls < money < median > dh != 0
+    bullish = 0 != dl > median != 0
+    bearish = 0 != dh < median != 0
     price_up = cls > opn
     price_down = not price_up
     buy_logic = (
-        all((price_down, bullish, near_money)),
-        all((price_down, bullish, zscore <= -1.6180339))
+        price_down,
+        bullish,
+        zscore < 0.6180339
         ) # buy_logic
     sell_logic = (
-        all((price_up, bearish, near_money)),
-        all((price_up, bullish, zscore >= 1.6180339))
+        price_up,
+        bullish,
+        zscore > 1.6180339
         ) # sell_logic
-    if any(buy_logic):
+    if all(buy_logic):
         return 1
-    elif any(sell_logic):
+    elif all(sell_logic):
         return -1
     else:
         return 0
