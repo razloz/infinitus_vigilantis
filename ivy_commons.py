@@ -226,12 +226,12 @@ def logic_block(candle):
     buy_logic = (
         price_down,
         bullish,
-        zscore < 0.6180339
+        zscore <= 0.3819661
         ) # buy_logic
     sell_logic = (
         price_up,
         bullish,
-        zscore > 1.6180339
+        zscore >= 2
         ) # sell_logic
     if all(buy_logic):
         return 1
@@ -248,7 +248,7 @@ class ThreeBlindMice:
                 stats, benchmark, symbols,
                 pending, positions, ledger
     """
-    def __init__(self, symbols, cash=5e5, risk=0.0381966,
+    def __init__(self, symbols, cash=5e5, risk=0.3819661,
                  max_days=34, day_trade=False):
         """Set local variables."""
         self._symbols = list(symbols)
