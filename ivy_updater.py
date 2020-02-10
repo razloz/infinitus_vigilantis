@@ -400,6 +400,9 @@ def cheese_wheel(silent=False, chart_size=0, timeframe='1D',
             finally:
                 pass
     if not silent:
+        if not len(signals) > 0:
+            print('No signals! No Stats!')
+            return (status, mice)
         positions = mice.positions
         sig_ts = list(signals)[-1]
         buy = signals[sig_ts]['buy']
@@ -440,7 +443,7 @@ def spin_wheel():
             if utc_now in schedule:
                 total_spins += 1
                 print(f'Spin: {total_spins}')
-                s, mice = cheese_wheel(max_days=89, chart_size=100)
+                s, mice = cheese_wheel(max_days=89, chart_size=300)
                 status = s[0]
                 if mice:
                     with open('./all.cheese', 'wb') as f:

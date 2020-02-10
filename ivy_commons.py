@@ -211,31 +211,17 @@ class TimeKeeper:
 @silence
 def logic_block(candle):
     """Generate buy and sell signals."""
-    t = int(candle.trend)
-    cls = float(candle.close)
-    opn = float(candle.open)
     zscore = float(candle.zscore)
-    money = float(candle.wema)
     dh = float(candle.dh)
     dl = float(candle.dl)
     median = float(candle.mid)
     bullish = 0 != dl > median != 0
     bearish = 0 != dh < median != 0
-    price_up = cls > opn
-    price_down = not price_up
-    buy_logic = (
-        price_down,
-        bullish,
-        zscore <= 0.3819661
-        ) # buy_logic
-    sell_logic = (
-        price_up,
-        bullish,
-        zscore >= 2
-        ) # sell_logic
+    buy_logic = (bullish, zscore <= 0.3819661)
+    sell_logic = (zscore >= 3, bearish, zscore <= -3)
     if all(buy_logic):
         return 1
-    elif all(sell_logic):
+    elif any(sell_logic):
         return -1
     else:
         return 0
@@ -248,7 +234,7 @@ class ThreeBlindMice:
                 stats, benchmark, symbols,
                 pending, positions, ledger
     """
-    def __init__(self, symbols, cash=5e5, risk=0.3819661,
+    def __init__(self, symbols, cash=5e5, risk=0.0038196,
                  max_days=34, day_trade=False):
         """Set local variables."""
         self._symbols = list(symbols)
@@ -352,21 +338,24 @@ class ThreeBlindMice:
         """Get signals and queue orders."""
         closes = dataframe['close'].tolist()
         self._benchmark[symbol] = (closes[0], closes[-1])
-        last_signal = 0
         for candle in dataframe.itertuples():
             ts = candle[0].strftime('%Y-%m-%d %H:%M')
             signal = logic_block(candle)
             if not signal: signal = 0
             self._pending = self.__sorted_append__(ts, self._pending)
-            pargs = (str(symbol), float(candle.close),
-                     float(candle.dl), float(candle.dh))
+            candle_close = float(candle.close)
+            pargs = (
+                str(symbol),
+                candle_close,
+                float(candle.dl),
+                candle_close + float(candle.sdev) * 1.6180339
+                ) # pargs
             if signal == 1:
                 self._pending[ts]['buy'].append(pargs)
             elif signal == -1:
                 self._pending[ts]['sell'].append(pargs)
             else:
                 self._pending[ts]['neutral'].append(pargs)
-            last_signal = signal
 
     @silence
     def validate_trades(self):
