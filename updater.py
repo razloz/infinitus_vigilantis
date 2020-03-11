@@ -1,5 +1,5 @@
 #!./.env/bin/python3
-"""Launcher for the Infinitus Vigilantis application."""
+"""Launcher for the IVy Updater."""
 
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2020, Daniel Ward'
@@ -15,7 +15,7 @@ if __name__ == '__main__':
     with open('./license/Disclaimer.txt', 'r') as f:
         DISCLAIMER = f.read()
     print(f'\n{LICENSE}\n{DISCLAIMER}\n')
-    print('Loading GUI...')
-    import source.ivy_gui_tk as ivy
-    print('Starting IVy GUI...')
-    ivy.start_gui()
+    print('Loading IVy Updater...')
+    import source.ivy_candles as updater
+    print('Starting IVy Updater...')
+    updater.spin_wheel()
