@@ -1,14 +1,15 @@
 # infinitus_vigilantis
 Infinitus Vigilantis for Python
 
+Requirements:
+  - Alpaca Markets API keys and Tkinter
+
 Dependencies:
-  - alpaca_trade_api
   - matplotlib
   - numpy
   - pandas
-  - tkinter
   - pillow
-  
+
 Disclaimer:
 	The information provided by Infinitus Vigilantis for Python (the
 "Software") and accompanying material is for informational purposes
