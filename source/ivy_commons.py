@@ -103,7 +103,7 @@ def money_line(points, fast=8, weight=34):
         return (0, 0, 0, 0, 0, 0)
 
 
-def get_money(points, sample=89, fast=13, weight=34):
+def get_money(points, fast=89, weight=233, sample=610):
     """Compile money line from points."""
     points_range = range(len(points))
     points_end = points_range[-1]

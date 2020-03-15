@@ -159,7 +159,7 @@ def cartographer():
                         sym = str(symbol).upper()
                         cp = f'./charts/{sym}.png'
                         cdls = get_candles(symbol)
-                        cartography(sym, cdls[-480:], cheese=c, chart_path=cp)
+                        cartography(sym, cdls[-610:], cheese=c, chart_path=cp)
                 finally:
                     e = time() - t
                     last_poll = mouse_poll

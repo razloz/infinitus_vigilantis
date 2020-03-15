@@ -161,17 +161,7 @@ class CandelabrumFrame(TemplateFrame):
             new_symbol = str(selected).upper()
             if new_symbol != self.active_symbol:
                 self.active_symbol = new_symbol
-                ac = './all.cheese'
-                if exists(ac):
-                    try:
-                        with open(abspath(ac), 'rb') as pkl:
-                            mice = pickle.load(pkl)
-                        signals = mice.signals
-                        print('Calling cartographer...')
-                        charts.cartographer(self.active_symbol, signals)
-                    finally:
-                        pass
-            chart_path = abspath('./charts/active.png')
+            chart_path = abspath(f'./charts/{self.active_symbol}.png')
             self.parent.frames['chart'].chart_path = chart_path
             self.parent.set_vista('chart')
 
@@ -182,9 +172,6 @@ class CandelabrumFrame(TemplateFrame):
             with open(abspath('./all.cheese'), 'rb') as pkl:
                 mice = pickle.load(pkl)
             signals = mice.signals
-            if self.parent.current_vista == 'chart':
-                sym = str(self.active_symbol).upper()
-                charts.cartographer(sym, signals)
             positions = mice.positions
             s = list(signals)
             t = (str(s[-1]) if len(s) > 0 else None)
@@ -242,10 +229,10 @@ class CartographyFrame(TemplateFrame):
         """Keep chart current."""
         sym = str(self.active_symbol).upper()
         cp = str(self.chart_path)
-        jd = './jobs.done'
-        chart_rdy = getmtime(jd) if exists(jd) else 0
+        cd = './chart.done'
+        chart_rdy = getmtime(cd) if exists(cd) else 0
         if chart_rdy > self._last_job and exists(cp):
-            self._last_job = int(chart_rdy)
+            self._last_job = chart_rdy
             self._last_path = cp
             self._raw_image = Image.open(self._last_path)
             aa = Image.ANTIALIAS

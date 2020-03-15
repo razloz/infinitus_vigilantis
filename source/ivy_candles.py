@@ -253,6 +253,7 @@ def spin_wheel(daemonized=True):
     get_schedule = icy.UpdateSchedule
     spinning = True
     sleep_until = 0
+    sleep_date = ''
     total_spins = 0
     today = ''
     schedule = list()
@@ -286,13 +287,14 @@ def spin_wheel(daemonized=True):
                         else:
                             print('Spin! Spin! Spin!')
                     else:
-                        sleep_until = make_utc(str(s['next_open']))
+                        sleep_date = str(s['next_open'])
+                        sleep_until = make_utc(sleep_date)
             if spinning:
                 if utc_ts >= sleep_until:
                     time.sleep(1)
                 else:
                     u = sleep_until - utc_ts
-                    print(f'Next spin in {u} second(s).')
+                    print(f'Next spin scheduled for {sleep_date} in {u} second(s).')
                     time.sleep(u)
     except KeyboardInterrupt:
         print('Keyboard Interrupt: Stopping loop.')
