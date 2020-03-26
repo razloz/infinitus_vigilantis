@@ -267,7 +267,7 @@ def spin_wheel(daemonized=True):
             check_day = utc_now.split(' ')[0]
             if check_day != today:
                 today = check_day
-                schedule = list(get_schedule(today, freq='1min'))
+                schedule = list(get_schedule(today, freq='5min'))
             if utc_now in schedule:
                 total_spins += 1
                 print(f'Spin: {total_spins}')

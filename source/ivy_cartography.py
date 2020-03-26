@@ -17,7 +17,7 @@ from time import time
 plt.style.use('dark_background')
 
 
-def cartography(symbol, dataframe, cheese=None,
+def cartography(symbol, dataframe, cheese=None, adj=None,
                 chart_path='./charts/active.png', *ignore):
     """Charting for IVy candles."""
     global plt
@@ -38,14 +38,14 @@ def cartography(symbol, dataframe, cheese=None,
     vol_mid = dataframe['volume_mid'].tolist()
     vol_dh = dataframe['volume_dh'].tolist()
     vol_dl = dataframe['volume_dl'].tolist()
-    fig = plt.figure(figsize=(13, 8), constrained_layout=False)
+    fig = plt.figure(figsize=(16, 9), constrained_layout=False)
     sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
     ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
     plt.xticks(data_range, timestamps, rotation=21, fontweight='bold')
-    plt.subplots_adjust(left=0.08, bottom=0.13, right=0.92,
-                        top=0.90, wspace=0, hspace=0.08)
+    plt.subplots_adjust(left=0.08, bottom=0.20, right=0.92,
+                        top=0.95, wspace=0, hspace=0.08)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
     ax1.set_ylabel('Price', fontweight='bold')
     ax1.set_xlim(((data_range[0] - 2), (data_range[-1] + 2)))
@@ -99,21 +99,22 @@ def cartography(symbol, dataframe, cheese=None,
         ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
                  linestyle='solid', linewidth=3)
 
-    pkws = {'linestyle': 'solid', 'linewidth': 1}
+    # Per sample plots
+    pkws = {'linestyle': 'solid', 'linewidth': 1.3}
     pkws['label'] = f'Money: {round(cdl_wema[-1], 2)}'
-    pkws['color'] = (0.1, 0.5, 0.1, 0.8)
+    pkws['color'] = (0.4, 0.7, 0.4, 0.8)
     ax1.plot(data_range, cdl_wema, **pkws)
     pkws['label'] = None
     ax2.plot(data_range, vol_wema, **pkws)
 
     pkws['label'] = f'Mid: {round(cdl_mid[-1], 2)}'
-    pkws['color'] = (0.8, 0.8, 1, 0.8)
+    pkws['color'] = (0.7, 0.7, 1, 0.7)
     ax1.plot(data_range, cdl_mid, **pkws)
     pkws['label'] = None
     ax2.plot(data_range, vol_mid, **pkws)
 
     pkws['linestyle'] = 'dotted'
-    pkws['linewidth'] = 0.75
+    pkws['linewidth'] = 0.89
     pkws['label'] = f'DevHigh: {round(cdl_dh[-1], 2)}'
     ax1.plot(data_range, cdl_dh, **pkws)
     pkws['label'] = None
@@ -125,23 +126,33 @@ def cartography(symbol, dataframe, cheese=None,
     ax2.plot(data_range, vol_dl, **pkws)
 
     ts = timestamps[-1].strftime('%Y-%m-%d %H:%M')
-    t = f'{symbol}: {cdl_close[-1]} @ {ts}'
-    fig.legend(title=t, ncol=6, loc='upper center', fontsize='large')
+    res = adj if adj else 'None'
+    t = f'{symbol}: {cdl_close[-1]}  @  {ts} (resample: {res})'
+    fig.suptitle(t, fontsize=18)
+    fig.legend(ncol=4, loc='lower center', fontsize='xx-large', fancybox=True)
     plt.savefig(str(chart_path))
     plt.close(fig)
     print("Cartography: chart's done!")
     return False
 
 
-def cartographer():
+def cartographer(symbol=None, chart_size=610, adj_time='5Min'):
     """Charting daemon."""
+    do_once = isinstance(symbol, str)
+    cs = chart_size * -1 if isinstance(chart_size, int) else -610
+    valid_times = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
+    adj = adj_time if adj_time in valid_times else None
+    if not adj: print(f'Error: adj_time must be one of {valid_times}')
     cdlm = Candelabrum()
     get_candles = cdlm.load_candles
-    ivy_ndx = composite_index('./indexes/custom.ndx')
+    if not do_once:
+        ivy_ndx = composite_index('./indexes/custom.ndx')
+        print(f'Cartographer: working on {len(ivy_ndx)} symbols.')
+    else:
+        print(f'Cartographer: creating a {chart_size} width {adj} chart for {symbol}.')
     charting = True
     last_poll = 0
     try:
-        print(f'Cartographer: working on {len(ivy_ndx)} symbols.')
         p = path.getmtime
         e = path.exists
         mp = path.abspath('./last.update')
@@ -155,22 +166,46 @@ def cartographer():
                         mice = pickle.load(pkl)
                     c = mice.signals
                     t = time()
-                    for symbol in ivy_ndx:
+                    if not do_once:
+                        for symbol in ivy_ndx:
+                            sym = str(symbol).upper()
+                            cp = f'./charts/{sym}.png'
+                            cdls = get_candles(sym)
+                            if adj:
+                                cdls = cdls.resample(adj).mean().copy()
+                            if len(cdls) > chart_size:
+                                scaled_cdls = cdls[cs:]
+                            else:
+                                scaled_cdls = cdls[:]
+                            kargs = dict(cheese=c, chart_path=cp)
+                            cartography(sym, scaled_cdls, **kargs)
+                    else:
                         sym = str(symbol).upper()
                         cp = f'./charts/{sym}.png'
-                        cdls = get_candles(symbol)
-                        cartography(sym, cdls[-610:], cheese=c, chart_path=cp)
+                        cdls = get_candles(sym)
+                        if adj:
+                            cdls = cdls.resample(adj).mean().copy()
+                        cdls.dropna(inplace=True)
+                        if len(cdls) > chart_size:
+                            scaled_cdls = cdls[cs:]
+                        else:
+                            scaled_cdls = cdls[:]
+                        kargs = dict(cheese=c, chart_path=cp)
+                        cartography(sym, scaled_cdls, **kargs)
                 finally:
                     e = time() - t
                     last_poll = mouse_poll
                     with open('./chart.done', 'w') as f:
                         f.write('yigyig')
                     print(f'Cartographer: finished work in {e} seconds.')
-                print(f'Cartographer: going to sleep.')
-            sleep(0.5)
+                if not do_once:
+                    print(f'Cartographer: going to sleep.')
+            if not do_once:
+                sleep(0.5)
+            else:
+                charting = False
     except KeyboardInterrupt:
         print('Keyboard Interrupt: Stopping loop.')
         charting = False
     finally:
         print(f'Cartographer retired.')
-
