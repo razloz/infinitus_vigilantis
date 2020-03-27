@@ -18,18 +18,26 @@ if __name__ == '__main__':
     print('Loading IVy Cartographer...')
     import source.ivy_cartography as charts
     import argparse
+    vt = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
     p = argparse.ArgumentParser()
-    p.add_argument("--symbol", help='Symbol for historical data.')
-    p.add_argument("--size", help='Chart size after resampling.')
-    valid_times = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
-    p.add_argument("--timing", help=f'Valid times are {valid_times}.')
+    p.add_argument('symbol', help='Symbol for historical data.')
+    p.add_argument('-s', '--size', help='Chart size after resampling.')
+    p.add_argument('-t', '--timing', help=f'Valid times are {vt}.')
+    p.add_argument('--daemonize', action='store_true',
+                   help='Enable daemonized loop.')
     args = p.parse_args()
     print('Starting IVy Cartographer...')
     if args.symbol:
         sym = str(args.symbol)
-        cs = int(args.size) if args.size else 610
-        adj = str(args.timing) if args.timing else '5Min'
-        charts.cartographer(symbol=sym, chart_size=cs, adj_time=adj)
+        chart_args = dict(symbol=sym)
+        if args.size:
+            chart_args['chart_size'] = int(args.size)
+        if args.timing:
+            if args.timing in vt:
+                chart_args['adj_time'] = str(args.timing)
+        if args.daemonize:
+            chart_args['daemon'] = True
+        charts.cartographer(**chart_args)
     else:
         print('No arguments passed...daemonizing.')
-        charts.cartographer()
+        charts.cartographer(daemon=True)
