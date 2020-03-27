@@ -24,7 +24,8 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
     plt.close('all')
     print(f'Cartography: creating chart for {symbol}...')
     timestamps = dataframe.index.tolist()
-    data_range = range(len(timestamps))
+    data_len = len(timestamps)
+    data_range = range(data_len)
     cdl_open = dataframe['open'].tolist()
     cdl_high = dataframe['high'].tolist()
     cdl_low = dataframe['low'].tolist()
@@ -37,8 +38,9 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
     vol_wema = dataframe['volume_wema'].tolist()
     vol_mid = dataframe['volume_mid'].tolist()
     vol_dh = dataframe['volume_dh'].tolist()
-    vol_dl = dataframe['volume_dl'].tolist()
-    fig = plt.figure(figsize=(16, 9), constrained_layout=False)
+    fs = (19.20, 10.80)
+    dpi = 100
+    fig = plt.figure(figsize=fs, dpi=dpi, constrained_layout=False)
     sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
@@ -62,8 +64,15 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
     ax2.set_ylabel('Volume', fontweight='bold')
     ax2.yaxis.set_major_formatter(mticker.EngFormatter())
     ax2.yaxis.set_major_locator(mticker.AutoLocator())
-    plt.setp(ax1.xaxis.get_ticklabels()[:], visible=False)
-
+    xticks = ax1.xaxis.get_ticklabels()
+    plt.setp(xticks[:], visible=False)
+    # Dynamic width stuff
+    tbb = ax1.get_tightbbox(fig.canvas.get_renderer()).get_points()
+    xb = tbb[1][0] - tbb[0][0]
+    wid_base = (xb / data_len) * 0.5
+    wid_wick = wid_base * 0.21
+    wid_cdls = wid_base * 0.89
+    wid_line = wid_base * 0.34
     # Per candle plots
     signal_y = [min(cdl_dl), max(cdl_dh)]
     for i in data_range:
@@ -71,7 +80,8 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
         # Signals
         if cheese:
             cdl_date = timestamps[i].strftime('%Y-%m-%d %H:%M')
-            sig_args = dict(linestyle='solid', linewidth=1.5)
+            lw = 1 + data_range[-1]
+            sig_args = dict(linestyle='solid', linewidth=wid_wick)
             if cdl_date in cheese:
                 buy_sig = cheese[cdl_date]['buy']
                 sell_sig = cheese[cdl_date]['sell']
@@ -87,69 +97,69 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
         wick_data = [cdl_low[i], cdl_high[i]]
         candle_data = [cdl_close[i], cdl_open[i]]
         ax1.plot(x_loc, wick_data, color='white',
-                 linestyle='solid', linewidth=1.5, alpha=1)
+                 linestyle='solid', linewidth=wid_wick, alpha=1)
         if cdl_close[i] > cdl_open[i]:
             cdl_color=(0.33, 1, 0.33, 1)
         else:
             cdl_color=(1, 0.33, 0.33, 1)
         ax1.plot(x_loc, candle_data, color=cdl_color,
-                 linestyle='solid', linewidth=3, alpha=1)
+                 linestyle='solid', linewidth=wid_cdls, alpha=1)
         # Volume
         volume_data = [0, cdl_vol[i]]
         ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
-                 linestyle='solid', linewidth=3)
-
+                 linestyle='solid', linewidth=wid_cdls)
     # Per sample plots
-    pkws = {'linestyle': 'solid', 'linewidth': 1.3}
+    pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     pkws['label'] = f'Money: {round(cdl_wema[-1], 2)}'
     pkws['color'] = (0.4, 0.7, 0.4, 0.8)
     ax1.plot(data_range, cdl_wema, **pkws)
     pkws['label'] = None
     ax2.plot(data_range, vol_wema, **pkws)
-
     pkws['label'] = f'Mid: {round(cdl_mid[-1], 2)}'
     pkws['color'] = (0.7, 0.7, 1, 0.7)
     ax1.plot(data_range, cdl_mid, **pkws)
     pkws['label'] = None
     ax2.plot(data_range, vol_mid, **pkws)
-
     pkws['linestyle'] = 'dotted'
-    pkws['linewidth'] = 0.89
+    pkws['linewidth'] = wid_line * 0.67
     pkws['label'] = f'DevHigh: {round(cdl_dh[-1], 2)}'
     ax1.plot(data_range, cdl_dh, **pkws)
     pkws['label'] = None
     ax2.plot(data_range, vol_dh, **pkws)
-
     pkws['label'] = f'DevLow: {round(cdl_dl[-1], 2)}'
     ax1.plot(data_range, cdl_dl, **pkws)
-    pkws['label'] = None
-    ax2.plot(data_range, vol_dl, **pkws)
-
+    # Finalize
     ts = timestamps[-1].strftime('%Y-%m-%d %H:%M')
     res = adj if adj else 'None'
-    t = f'{symbol}: {cdl_close[-1]}  @  {ts} (resample: {res})'
+    rnc = round(cdl_close[-1], 3)
+    t = f'[ {rnc} ]   {symbol}  @  {ts} (resample: {res})'
     fig.suptitle(t, fontsize=18)
     fig.legend(ncol=4, loc='lower center', fontsize='xx-large', fancybox=True)
-    plt.savefig(str(chart_path))
+    plt.savefig(str(chart_path), dpi=dpi)
     plt.close(fig)
     print("Cartography: chart's done!")
     return False
 
 
-def cartographer(symbol=None, chart_size=610, adj_time='5Min'):
+def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
     """Charting daemon."""
     do_once = isinstance(symbol, str)
-    cs = chart_size * -1 if isinstance(chart_size, int) else -610
+    cs = chart_size * -1 if isinstance(chart_size, int) else -100
     valid_times = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
-    adj = adj_time if adj_time in valid_times else None
-    if not adj: print(f'Error: adj_time must be one of {valid_times}')
+    if adj_time:
+        adj = adj_time if adj_time in valid_times else None
+        if not adj:
+            print(f'Error: adj_time must be one of {valid_times}')
+    else:
+        adj = None
     cdlm = Candelabrum()
     get_candles = cdlm.load_candles
     if not do_once:
         ivy_ndx = composite_index('./indexes/custom.ndx')
         print(f'Cartographer: working on {len(ivy_ndx)} symbols.')
     else:
-        print(f'Cartographer: creating a {chart_size} width {adj} chart for {symbol}.')
+        mk_msg = 'Cartographer: creating a {} width {} chart for {}.'
+        print(mk_msg.format(chart_size, adj, symbol))
     charting = True
     last_poll = 0
     try:
@@ -178,6 +188,7 @@ def cartographer(symbol=None, chart_size=610, adj_time='5Min'):
                             else:
                                 scaled_cdls = cdls[:]
                             kargs = dict(cheese=c, chart_path=cp)
+                            if adj: kargs['adj'] = adj
                             cartography(sym, scaled_cdls, **kargs)
                     else:
                         sym = str(symbol).upper()
@@ -191,6 +202,7 @@ def cartographer(symbol=None, chart_size=610, adj_time='5Min'):
                         else:
                             scaled_cdls = cdls[:]
                         kargs = dict(cheese=c, chart_path=cp)
+                        if adj: kargs['adj'] = adj
                         cartography(sym, scaled_cdls, **kargs)
                 finally:
                     e = time() - t
@@ -199,13 +211,13 @@ def cartographer(symbol=None, chart_size=610, adj_time='5Min'):
                         f.write('yigyig')
                     print(f'Cartographer: finished work in {e} seconds.')
                 if not do_once:
-                    print(f'Cartographer: going to sleep.')
-            if not do_once:
-                sleep(0.5)
-            else:
+                    print('Cartographer: going to sleep.')
+            if not daemon:
                 charting = False
+            else:
+                sleep(0.5)
     except KeyboardInterrupt:
         print('Keyboard Interrupt: Stopping loop.')
         charting = False
     finally:
-        print(f'Cartographer retired.')
+        print('Cartographer retired.')
