@@ -2,13 +2,14 @@
 Infinitus Vigilantis for Python
 
 Requirements:
-  - Alpaca Markets API keys and Tkinter
+  - Alpaca Markets API keys
 
 Dependencies:
   - matplotlib
   - numpy
   - pandas
   - pillow
+  - PyGObject (venv instructions @ https://pygobject.readthedocs.io/en/latest/devguide/dev_environ.html)
 
 Disclaimer:
 	The information provided by Infinitus Vigilantis for Python (the
