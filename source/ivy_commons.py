@@ -17,6 +17,12 @@ from multiprocessing import Process
 from pandas import date_range
 from dateutil import parser as date_parser
 
+__author__ = 'Daniel Ward'
+__copyright__ = 'Copyright 2020, Daniel Ward'
+__license__ = 'GPL v3'
+__version__ = '2020.04'
+__codename__ = 'compass'
+
 
 SILENT = True
 def silence(fn):

@@ -15,6 +15,11 @@ from time import sleep
 from time import time
 
 plt.style.use('dark_background')
+__author__ = 'Daniel Ward'
+__copyright__ = 'Copyright 2020, Daniel Ward'
+__license__ = 'GPL v3'
+__version__ = '2020.04'
+__codename__ = 'compass'
 
 
 def cartography(symbol, dataframe, cheese=None, adj=None,
@@ -165,8 +170,8 @@ def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
     try:
         p = path.getmtime
         e = path.exists
-        mp = path.abspath('./last.update')
-        ac = path.abspath('./all.cheese')
+        mp = path.abspath('./configs/last.update')
+        ac = path.abspath('./configs/all.cheese')
         while charting:
             mouse_poll = int(p(mp))
             if mouse_poll > last_poll:
@@ -190,6 +195,8 @@ def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
                             kargs = dict(cheese=c, chart_path=cp)
                             if adj: kargs['adj'] = adj
                             cartography(sym, scaled_cdls, **kargs)
+                            with open(f'./configs/{sym}.done', 'w') as f:
+                                f.write('yigyig')
                     else:
                         sym = str(symbol).upper()
                         cp = f'./charts/{sym}.png'
@@ -204,13 +211,13 @@ def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
                         kargs = dict(cheese=c, chart_path=cp)
                         if adj: kargs['adj'] = adj
                         cartography(sym, scaled_cdls, **kargs)
+                        with open(f'./configs/{sym}.done', 'w') as f:
+                            f.write('yigyig')
                 finally:
                     e = time() - t
                     last_poll = mouse_poll
-                    with open('./chart.done', 'w') as f:
-                        f.write('yigyig')
                     print(f'Cartographer: finished work in {e} seconds.')
-                if not do_once:
+                if daemon:
                     print('Cartographer: going to sleep.')
             if not daemon:
                 charting = False

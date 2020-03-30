@@ -8,6 +8,11 @@ import source.ivy_commons as icy
 import source.ivy_alpaca as api
 from os import path
 
+__author__ = 'Daniel Ward'
+__copyright__ = 'Copyright 2020, Daniel Ward'
+__license__ = 'GPL v3'
+__version__ = '2020.04'
+__codename__ = 'compass'
 SILENCE = icy.silence
 DIV = icy.safe_div
 PERCENT = icy.percent_change
@@ -101,7 +106,7 @@ class Candelabrum:
             'v': 'volume'
             } # self._COL_NAMES
         if verbose:
-            print(f'Candelabrum initialized.')
+            print('Candelabrum initialized.')
 
     @SILENCE
     def __get_path__(self, symbol):
@@ -274,9 +279,9 @@ def spin_wheel(daemonized=True):
                 s, mice = cheese_wheel(max_days=89)
                 status = bool(s['is_open'])
                 if mice:
-                    with open('./all.cheese', 'wb') as f:
+                    with open('./configs/all.cheese', 'wb') as f:
                         pickle.dump(mice, f, pickle.HIGHEST_PROTOCOL)
-                    with open('./last.update', 'w') as f:
+                    with open('./configs/last.update', 'w') as f:
                         f.write('spin-to-win')
                     print('Going to sleep until next scheduled spin.')
                 if status is False:
