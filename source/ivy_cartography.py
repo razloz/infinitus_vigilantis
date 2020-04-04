@@ -168,7 +168,8 @@ def scaled_chart(symbol, chart_size, scale, signals, candelabrum):
             f.write('yigyig')
 
 
-def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
+def cartographer(symbol=None, chart_size=100, adj_time=None,
+                 daemon=False, no_signals=False):
     """Charting daemon."""
     do_once = isinstance(symbol, str)
     valid_times = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
@@ -192,12 +193,15 @@ def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
         ac = path.abspath('./configs/all.cheese')
         while charting:
             mouse_poll = path.getmtime(mp) if path.exists(mp) else 0
-            if mouse_poll > last_poll:
+            if mouse_poll > last_poll or no_signals:
                 print('Cartographer: starting work.')
                 try:
-                    with open(ac, 'rb') as pkl:
-                        mice = pickle.load(pkl)
-                    c = mice.signals
+                    if not no_signals:
+                        with open(ac, 'rb') as pkl:
+                            mice = pickle.load(pkl)
+                        c = mice.signals
+                    else:
+                        c = None
                     t = time()
                     if not do_once:
                         for symbol in ivy_ndx:

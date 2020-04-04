@@ -25,11 +25,11 @@ def daemonize():
 def market_calendar(cpath='./indexes/calendar.index'):
     """Fetch the market calendar and store it locally."""
     if path.exists(cpath):
-        ivy_calendar = pandas.read_csv(cpath, index_col=0)
+        ivy_calendar = pandas.read_csv(cpath, index_col=0, dtype=str)
     else:
         shepherd = api.AlpacaShepherd()
         c = shepherd.calendar()
-        ivy_calendar = pandas.DataFrame(c)
+        ivy_calendar = pandas.DataFrame(c, dtype=str)
         ivy_calendar.set_index('date', inplace=True)
         ivy_calendar.to_csv(cpath)
     return ivy_calendar.copy()
@@ -98,13 +98,13 @@ class Candelabrum:
     @SILENCE
     def fill_template(self, dataframe):
         """Populate template and interpolate missing data."""
-        c = ['utc_ts', 'open', 'high', 'low', 'close', 'volume']
-        i = pandas.date_range(**date_args)
         date_args = dict(name='time')
         date_args['start'] = dataframe.index[0]
         date_args['end'] = dataframe.index[-1]
         date_args['tz'] = self._tz
         date_args['freq'] = '1min'
+        c = ['utc_ts', 'open', 'high', 'low', 'close', 'volume']
+        i = pandas.date_range(**date_args)
         template = pandas.DataFrame(index=i, columns=c)
         template.update(dataframe)
         template.fillna(method='ffill', inplace=True)
@@ -161,10 +161,11 @@ class Candelabrum:
         candles = self.api.candles(symbols, **qa)
         for symbol in candles.keys():
             cdls = pandas.DataFrame(candles[symbol])
-            cdls['time'] = [pts(t, unit='s', tz=tz) for t in cdls['t']]
-            cdls.set_index('time', inplace=True)
-            cdls.rename(columns=self._COL_NAMES, inplace=True)
-            self.update_candles(symbol, fill_template(cdls.copy()))
+            if len(cdls) > 0:
+                cdls['time'] = [pts(t, unit='s', tz=tz) for t in cdls['t']]
+                cdls.set_index('time', inplace=True)
+                cdls.rename(columns=self._COL_NAMES, inplace=True)
+                self.update_candles(symbol, self.fill_template(cdls.copy()))
         if verbose:
             print(f'Candelabrum: finished update in {tk.final} seconds.')
             self._VERBOSE = not self._VERBOSE
@@ -197,49 +198,50 @@ def cheese_wheel(silent=True, max_days=34, do_update=True,
     global icy
     icy.SILENT = silent
     cdlm = Candelabrum()
-    get_candles = cdlm.load_candles
-    omenize = cdlm.apply_indicators
     ivy_ndx = composite_index('./indexes/custom.ndx')
-    mice = icy.ThreeBlindMice(ivy_ndx, max_days=max_days)
-    make_cheese = mice.get_cheese
     api_clock = cdlm.api.clock()
     status = bool(api_clock['is_open'])
     if not silent:
         print(f'Cheese Wheel: market status returned {status}')
     u = dict(limit=limit, start_date=market_open, end_date=market_close)
     cdlm.do_update(ivy_ndx, **u)
+    return api_clock
+
+
+def validate_mice(silent=True, max_days=34):
+    """Collect cheese from mice and do tests."""
+    global icy
+    icy.SILENT = silent
+    cdlm = Candelabrum()
+    ivy_ndx = composite_index('./indexes/custom.ndx')
+    mice = icy.ThreeBlindMice(ivy_ndx, max_days=max_days)
+    make_cheese = mice.get_cheese
+    get_candles = cdlm.load_candles
+    omenize = cdlm.apply_indicators
     if not silent:
-        l = len(ivy_ndx)
-        print(f'Cheese Wheel: starting quest for the ALL CHEESE.')
+        print('Validate Mice: starting quest for the ALL CHEESE.')
     tk = icy.TimeKeeper()
     for symbol in ivy_ndx:
         try:
+            print(f'Validate Mice: omenizing {symbol}...')
             cdls = omenize(symbol, get_candles(symbol))
             make_cheese(symbol, cdls)
         finally:
             pass
+    print('Validate Mice: performing historical trades...')
     mice.validate_trades()
-    signals = mice.signals
-    if not silent:
-        if not len(signals) > 0:
-            print('Cheese Wheel: no signals, no stats!')
-            return (api_clock, mice)
-        positions = mice.positions
-        sig_ts = list(signals)[-1]
-        buy = signals[sig_ts]['buy']
-        sell = signals[sig_ts]['sell']
-        print('\nStats:')
-        percentiles = ['roi', 'benchmark', 'net change']
-        for k, v in mice.stats.items():
-            print(f'    {k}: {v}' if k not in percentiles else f'    {k}: {v}%')
-        print('\nPositions:')
-        for sym in positions:
-            print(f'    {sym}: {mice.positions[sym]}')
-        print(f'\nSell signals for {sig_ts}:\n    {sell}')
-        print(f'\nBuy signals for {sig_ts}:\n    {buy}')
-        e = tk.update[0]
-        print(f'\nAfter {e} the quest for the ALL CHEESE comes to an end.\n')
-    return (api_clock, mice)
+    if mice:
+        with open('./configs/all.cheese', 'wb') as f:
+            pickle.dump(mice, f, pickle.HIGHEST_PROTOCOL)
+        if not silent:
+            m = 'Validate Mice: After {} the quest '
+            m += 'for the ALL CHEESE comes to an end.'
+            print(m.format(tk.update[0]))
+        return mice
+    else:
+        if not silent:
+            print('Validate Mice: quest failed due to no mice.')
+        return None
 
 
 def make_utc(time_string):
@@ -287,7 +289,7 @@ def spin_wheel(daemonized=True):
                         pass_check = False
                     if pass_check:
                         market_open = qt.format(today, mo[0:2], mo[2:])
-                        market_close = qt.format(today, mo[0:2], mo[2:])
+                        market_close = qt.format(today, mc[0:2], mc[2:])
                         print(f'Range: {market_open} to {market_close}.')
                     else:
                         market_open = None
@@ -302,14 +304,11 @@ def spin_wheel(daemonized=True):
                 wheel_args['limit'] = 1000
                 wheel_args['market_open'] = market_open
                 wheel_args['market_close'] = market_close
-                s, mice = cheese_wheel(**wheel_args)
+                s = cheese_wheel(**wheel_args)
                 status = bool(s['is_open'])
-                if mice:
-                    with open('./configs/all.cheese', 'wb') as f:
-                        pickle.dump(mice, f, pickle.HIGHEST_PROTOCOL)
-                    with open('./configs/last.update', 'w') as f:
-                        f.write('spin-to-win')
-                    print('Going to sleep until next scheduled spin.')
+                with open('./configs/last.update', 'w') as f:
+                    f.write('spin-to-win')
+                print('Going to sleep until next scheduled spin.')
                 if status is False:
                     if not daemonized:
                         spin = input('Keep spinning? [y/N]: ')
@@ -342,3 +341,63 @@ def spin_wheel(daemonized=True):
         e = keeper.update[0]
         print(f'Stopped spinning after {e} with {total_spins} spins.')
 
+
+def build_historical_database():
+    """Cycle through calendar and update data accordingly."""
+    calendar = market_calendar()
+    calendar_dates = calendar.index.tolist()
+    ivy_ndx = composite_index('./indexes/custom.ndx')
+    market_open = None
+    market_close = None
+    current_year = False
+    current_month = False
+    local_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    today = local_date.split(' ')[0]
+    local_year = int(today[0:4])
+    local_month = int(today[5:7])
+    local_day = int(today[8:])
+    cdlm = Candelabrum()
+    msg = 'Build Historical Database: {}'
+    print(msg.format('starting...'))
+    uargs = dict(limit=1000)
+    query = '{}T{}:{}:00-04:00'
+    keeper = icy.TimeKeeper()
+    zzz = (60 / (200 / len(ivy_ndx))) + 0.3
+    for ts in calendar_dates:
+        ts_year = int(ts[0:4])
+        ts_month = int(ts[5:7])
+        ts_day = int(ts[8:])
+        if ts_year == local_year:
+            if ts_month == local_month:
+                if ts_day > local_day:
+                    print(msg.format("timestamp in the future, breaking loop."))
+                    break
+        if ts_year != 2020: continue
+        try:
+            o = str(calendar.loc[ts]['session_open'])
+            c = str(calendar.loc[ts]['session_close'])
+            pass_check = True
+            if len(o) != 4:
+                print(msg.format(f'open has wrong length.\n{o}\n'))
+                pass_check = False
+            if len(c) != 4:
+                print(msg.format(f'close has wrong length.\n{c}\n'))
+                pass_check = False
+            if pass_check:
+                market_open = query.format(ts, o[0:2], o[2:])
+                market_close = query.format(ts, c[0:2], c[2:])
+            else:
+                market_open = None
+                market_close = None
+            if all((market_open, market_close)):
+                print(msg.format(f'collecting {market_open} to {market_close}.'))
+                uargs['start_date'] = market_open
+                uargs['end_date'] = market_close
+                cdlm.do_update(ivy_ndx, **uargs)
+        finally:
+            e = keeper.update[1]
+            if e < zzz:
+                z = zzz - e
+                print(msg.format(f'going to sleep for {z} seconds.'))
+                time.sleep(zzz)
+    print(msg.format(f'completed after {keeper.final}.'))
