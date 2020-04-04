@@ -146,10 +146,31 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
     return False
 
 
+def scaled_chart(symbol, chart_size, scale, signals, candelabrum):
+    sym = str(symbol).upper()
+    cp = f'./charts/{sym}.png'
+    s = chart_size if isinstance(chart_size, int) else 100
+    cs = s * -1
+    get_candles = candelabrum.load_candles
+    omenize = candelabrum.apply_indicators
+    cdls = omenize(sym, get_candles(sym))
+    if scale: cdls = cdls.resample(scale).mean().copy()
+    cdls.dropna(inplace=True)
+    if len(cdls) > 0:
+        if len(cdls) > s:
+            scaled_cdls = cdls[cs:]
+        else:
+            scaled_cdls = cdls[:]
+        kargs = dict(cheese=signals, chart_path=cp)
+        if scale: kargs['adj'] = scale
+        cartography(sym, scaled_cdls, **kargs)
+        with open(f'./configs/{sym}.done', 'w') as f:
+            f.write('yigyig')
+
+
 def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
     """Charting daemon."""
     do_once = isinstance(symbol, str)
-    cs = chart_size * -1 if isinstance(chart_size, int) else -100
     valid_times = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
     if adj_time:
         adj = adj_time if adj_time in valid_times else None
@@ -158,7 +179,6 @@ def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
     else:
         adj = None
     cdlm = Candelabrum()
-    get_candles = cdlm.load_candles
     if not do_once:
         ivy_ndx = composite_index('./indexes/custom.ndx')
         print(f'Cartographer: working on {len(ivy_ndx)} symbols.')
@@ -168,12 +188,10 @@ def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
     charting = True
     last_poll = 0
     try:
-        p = path.getmtime
-        e = path.exists
         mp = path.abspath('./configs/last.update')
         ac = path.abspath('./configs/all.cheese')
         while charting:
-            mouse_poll = int(p(mp))
+            mouse_poll = path.getmtime(mp) if path.exists(mp) else 0
             if mouse_poll > last_poll:
                 print('Cartographer: starting work.')
                 try:
@@ -183,36 +201,9 @@ def cartographer(symbol=None, chart_size=100, adj_time=None, daemon=False):
                     t = time()
                     if not do_once:
                         for symbol in ivy_ndx:
-                            sym = str(symbol).upper()
-                            cp = f'./charts/{sym}.png'
-                            cdls = get_candles(sym)
-                            if adj:
-                                cdls = cdls.resample(adj).mean().copy()
-                            if len(cdls) > chart_size:
-                                scaled_cdls = cdls[cs:]
-                            else:
-                                scaled_cdls = cdls[:]
-                            kargs = dict(cheese=c, chart_path=cp)
-                            if adj: kargs['adj'] = adj
-                            cartography(sym, scaled_cdls, **kargs)
-                            with open(f'./configs/{sym}.done', 'w') as f:
-                                f.write('yigyig')
+                            scaled_chart(symbol, chart_size, adj, c, cdlm)
                     else:
-                        sym = str(symbol).upper()
-                        cp = f'./charts/{sym}.png'
-                        cdls = get_candles(sym)
-                        if adj:
-                            cdls = cdls.resample(adj).mean().copy()
-                        cdls.dropna(inplace=True)
-                        if len(cdls) > chart_size:
-                            scaled_cdls = cdls[cs:]
-                        else:
-                            scaled_cdls = cdls[:]
-                        kargs = dict(cheese=c, chart_path=cp)
-                        if adj: kargs['adj'] = adj
-                        cartography(sym, scaled_cdls, **kargs)
-                        with open(f'./configs/{sym}.done', 'w') as f:
-                            f.write('yigyig')
+                        scaled_chart(symbol, chart_size, adj, c, cdlm)
                 finally:
                     e = time() - t
                     last_poll = mouse_poll

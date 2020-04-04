@@ -47,6 +47,11 @@ class AlpacaShepherd:
                 print(f'AlpacaShepherd: Query returned code {rcode}.')
         return None
 
+    def calendar(self):
+        """Get market calendar for open and close times."""
+        url = r'{}/{}/calendar'.format(self.ALPACA_URL, self.VERSION)
+        return self.__query_alpaca__(url)
+
     def clock(self):
         """Get market status and hours of operation."""
         url = r'{}/{}/clock'.format(self.ALPACA_URL, self.VERSION)
@@ -64,7 +69,7 @@ class AlpacaShepherd:
         url = r'{}/{}/assets'.format(self.ALPACA_URL, self.VERSION)
         return self.__query_alpaca__(url)
 
-    def candles(self, symbols, limit=None):
+    def candles(self, symbols, limit=None, start_date=None, end_date=None):
         """Get price data for symbols."""
         url = f'{self.DATA_URL}/bars/{self.TIMEFRAME}'
         syms = ''
@@ -85,5 +90,7 @@ class AlpacaShepherd:
         if len(syms) > 0:
             q = f'{url}?symbols={syms}'
             if limit is not None: q += f'&limit={limit}'
+            if start_date is not None: q += f'&start={start_date}'
+            if end_date is not None: q += f'&end={end_date}'
             return self.__query_alpaca__(q)
         return None

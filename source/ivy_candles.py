@@ -22,6 +22,17 @@ def daemonize():
     """Keep spinning in the background while GUI is running."""
     return icy.ivy_dispatcher(spin_wheel, ftype='process')
 
+def market_calendar(cpath='./indexes/calendar.index'):
+    """Fetch the market calendar and store it locally."""
+    if path.exists(cpath):
+        ivy_calendar = pandas.read_csv(cpath, index_col=0)
+    else:
+        shepherd = api.AlpacaShepherd()
+        c = shepherd.calendar()
+        ivy_calendar = pandas.DataFrame(c)
+        ivy_calendar.set_index('date', inplace=True)
+        ivy_calendar.to_csv(cpath)
+    return ivy_calendar.copy()
 
 def composite_index(ndx_path, ci_path='./indexes/composite.index'):
     """Convert space separated list to csv."""
@@ -32,8 +43,8 @@ def composite_index(ndx_path, ci_path='./indexes/composite.index'):
         with open(ndx_path, 'r') as symbols:
             ndx = symbols.read()
         valid_symbols = list()
-        shp = api.AlpacaShepherd()
-        for asset in shp.assets():
+        shepherd = api.AlpacaShepherd()
+        for asset in shepherd.assets():
             conditions = [
                 asset['status'] == 'active',
                 asset['tradable'] == True,
@@ -41,7 +52,7 @@ def composite_index(ndx_path, ci_path='./indexes/composite.index'):
                 ] # conditions
             if all(conditions):
                 valid_symbols.append(str(asset['symbol']))
-        print(f'Valid Assets: {len(valid_symbols)}')
+        print(f'Composite Index: {len(valid_symbols)} valid assets.')
         ivy_ndx = pandas.DataFrame()
         syms = list({s for s in str(ndx).split() if s in valid_symbols})
         ivy_ndx['symbols'] = syms
@@ -51,34 +62,6 @@ def composite_index(ndx_path, ci_path='./indexes/composite.index'):
     return ivy_ndx['symbols'].tolist()
 
 
-class Spanner:
-    """Span tracking for zscore array."""
-    span = 0
-    def expand(self, n):
-        """Track span and reset if direction changes."""
-        if n > 0 and self.span < 0: self.span = 0
-        if n < 0 and self.span > 0: self.span = 0
-        self.span += 1
-        return self.span
-
-
-def thunderstruck(s, a, z):
-    """Thunderstruck Rating System."""
-    t = list()
-    for i in range(len(s)):
-        span = s[i]
-        savg = a[i]
-        zscore = z[i]
-        r = 0
-        if span > savg:
-            r = span - savg
-        elif span < savg:
-            r = savg - span
-        rating = PERCENT((savg - r), savg) * -1
-        t.append(rating)
-    return t
-
-
 class Candelabrum:
     """Handler for historical price data."""
     def __init__(self, data_path='./candelabrum', verbose=True):
@@ -86,7 +69,6 @@ class Candelabrum:
         self._VERBOSE = verbose
         icy.SILENT = not verbose
         self._TIMER = icy.TimeKeeper()
-        self._SPANNER = Spanner()
         self.api = api.AlpacaShepherd()
         tz = 'America/New_York'
         self._tz = tz
@@ -106,7 +88,7 @@ class Candelabrum:
             'v': 'volume'
             } # self._COL_NAMES
         if verbose:
-            print('Candelabrum initialized.')
+            print('Candelabrum: initialized.')
 
     @SILENCE
     def __get_path__(self, symbol):
@@ -114,37 +96,59 @@ class Candelabrum:
         return f'{self._PATH}/{symbol.upper()}'
 
     @SILENCE
+    def fill_template(self, dataframe):
+        """Populate template and interpolate missing data."""
+        c = ['utc_ts', 'open', 'high', 'low', 'close', 'volume']
+        i = pandas.date_range(**date_args)
+        date_args = dict(name='time')
+        date_args['start'] = dataframe.index[0]
+        date_args['end'] = dataframe.index[-1]
+        date_args['tz'] = self._tz
+        date_args['freq'] = '1min'
+        template = pandas.DataFrame(index=i, columns=c)
+        template.update(dataframe)
+        template.fillna(method='ffill', inplace=True)
+        template.dropna(inplace=True)
+        return template.copy()
+
+    @SILENCE
     def load_candles(self, symbol):
         """=^.^="""
-        _pth = self.__get_path__(symbol)
-        with open(f'{_pth}.ivy') as pth:
-            _df = pandas.read_csv(pth, **self._CSV_ARGS)
-        return _df.copy()
+        data_path = f'{self.__get_path__(symbol)}.ivy'
+        with open(data_path) as pth:
+            df = pandas.read_csv(pth, **self._CSV_ARGS)
+        return df.copy()
 
     @SILENCE
     def save_candles(self, symbol, dataframe):
         """=^.^="""
-        _pth = self.__get_path__(symbol)
-        dataframe.to_csv(f'{_pth}.ivy')
-        return True
+        data_path = f'{self.__get_path__(symbol)}.ivy'
+        dataframe.to_csv(data_path)
 
     @SILENCE
     def update_candles(self, symbol, new_data, local_data=None):
         """Combine old data with new data."""
-        pth = self.__get_path__(symbol)
-        do_merge = path.exists(f'{pth}.ivy')
-        if do_merge:
-            if not local_data:
-                local_data = self.load_candles(symbol)
-            update = local_data.combine_first(new_data)
-            self.save_candles(symbol, update.copy())
-        else:
-            self.save_candles(symbol, new_data.copy())
+        do_merge = path.exists(f'{self.__get_path__(symbol)}.ivy')
+        data = pandas.DataFrame()
+        new_data.dropna(inplace=True)
+        if len(new_data) > 0:
+            if do_merge:
+                if not local_data:
+                    local_data = self.load_candles(symbol)
+                local_data.dropna(inplace=True)
+                if len(local_data) > 0:
+                    data = local_data.combine_first(new_data)
+            else:
+                data = new_data
+            if len(data) > 0:
+                data.dropna(inplace=True)
+                if len(data) > 0:
+                    self.save_candles(symbol, data.copy())
 
     @SILENCE
-    def do_update(self, symbols, limit=None):
+    def do_update(self, symbols, limit=None,
+                  start_date=None, end_date=None):
         """Update historical data from index."""
-        global icy
         verbose = (True if self._VERBOSE else False)
         tk = self._TIMER
         start_time = tk.reset
@@ -152,80 +156,74 @@ class Candelabrum:
         pts = pandas.Timestamp
         if verbose:
             self._VERBOSE = not self._VERBOSE
-            print(f'Starting update loop for {len(symbols)} symbols...')
-        candles = self.api.candles(symbols, limit=limit)
+            print(f'Candelabrum: updating {len(symbols)} symbols...')
+        qa = dict(limit=limit, start_date=start_date, end_date=end_date)
+        candles = self.api.candles(symbols, **qa)
         for symbol in candles.keys():
             cdls = pandas.DataFrame(candles[symbol])
             cdls['time'] = [pts(t, unit='s', tz=tz) for t in cdls['t']]
             cdls.set_index('time', inplace=True)
             cdls.rename(columns=self._COL_NAMES, inplace=True)
-            money = icy.get_money(cdls['close'].tolist())
-            zs, sdev, wema, dh, dl, mid = zip(*money)
-            cdls['money_zscore'] = zs
-            cdls['money_sdev'] = sdev
-            cdls['money_wema'] = wema
-            cdls['money_dh'] = dh
-            cdls['money_dl'] = dl
-            cdls['money_mid'] = mid
-            vm = icy.get_money(cdls['volume'].tolist())
-            zs_v, sdev_v, wema_v, dh_v, dl_v, mid_v = zip(*vm)
-            cdls['volume_zscore'] = zs_v
-            cdls['volume_sdev'] = sdev_v
-            cdls['volume_wema'] = wema_v
-            cdls['volume_dh'] = dh_v
-            cdls['volume_dl'] = dl_v
-            cdls['volume_mid'] = mid_v
-            cdls = self.update_candles(symbol, cdls)
+            self.update_candles(symbol, fill_template(cdls.copy()))
         if verbose:
-            print(f'Finished update in {tk.final} seconds.')
+            print(f'Candelabrum: finished update in {tk.final} seconds.')
             self._VERBOSE = not self._VERBOSE
 
     @SILENCE
-    def analyze(self, ivy):
-        """Return historical data with technical indicators."""
-        ivy['trend'] = icy.get_trend(ivy['high'].tolist(), ivy['low'].tolist())
-        ivy['strength'] = icy.trend_line(ivy['trend'].tolist())
-        self._SPANNER.span = 0
-        ivy['span'] = ivy['zscore'].apply(self._SPANNER.expand)
-        ivy['avg_span'] = ivy['span'].expanding().mean()
-        targs = (
-            ivy['span'].tolist(),
-            ivy['avg_span'].tolist(),
-            ivy['zscore'].tolist()
-            ) # targs
-        ivy['thunderstruck'] = thunderstruck(*targs)
-        return ivy.copy()
+    def apply_indicators(self, symbol, candles):
+        global icy
+        money = icy.get_money(candles['close'].tolist())
+        zs, sdev, wema, dh, dl, mid = zip(*money)
+        candles['money_zscore'] = zs
+        candles['money_sdev'] = sdev
+        candles['money_wema'] = wema
+        candles['money_dh'] = dh
+        candles['money_dl'] = dl
+        candles['money_mid'] = mid
+        vm = icy.get_money(candles['volume'].tolist())
+        zs_v, sdev_v, wema_v, dh_v, dl_v, mid_v = zip(*vm)
+        candles['volume_zscore'] = zs_v
+        candles['volume_sdev'] = sdev_v
+        candles['volume_wema'] = wema_v
+        candles['volume_dh'] = dh_v
+        candles['volume_dl'] = dl_v
+        candles['volume_mid'] = mid_v
+        return candles.copy()
 
 
-def cheese_wheel(silent=True, max_days=34, do_update=True):
+def cheese_wheel(silent=True, max_days=34, do_update=True,
+                 limit=None, market_open=None, market_close=None):
     """Update and test historical data."""
     global icy
     icy.SILENT = silent
     cdlm = Candelabrum()
     get_candles = cdlm.load_candles
+    omenize = cdlm.apply_indicators
     ivy_ndx = composite_index('./indexes/custom.ndx')
     mice = icy.ThreeBlindMice(ivy_ndx, max_days=max_days)
     make_cheese = mice.get_cheese
     api_clock = cdlm.api.clock()
     status = bool(api_clock['is_open'])
     if not silent:
-        print(f'Market Status: {status}')
-    cdlm.do_update(ivy_ndx, limit=1000)
+        print(f'Cheese Wheel: market status returned {status}')
+    u = dict(limit=limit, start_date=market_open, end_date=market_close)
+    cdlm.do_update(ivy_ndx, **u)
     if not silent:
         l = len(ivy_ndx)
-        print(f'Starting quest for the ALL CHEESE using {l} symbols.')
+        print(f'Cheese Wheel: starting quest for the ALL CHEESE.')
     tk = icy.TimeKeeper()
     for symbol in ivy_ndx:
         try:
-            make_cheese(symbol, get_candles(symbol))
+            cdls = omenize(symbol, get_candles(symbol))
+            make_cheese(symbol, cdls)
         finally:
             pass
     mice.validate_trades()
     signals = mice.signals
     if not silent:
         if not len(signals) > 0:
-            print('No signals! No Stats!')
-            return (status, mice)
+            print('Cheese Wheel: no signals, no stats!')
+            return (api_clock, mice)
         positions = mice.positions
         sig_ts = list(signals)[-1]
         buy = signals[sig_ts]['buy']
@@ -262,6 +260,10 @@ def spin_wheel(daemonized=True):
     total_spins = 0
     today = ''
     schedule = list()
+    calendar = market_calendar()
+    calendar_dates = calendar.index.tolist()
+    market_open = None
+    market_close = None
     keeper = icy.TimeKeeper()
     try:
         print('Spinning the cheese wheel...')
@@ -272,11 +274,35 @@ def spin_wheel(daemonized=True):
             check_day = utc_now.split(' ')[0]
             if check_day != today:
                 today = check_day
+                if today in calendar_dates:
+                    mo = calendar.loc[today]['session_open']
+                    mc = calendar.loc[today]['session_close']
+                    qt = '{}T{}:{}:00-04:00'
+                    pass_check = True
+                    if len(mo) != 4:
+                        print(f'Error: open has wrong length.\n{mo}\n')
+                        pass_check = False
+                    if len(mc) != 4:
+                        print(f'Error: close has wrong length.\n{mc}\n')
+                        pass_check = False
+                    if pass_check:
+                        market_open = qt.format(today, mo[0:2], mo[2:])
+                        market_close = qt.format(today, mo[0:2], mo[2:])
+                        print(f'Range: {market_open} to {market_close}.')
+                    else:
+                        market_open = None
+                        market_close = None
+                else:
+                    print(f"Error: Couldn't find {today} in calendar.")
                 schedule = list(get_schedule(today, freq='5min'))
-            if utc_now in schedule:
+            if utc_now in schedule and all((market_open, market_close)):
                 total_spins += 1
                 print(f'Spin: {total_spins}')
-                s, mice = cheese_wheel(max_days=89)
+                wheel_args = dict(max_days=89)
+                wheel_args['limit'] = 1000
+                wheel_args['market_open'] = market_open
+                wheel_args['market_close'] = market_close
+                s, mice = cheese_wheel(**wheel_args)
                 status = bool(s['is_open'])
                 if mice:
                     with open('./configs/all.cheese', 'wb') as f:
@@ -299,7 +325,15 @@ def spin_wheel(daemonized=True):
                     time.sleep(1)
                 else:
                     u = sleep_until - utc_ts
-                    print(f'Next spin scheduled for {sleep_date} in {u} second(s).')
+                    if u > 86400:
+                        t = '{} day(s)'.format(round(u / 86400, 2))
+                    elif u > 3600:
+                        t = '{} hour(s)'.format(round(u / 3600, 2))
+                    elif u > 60:
+                        t = '{} minute(s)'.format(round(u / 60, 2))
+                    else:
+                        t = '{} second(s)'.format(round(u, 2))
+                    print(f'Next spin scheduled for {sleep_date} in {t}')
                     time.sleep(u)
     except KeyboardInterrupt:
         print('Keyboard Interrupt: Stopping loop.')
