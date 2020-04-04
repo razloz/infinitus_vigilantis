@@ -25,6 +25,8 @@ if __name__ == '__main__':
     p.add_argument('--timing', help=f'Valid times are {vt}.')
     p.add_argument('--daemonize', action='store_true',
                    help='Enable daemonized loop.')
+    p.add_argument('--cheeseless', action='store_true',
+                   help='Skip signal generation from the ALL CHEESE.')
     args = p.parse_args()
     chart_args = dict()
     if args.symbol:
@@ -36,6 +38,8 @@ if __name__ == '__main__':
             chart_args['adj_time'] = str(args.timing)
     if args.daemonize:
         chart_args['daemon'] = True
+    if args.cheeseless:
+        chart_args['no_signals'] = True
     if len(chart_args) > 0:
         print(f'Starting argumentative cartographer.')
         charts.cartographer(**chart_args)

@@ -15,7 +15,21 @@ if __name__ == '__main__':
     with open('./license/Disclaimer.txt', 'r') as f:
         DISCLAIMER = f.read()
     print(f'\n{LICENSE}\n{DISCLAIMER}\n')
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument('--build', action='store_true',
+                   help='Build historical database.')
+    p.add_argument('--validate', action='store_true',
+                   help='Begin the quest for the ALL CHEESE.')
+    args = p.parse_args()
     print('Loading IVy Updater...')
     import source.ivy_candles as updater
-    print('Starting IVy Updater...')
-    updater.spin_wheel()
+    if args.validate:
+        print('Starting validation routine...')
+        updater.validate_mice(silent=False, max_days=89)
+    elif args.build:
+        print('Starting historical update loop...')
+        updater.build_historical_database()
+    else:
+        print('Starting IVy Updater...')
+        updater.spin_wheel()
