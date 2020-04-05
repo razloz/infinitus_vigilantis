@@ -18,6 +18,7 @@ if __name__ == '__main__':
     print('Loading IVy Cartographer...')
     import source.ivy_cartography as charts
     import argparse
+    import time
     vt = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
     p = argparse.ArgumentParser()
     p.add_argument('--symbol', help='Symbol for historical data.')
@@ -27,8 +28,13 @@ if __name__ == '__main__':
                    help='Enable daemonized loop.')
     p.add_argument('--cheeseless', action='store_true',
                    help='Skip signal generation from the ALL CHEESE.')
+    p.add_argument('--start_date', help='Defaults to 2015-01-01.')
+    p.add_argument('--end_date', help='Defaults to today.')
     args = p.parse_args()
-    chart_args = dict()
+    today = time.strftime('%Y-%m-%d', time.localtime())
+    s = str(args.start_date) if args.start_date else '2015-01-01'
+    e = str(args.end_date) if args.end_date else today
+    chart_args = dict(start_date=s, end_date=e)
     if args.symbol:
         chart_args['symbol'] = str(args.symbol)
     if args.size:
