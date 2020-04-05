@@ -91,9 +91,10 @@ class Candelabrum:
             print('Candelabrum: initialized.')
 
     @SILENCE
-    def __get_path__(self, symbol):
+    def __get_path__(self, symbol, date_string):
         """You no take candle!"""
-        return f'{self._PATH}/{symbol.upper()}'
+        p = f'{self._PATH}/{symbol.upper()}-{date_string}.ivy'
+        return path.abspath(p)
 
     @SILENCE
     def fill_template(self, dataframe):
@@ -112,29 +113,31 @@ class Candelabrum:
         return template.copy()
 
     @SILENCE
-    def load_candles(self, symbol):
+    def load_candles(self, symbol, date_string):
         """=^.^="""
-        data_path = f'{self.__get_path__(symbol)}.ivy'
+        data_path = self.__get_path__(symbol, date_string)
+        if not path.exists(data_path):
+            return pandas.DataFrame()
         with open(data_path) as pth:
             df = pandas.read_csv(pth, **self._CSV_ARGS)
         return df.copy()
 
     @SILENCE
-    def save_candles(self, symbol, dataframe):
+    def save_candles(self, symbol, dataframe, date_string):
         """=^.^="""
-        data_path = f'{self.__get_path__(symbol)}.ivy'
-        dataframe.to_csv(data_path)
+        dataframe.to_csv(self.__get_path__(symbol, date_string))
 
     @SILENCE
-    def update_candles(self, symbol, new_data, local_data=None):
+    def update_candles(self, symbol, new_data, date_string):
         """Combine old data with new data."""
-        do_merge = path.exists(f'{self.__get_path__(symbol)}.ivy')
+        data_path = self.__get_path__(symbol, date_string)
+        do_merge = path.exists(data_path)
         data = pandas.DataFrame()
         new_data.dropna(inplace=True)
         if len(new_data) > 0:
             if do_merge:
                 if not local_data:
-                    local_data = self.load_candles(symbol)
+                    local_data = self.load_candles(symbol, date_string)
                 local_data.dropna(inplace=True)
                 if len(local_data) > 0:
                     data = local_data.combine_first(new_data)
@@ -143,7 +146,7 @@ class Candelabrum:
             if len(data) > 0:
                 data.dropna(inplace=True)
                 if len(data) > 0:
-                    self.save_candles(symbol, data.copy())
+                    self.save_candles(symbol, data.copy(), date_string)
 
     @SILENCE
     def do_update(self, symbols, limit=None,
@@ -159,20 +162,42 @@ class Candelabrum:
             print(f'Candelabrum: updating {len(symbols)} symbols...')
         qa = dict(limit=limit, start_date=start_date, end_date=end_date)
         candles = self.api.candles(symbols, **qa)
+        date_string = start_date.split('T')[0]
         for symbol in candles.keys():
             cdls = pandas.DataFrame(candles[symbol])
             if len(cdls) > 0:
                 cdls['time'] = [pts(t, unit='s', tz=tz) for t in cdls['t']]
                 cdls.set_index('time', inplace=True)
                 cdls.rename(columns=self._COL_NAMES, inplace=True)
-                self.update_candles(symbol, self.fill_template(cdls.copy()))
+                tmp = self.fill_template(cdls.copy())
+                self.update_candles(symbol, tmp, date_string)
         if verbose:
             print(f'Candelabrum: finished update in {tk.final} seconds.')
             self._VERBOSE = not self._VERBOSE
 
     @SILENCE
-    def apply_indicators(self, symbol, candles):
+    def apply_indicators(self, symbol, start_date, end_date):
         global icy
+        calendar = market_calendar()
+        calendar_dates = calendar.index.tolist()
+        from datetime import datetime
+        date_obj = lambda t: datetime.strptime(t, '%Y-%m-%d')
+        dates = (date_obj(start_date), date_obj(end_date))
+        candles = None
+        for ts in calendar_dates:
+            day_obj = date_obj(ts)
+            if day_obj < dates[0]: continue
+            if day_obj > dates[1]: break
+            try:
+                day_data = self.load_candles(symbol, ts)
+                if len(day_data) > 0:
+                    if candles is None:
+                        candles = day_data
+                    else:
+                        candles.update(day_data)
+            finally:
+                pass
+        if not len(candles) > 0: return None
         money = icy.get_money(candles['close'].tolist())
         zs, sdev, wema, dh, dl, mid = zip(*money)
         candles['money_zscore'] = zs
@@ -208,7 +233,7 @@ def cheese_wheel(silent=True, max_days=34, do_update=True,
     return api_clock
 
 
-def validate_mice(silent=True, max_days=34):
+def validate_mice(start_date, end_date, silent=True, max_days=34):
     """Collect cheese from mice and do tests."""
     global icy
     icy.SILENT = silent
@@ -224,7 +249,7 @@ def validate_mice(silent=True, max_days=34):
     for symbol in ivy_ndx:
         try:
             print(f'Validate Mice: omenizing {symbol}...')
-            cdls = omenize(symbol, get_candles(symbol))
+            cdls = omenize(symbol, start_date, end_date)
             make_cheese(symbol, cdls)
         finally:
             pass
@@ -351,8 +376,7 @@ def build_historical_database():
     market_close = None
     current_year = False
     current_month = False
-    local_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-    today = local_date.split(' ')[0]
+    today = time.strftime('%Y-%m-%d', time.localtime())
     local_year = int(today[0:4])
     local_month = int(today[5:7])
     local_day = int(today[8:])
@@ -372,7 +396,7 @@ def build_historical_database():
                 if ts_day > local_day:
                     print(msg.format("timestamp in the future, breaking loop."))
                     break
-        if ts_year != 2020: continue
+        if ts_year < 2015: continue
         try:
             o = str(calendar.loc[ts]['session_open'])
             c = str(calendar.loc[ts]['session_close'])

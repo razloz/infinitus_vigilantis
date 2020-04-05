@@ -146,14 +146,16 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
     return False
 
 
-def scaled_chart(symbol, chart_size, scale, signals, candelabrum):
+def scaled_chart(symbol, chart_size, scale, signals,
+                 candelabrum, start_date, end_date):
+    """Omenize and resample data for chart generation."""
     sym = str(symbol).upper()
     cp = f'./charts/{sym}.png'
     s = chart_size if isinstance(chart_size, int) else 100
     cs = s * -1
     get_candles = candelabrum.load_candles
     omenize = candelabrum.apply_indicators
-    cdls = omenize(sym, get_candles(sym))
+    cdls = omenize(symbol, start_date, end_date)
     if scale: cdls = cdls.resample(scale).mean().copy()
     cdls.dropna(inplace=True)
     if len(cdls) > 0:
@@ -169,7 +171,8 @@ def scaled_chart(symbol, chart_size, scale, signals, candelabrum):
 
 
 def cartographer(symbol=None, chart_size=100, adj_time=None,
-                 daemon=False, no_signals=False):
+                 daemon=False, no_signals=False,
+                 start_date=None, end_date=None):
     """Charting daemon."""
     do_once = isinstance(symbol, str)
     valid_times = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
@@ -203,11 +206,12 @@ def cartographer(symbol=None, chart_size=100, adj_time=None,
                     else:
                         c = None
                     t = time()
+                    a = (chart_size, adj, c, cdlm, start_date, end_date)
                     if not do_once:
                         for symbol in ivy_ndx:
-                            scaled_chart(symbol, chart_size, adj, c, cdlm)
+                            scaled_chart(symbol, *a)
                     else:
-                        scaled_chart(symbol, chart_size, adj, c, cdlm)
+                        scaled_chart(symbol, *a)
                 finally:
                     e = time() - t
                     last_poll = mouse_poll
