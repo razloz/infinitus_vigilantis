@@ -161,8 +161,11 @@ class Candelabrum:
             self._VERBOSE = not self._VERBOSE
             print(f'Candelabrum: updating {len(symbols)} symbols...')
         qa = dict(limit=limit, start_date=start_date, end_date=end_date)
-        candles = self.api.candles(symbols, **qa)
         date_string = start_date.split('T')[0]
+        for s in symbols:
+            if path.exists(self.__get_path__(s, date_string)):
+                return True
+        candles = self.api.candles(symbols, **qa)
         for symbol in candles.keys():
             cdls = pandas.DataFrame(candles[symbol])
             if len(cdls) > 0:
@@ -174,6 +177,7 @@ class Candelabrum:
         if verbose:
             print(f'Candelabrum: finished update in {tk.final} seconds.')
             self._VERBOSE = not self._VERBOSE
+        return False
 
     @SILENCE
     def apply_indicators(self, symbol, start_date, end_date):
@@ -397,6 +401,7 @@ def build_historical_database():
                     print(msg.format("timestamp in the future, breaking loop."))
                     break
         if ts_year < 2015: continue
+        skippable = True
         try:
             o = str(calendar.loc[ts]['session_open'])
             c = str(calendar.loc[ts]['session_close'])
@@ -417,10 +422,10 @@ def build_historical_database():
                 print(msg.format(f'collecting {market_open} to {market_close}.'))
                 uargs['start_date'] = market_open
                 uargs['end_date'] = market_close
-                cdlm.do_update(ivy_ndx, **uargs)
+                skippable = cdlm.do_update(ivy_ndx, **uargs)
         finally:
             e = keeper.update[1]
-            if e < zzz:
+            if e < zzz and not skippable:
                 z = zzz - e
                 print(msg.format(f'going to sleep for {z} seconds.'))
                 time.sleep(zzz)
