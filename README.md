@@ -12,8 +12,11 @@ Dependencies:
   - PyGObject (venv instructions @ https://pygobject.readthedocs.io/en/latest/devguide/dev_environ.html)
 
 Usage:
-cd ~/source/infinitus_vigilantis-master/ && ./updater.py --build
-cd ~/source/infinitus_vigilantis-master/ && ./cartographer.py --start_date 2020-06-01 --end_date 2020-07-03 --cheeseless --symbol QQQ --timing 15Min
+
+  - cd ~/source/infinitus_vigilantis-master/ && ./updater.py --build
+
+  - cd ~/source/infinitus_vigilantis-master/ && ./cartographer.py --start_date 2020-06-01 --end_date 2020-07-03 --cheeseless --symbol QQQ --timing 15Min
+
 
 
 Disclaimer:
