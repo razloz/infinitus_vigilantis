@@ -196,9 +196,9 @@ class Candelabrum:
                 day_data = self.load_candles(symbol, ts)
                 if len(day_data) > 0:
                     if candles is None:
-                        candles = day_data
+                        candles = day_data.copy()
                     else:
-                        candles.update(day_data)
+                        candles = pandas.concat([candles, day_data])
             finally:
                 pass
         if not len(candles) > 0: return None
