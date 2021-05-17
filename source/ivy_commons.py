@@ -18,10 +18,10 @@ from pandas import date_range
 from dateutil import parser as date_parser
 
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2020, Daniel Ward'
+__copyright__ = 'Copyright 2021, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2020.04'
-__codename__ = 'compass'
+__version__ = '2021.05'
+__codename__ = 'bling'
 
 
 SILENT = True
@@ -109,7 +109,7 @@ def money_line(points, fast=8, weight=34):
         return (0, 0, 0, 0, 0, 0)
 
 
-def get_money(points, fast=89, weight=233, sample=610):
+def get_money(points, fast=34, weight=89, sample=377):
     """Compile money line from points."""
     points_range = range(len(points))
     points_end = points_range[-1]
@@ -215,19 +215,35 @@ class TimeKeeper:
 
 
 @silence
-def logic_block(candle):
+def logic_block(candle, exchange):
     """Generate buy and sell signals."""
     zscore = float(candle.money_zscore)
     dh = float(candle.money_dh)
     dl = float(candle.money_dl)
     median = float(candle.money_mid)
-    bullish = 0 != dl > median != 0
-    bearish = 0 != dh < median != 0
-    buy_logic = (bullish, zscore <= 0.3819661)
-    sell_logic = (zscore >= 3, bearish, zscore <= -3)
+    money = float(candle.money_wema)
+    price = float(candle.close)
+    candle_open = float(candle.open)
+    volume = float(candle.volume)
+    vol_wema = float(candle.volume_wema)
+    alpha_zscore = float(exchange.money_zscore)
+    alpha_median = float(exchange.money_mid)
+    alpha_money = float(exchange.money_wema)
+    alpha_price = float(exchange.close)
+    alpha_up = 0 != alpha_price > alpha_money > alpha_median != 0
+    alpha_good = alpha_zscore > -0.3819661 and alpha_up
+    #print(alpha_zscore,alpha_median,alpha_money,alpha_price,alpha_up,alpha_good)
+    bull_candle = candle_open < price
+    bullish = 0 != price > money > median != 0
+    bearish = 0 != price < money < median != 0
+    good_volume = 0 != volume > vol_wema != 0
+    near_money = -0.3819661 < zscore <= 0.3819661
+    good_exit = zscore >= 5 and good_volume and not near_money
+    buy_logic = (alpha_good, bullish, near_money, good_volume, not bull_candle)
+    sell_logic = (good_exit, bearish, zscore <= -5)
     if all(buy_logic):
         return 1
-    elif any(sell_logic):
+    elif any(sell_logic) and bull_candle:
         return -1
     else:
         return 0
@@ -241,8 +257,16 @@ class ThreeBlindMice:
                 pending, positions, ledger
     """
     def __init__(self, symbols, cash=5e5, risk=0.0038196,
-                 max_days=34, day_trade=False):
+                 max_days=34, day_trade=False, BENCHMARKS=dict()):
         """Set local variables."""
+        self._BENCHMARKS = BENCHMARKS
+        self._EXCHANGE = dict()
+        for symbol in self._BENCHMARKS:
+            candles = self._BENCHMARKS[symbol]
+            self._EXCHANGE[symbol] = dict()
+            for candle in candles.itertuples():
+                ts = candle[0].strftime('%Y-%m-%d %H:%M')
+                self._EXCHANGE[symbol][ts] = candle
         self._symbols = list(symbols)
         self._init_cash = float(cash)
         self._cash = float(cash)
@@ -340,28 +364,31 @@ class ThreeBlindMice:
                 del self._positions[symbol]
 
     @silence
-    def get_cheese(self, symbol, dataframe):
+    def get_cheese(self, symbol, dataframe, exchange):
         """Get signals and queue orders."""
         closes = dataframe['close'].tolist()
-        self._benchmark[symbol] = (closes[0], closes[-1])
-        for candle in dataframe.itertuples():
-            ts = candle[0].strftime('%Y-%m-%d %H:%M')
-            signal = logic_block(candle)
-            if not signal: signal = 0
-            self._pending = self.__sorted_append__(ts, self._pending)
-            candle_close = float(candle.close)
-            pargs = (
-                str(symbol),
-                candle_close,
-                float(candle.money_dl),
-                candle_close + float(candle.money_sdev) * 1.6180339
-                ) # pargs
-            if signal == 1:
-                self._pending[ts]['buy'].append(pargs)
-            elif signal == -1:
-                self._pending[ts]['sell'].append(pargs)
-            else:
-                self._pending[ts]['neutral'].append(pargs)
+        if symbol in self._BENCHMARKS.keys():
+            self._benchmark[symbol] = (closes[0], closes[-1])
+        else:
+            for candle in dataframe.itertuples():
+                ts = candle[0].strftime('%Y-%m-%d %H:%M')
+                ex = self._EXCHANGE[exchange][ts]
+                signal = logic_block(candle, ex)
+                if not signal: signal = 0
+                self._pending = self.__sorted_append__(ts, self._pending)
+                candle_close = float(candle.close)
+                pargs = (
+                    str(symbol),
+                    candle_close,
+                    float(candle.money_dl),
+                    candle_close + float(candle.money_sdev) * 1.6180339
+                    ) # pargs
+                if signal == 1:
+                    self._pending[ts]['buy'].append(pargs)
+                elif signal == -1:
+                    self._pending[ts]['sell'].append(pargs)
+                else:
+                    self._pending[ts]['neutral'].append(pargs)
 
     @silence
     def validate_trades(self):
@@ -374,6 +401,7 @@ class ThreeBlindMice:
                 validate(ts, s[0], -1, s[1], s[2], s[3])
             for s in cheese['neutral']:
                 validate(ts, s[0], 0, s[1], s[2], s[3])
+        print(self.stats)
 
     @property
     def positions(self):

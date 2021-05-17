@@ -16,10 +16,10 @@ from time import time
 
 plt.style.use('dark_background')
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2020, Daniel Ward'
+__copyright__ = 'Copyright 2021, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2020.04'
-__codename__ = 'compass'
+__version__ = '2021.05'
+__codename__ = 'bling'
 
 
 def cartography(symbol, dataframe, cheese=None, adj=None,
@@ -86,7 +86,7 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
         if cheese:
             cdl_date = timestamps[i].strftime('%Y-%m-%d %H:%M')
             lw = 1 + data_range[-1]
-            sig_args = dict(linestyle='solid', linewidth=wid_wick)
+            sig_args = dict(linestyle='solid', linewidth=wid_base)
             if cdl_date in cheese:
                 buy_sig = cheese[cdl_date]['buy']
                 sell_sig = cheese[cdl_date]['sell']
@@ -153,11 +153,12 @@ def scaled_chart(symbol, chart_size, scale, signals,
     cp = f'./charts/{sym}.png'
     s = chart_size if isinstance(chart_size, int) else 100
     cs = s * -1
-    get_candles = candelabrum.load_candles
+    get_candles = candelabrum.gather_data
+    resample = candelabrum.resample_candles
     omenize = candelabrum.apply_indicators
-    cdls = omenize(symbol, start_date, end_date)
-    if scale: cdls = cdls.resample(scale).mean().copy()
-    cdls.dropna(inplace=True)
+    cdls = get_candles(symbol, start_date, end_date)
+    if scale: cdls = resample(cdls, scale)
+    cdls = omenize(cdls)
     if len(cdls) > 0:
         if len(cdls) > s:
             scaled_cdls = cdls[cs:]
@@ -184,7 +185,7 @@ def cartographer(symbol=None, chart_size=100, adj_time=None,
         adj = None
     cdlm = Candelabrum()
     if not do_once:
-        ivy_ndx = composite_index('./indexes/custom.ndx')
+        ivy_ndx = composite_index('./indexes/default.ndx')
         print(f'Cartographer: working on {len(ivy_ndx)} symbols.')
     else:
         mk_msg = 'Cartographer: creating a {} width {} chart for {}.'
@@ -208,8 +209,8 @@ def cartographer(symbol=None, chart_size=100, adj_time=None,
                     t = time()
                     a = (chart_size, adj, c, cdlm, start_date, end_date)
                     if not do_once:
-                        for symbol in ivy_ndx:
-                            scaled_chart(symbol, *a)
+                        for symbol_pair in ivy_ndx:
+                            scaled_chart(symbol_pair[0], *a)
                     else:
                         scaled_chart(symbol, *a)
                 finally:

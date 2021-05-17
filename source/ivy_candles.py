@@ -9,10 +9,11 @@ import source.ivy_alpaca as api
 from os import path
 
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2020, Daniel Ward'
+__copyright__ = 'Copyright 2021, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2020.04'
-__codename__ = 'compass'
+__version__ = '2021.05'
+__codename__ = 'bling'
+
 SILENCE = icy.silence
 DIV = icy.safe_div
 PERCENT = icy.percent_change
@@ -34,7 +35,8 @@ def market_calendar(cpath='./indexes/calendar.index'):
         ivy_calendar.to_csv(cpath)
     return ivy_calendar.copy()
 
-def composite_index(ndx_path, ci_path='./indexes/composite.index'):
+def composite_index(ndx_path='./indexes/default.ndx',
+                    ci_path='./indexes/composite.index'):
     """Convert space separated list to csv."""
     if path.exists(ci_path):
         ivy_ndx = pandas.read_csv(ci_path, index_col=0)
@@ -42,34 +44,45 @@ def composite_index(ndx_path, ci_path='./indexes/composite.index'):
         tk = icy.TimeKeeper()
         with open(ndx_path, 'r') as symbols:
             ndx = symbols.read()
-        valid_symbols = list()
+        valid_symbols = dict()
         shepherd = api.AlpacaShepherd()
         for asset in shepherd.assets():
-            conditions = [
-                asset['status'] == 'active',
-                asset['tradable'] == True,
-                asset['exchange'] == 'NYSE' or 'NASDAQ'
-                ] # conditions
-            if all(conditions):
-                valid_symbols.append(str(asset['symbol']))
+            exchange = None
+            if asset['exchange'] == 'NYSE': exchange = 'SPY'
+            if asset['exchange'] == 'NASDAQ': exchange = 'QQQ'
+            if asset['status'] == 'active' and exchange is not None:
+                valid_symbols[str(asset['symbol'])] = exchange
         print(f'Composite Index: {len(valid_symbols)} valid assets.')
+        sym_list = str(ndx).split()
+        syms = list()
+        exch = list()
+        for s, e in valid_symbols.items():
+            if s in sym_list:
+                syms.append(s)
+                exch.append(e)
         ivy_ndx = pandas.DataFrame()
-        syms = list({s for s in str(ndx).split() if s in valid_symbols})
         ivy_ndx['symbols'] = syms
+        ivy_ndx['exchanges'] = exch
         ivy_ndx.to_csv(ci_path)
         fin = tk.final
         if fin < 1: time.sleep(1 - fin)
-    return ivy_ndx['symbols'].tolist()
+    s = ivy_ndx['symbols'].tolist()
+    e = ivy_ndx['exchanges'].tolist()
+    if len(s) != len(e): return None
+    return [(str(s[i]), str(e[i])) for i in range(len(s))]
 
 
 class Candelabrum:
     """Handler for historical price data."""
-    def __init__(self, data_path='./candelabrum', verbose=True):
+    def __init__(self, data_path='./candelabrum', verbose=True,
+                 BENCHMARKS=('QQQ', 'SPY')):
+        self._BENCHMARKS = BENCHMARKS
         self._PATH = data_path
         self._VERBOSE = verbose
         icy.SILENT = not verbose
         self._TIMER = icy.TimeKeeper()
         self.api = api.AlpacaShepherd()
+        self.benchmarks = dict()
         tz = 'America/New_York'
         self._tz = tz
         p = lambda c: pandas.to_datetime(c, utc=True).tz_convert(tz)
@@ -109,6 +122,11 @@ class Candelabrum:
         template = pandas.DataFrame(index=i, columns=c)
         template.update(dataframe)
         template.fillna(method='ffill', inplace=True)
+        template.fillna(method='bfill', inplace=True)
+        template.dropna(inplace=True)
+        template = template.transpose().copy()
+        template.replace(to_replace=0, method='ffill', inplace=True)
+        template = template.transpose().copy()
         template.dropna(inplace=True)
         return template.copy()
 
@@ -152,6 +170,7 @@ class Candelabrum:
     def do_update(self, symbols, limit=None,
                   start_date=None, end_date=None):
         """Update historical data from index."""
+        symbols = [str(sp[0]) for sp in symbols]
         verbose = (True if self._VERBOSE else False)
         tk = self._TIMER
         start_time = tk.reset
@@ -166,7 +185,7 @@ class Candelabrum:
             if path.exists(self.__get_path__(s, date_string)):
                 return True
         candles = self.api.candles(symbols, **qa)
-        for symbol in candles.keys():
+        for symbol in candles:
             cdls = pandas.DataFrame(candles[symbol])
             if len(cdls) > 0:
                 cdls['time'] = [pts(t, unit='s', tz=tz) for t in cdls['t']]
@@ -180,8 +199,19 @@ class Candelabrum:
         return False
 
     @SILENCE
-    def apply_indicators(self, symbol, start_date, end_date):
-        global icy
+    def gather_benchmarks(self, start_date, end_date, timing):
+        if len(self._BENCHMARKS) < 1: return False
+        for symbol in self._BENCHMARKS:
+            try:
+                candles = self.gather_data(symbol, start_date, end_date)
+                scaled = self.resample_candles(candles, timing)
+                self.benchmarks[symbol] = self.apply_indicators(scaled)
+            finally:
+                continue
+        return True
+
+    @SILENCE
+    def gather_data(self, symbol, start_date, end_date):
         calendar = market_calendar()
         calendar_dates = calendar.index.tolist()
         from datetime import datetime
@@ -202,6 +232,11 @@ class Candelabrum:
             finally:
                 pass
         if not len(candles) > 0: return None
+        return candles.copy()
+
+    @SILENCE
+    def apply_indicators(self, candles):
+        global icy
         money = icy.get_money(candles['close'].tolist())
         zs, sdev, wema, dh, dl, mid = zip(*money)
         candles['money_zscore'] = zs
@@ -220,6 +255,32 @@ class Candelabrum:
         candles['volume_mid'] = mid_v
         return candles.copy()
 
+    @SILENCE
+    def resample_candles(self, candles, scale):
+        c = candles.resample(scale).apply(self.candle_maker)
+        c.dropna(inplace=True)
+        return c.copy()
+
+    @SILENCE
+    def candle_maker(self, candles):
+        if len(candles) > 0 and type(candles) == pandas.Series:
+            name = str(candles.name)
+            value = None
+            if name == 'utc_ts':
+                value = float(candles[0])
+            elif name == 'open':
+                value = float(candles[0])
+            elif name == 'high':
+                value = float(candles.max())
+            elif name == 'low':
+                value = float(candles.min())
+            elif name == 'close':
+                value = float(candles[-1])
+            elif name == 'volume':
+                value = float(candles.sum())
+            return value
+        return None
+
 
 def cheese_wheel(silent=True, max_days=34, do_update=True,
                  limit=None, market_open=None, market_close=None):
@@ -227,7 +288,7 @@ def cheese_wheel(silent=True, max_days=34, do_update=True,
     global icy
     icy.SILENT = silent
     cdlm = Candelabrum()
-    ivy_ndx = composite_index('./indexes/custom.ndx')
+    ivy_ndx = composite_index()
     api_clock = cdlm.api.clock()
     status = bool(api_clock['is_open'])
     if not silent:
@@ -237,24 +298,31 @@ def cheese_wheel(silent=True, max_days=34, do_update=True,
     return api_clock
 
 
-def validate_mice(start_date, end_date, silent=True, max_days=34):
+def validate_mice(start_date, end_date, silent=True, max_days=89, timing="1H"):
     """Collect cheese from mice and do tests."""
     global icy
     icy.SILENT = silent
     cdlm = Candelabrum()
-    ivy_ndx = composite_index('./indexes/custom.ndx')
-    mice = icy.ThreeBlindMice(ivy_ndx, max_days=max_days)
+    ivy_ndx = composite_index()
+    benchmarked = cdlm.gather_benchmarks(start_date, end_date, timing)
+    mice = icy.ThreeBlindMice(ivy_ndx, max_days=max_days,
+                              BENCHMARKS=dict(cdlm.benchmarks))
     make_cheese = mice.get_cheese
-    get_candles = cdlm.load_candles
+    get_candles = cdlm.gather_data
+    resample = cdlm.resample_candles
     omenize = cdlm.apply_indicators
-    if not silent:
-        print('Validate Mice: starting quest for the ALL CHEESE.')
+    print('Validate Mice: starting quest for the ALL CHEESE.')
     tk = icy.TimeKeeper()
-    for symbol in ivy_ndx:
+    for symbol_pair in ivy_ndx:
         try:
-            print(f'Validate Mice: omenizing {symbol}...')
-            cdls = omenize(symbol, start_date, end_date)
-            make_cheese(symbol, cdls)
+            symbol = symbol_pair[0]
+            exchange = symbol_pair[1]
+            if not silent:
+                print(f'Validate Mice: omenizing {symbol}...')
+            cdls = get_candles(symbol, start_date, end_date)
+            cdls = resample(cdls, timing)
+            cdls = omenize(cdls)
+            make_cheese(symbol, cdls, exchange)
         finally:
             pass
     print('Validate Mice: performing historical trades...')
@@ -262,6 +330,8 @@ def validate_mice(start_date, end_date, silent=True, max_days=34):
     if mice:
         with open('./configs/all.cheese', 'wb') as f:
             pickle.dump(mice, f, pickle.HIGHEST_PROTOCOL)
+        with open('./configs/last.update', 'w') as f:
+            f.write("nya~")
         if not silent:
             m = 'Validate Mice: After {} the quest '
             m += 'for the ALL CHEESE comes to an end.'
@@ -371,11 +441,11 @@ def spin_wheel(daemonized=True):
         print(f'Stopped spinning after {e} with {total_spins} spins.')
 
 
-def build_historical_database():
+def build_historical_database(verbose=False):
     """Cycle through calendar and update data accordingly."""
     calendar = market_calendar()
     calendar_dates = calendar.index.tolist()
-    ivy_ndx = composite_index('./indexes/custom.ndx')
+    ivy_ndx = composite_index()
     market_open = None
     market_close = None
     current_year = False
@@ -393,14 +463,14 @@ def build_historical_database():
     zzz = (60 / (200 / len(ivy_ndx))) + 0.3
     for ts in calendar_dates:
         ts_year = int(ts[0:4])
-        ts_month = int(ts[5:7])
-        ts_day = int(ts[8:])
+        if ts_year < 2019: continue
         if ts_year == local_year:
+            ts_month = int(ts[5:7])
             if ts_month == local_month:
+                ts_day = int(ts[8:])
                 if ts_day > local_day:
                     print(msg.format("timestamp in the future, breaking loop."))
                     break
-        if ts_year < 2015: continue
         skippable = True
         try:
             o = str(calendar.loc[ts]['session_open'])
@@ -419,7 +489,8 @@ def build_historical_database():
                 market_open = None
                 market_close = None
             if all((market_open, market_close)):
-                print(msg.format(f'collecting {market_open} to {market_close}.'))
+                if verbose:
+                    print(msg.format(f'collecting {market_open} to {market_close}.'))
                 uargs['start_date'] = market_open
                 uargs['end_date'] = market_close
                 skippable = cdlm.do_update(ivy_ndx, **uargs)

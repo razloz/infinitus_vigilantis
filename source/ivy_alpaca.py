@@ -5,10 +5,10 @@ import json
 import os
 
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2020, Daniel Ward'
+__copyright__ = 'Copyright 2021, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2020.04'
-__codename__ = 'compass'
+__version__ = '2021.05'
+__codename__ = 'bling'
 
 
 class AlpacaShepherd:
