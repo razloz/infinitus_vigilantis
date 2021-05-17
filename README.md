@@ -12,11 +12,10 @@ Dependencies:
   - PyGObject (venv instructions @ https://pygobject.readthedocs.io/en/latest/devguide/dev_environ.html)
 
 Usage:
-
-  - cd ~/source/infinitus_vigilantis-master/ && ./updater.py --build
-
-  - cd ~/source/infinitus_vigilantis-master/ && ./cartographer.py --start_date 2020-06-01 --end_date 2020-07-03 --cheeseless --symbol QQQ --timing 15Min
-
+  - with IVY as an environment variable path to infinitus vigilantis folder
+  - setup crond task to execute after market close
+  - $IVY/updater.py --build
+  - $IVY/cartographer.py --cheeseless --all
 
 
 Disclaimer:
