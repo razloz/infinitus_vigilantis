@@ -48,10 +48,15 @@ def composite_index(ndx_path='./indexes/default.ndx',
         shepherd = api.AlpacaShepherd()
         for asset in shepherd.assets():
             exchange = None
-            if asset['exchange'] == 'NYSE': exchange = 'SPY'
-            if asset['exchange'] == 'NASDAQ': exchange = 'QQQ'
-            if asset['status'] == 'active' and exchange is not None:
-                valid_symbols[str(asset['symbol'])] = exchange
+            symbol = str(asset['symbol'])
+            if symbol in ('QQQ', 'SPY'):
+                exchange = symbol
+            else:
+                if asset['exchange'] == 'NYSE': exchange = 'SPY'
+                if asset['exchange'] == 'NASDAQ': exchange = 'QQQ'
+            # asset['status'] == 'active'
+            if exchange is not None:
+                valid_symbols[symbol] = exchange
         print(f'Composite Index: {len(valid_symbols)} valid assets.')
         sym_list = str(ndx).split()
         syms = list()
@@ -231,7 +236,6 @@ class Candelabrum:
                         candles = pandas.concat([candles, day_data])
             finally:
                 pass
-        if not len(candles) > 0: return None
         return candles.copy()
 
     @SILENCE

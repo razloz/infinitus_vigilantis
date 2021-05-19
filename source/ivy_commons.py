@@ -15,6 +15,7 @@ from datetime import datetime
 from threading import Thread
 from multiprocessing import Process
 from pandas import date_range
+from pandas import DataFrame
 from dateutil import parser as date_parser
 
 __author__ = 'Daniel Ward'
@@ -232,7 +233,6 @@ def logic_block(candle, exchange):
     alpha_price = float(exchange.close)
     alpha_up = 0 != alpha_price > alpha_money > alpha_median != 0
     alpha_good = alpha_zscore > -0.3819661 and alpha_up
-    #print(alpha_zscore,alpha_median,alpha_money,alpha_price,alpha_up,alpha_good)
     bull_candle = candle_open < price
     bullish = 0 != price > money > median != 0
     bearish = 0 != price < money < median != 0
@@ -260,13 +260,6 @@ class ThreeBlindMice:
                  max_days=34, day_trade=False, BENCHMARKS=dict()):
         """Set local variables."""
         self._BENCHMARKS = BENCHMARKS
-        self._EXCHANGE = dict()
-        for symbol in self._BENCHMARKS:
-            candles = self._BENCHMARKS[symbol]
-            self._EXCHANGE[symbol] = dict()
-            for candle in candles.itertuples():
-                ts = candle[0].strftime('%Y-%m-%d %H:%M')
-                self._EXCHANGE[symbol][ts] = candle
         self._symbols = list(symbols)
         self._init_cash = float(cash)
         self._cash = float(cash)
@@ -364,16 +357,30 @@ class ThreeBlindMice:
                 del self._positions[symbol]
 
     @silence
+    def sanitize_exchange(self, beta, exchange):
+        benchmark = DataFrame().reindex_like(beta)
+        benchmark.update(self._BENCHMARKS[exchange])
+        benchmark.fillna(method='ffill', inplace=True)
+        benchmark.fillna(method='bfill', inplace=True)
+        benchmark.dropna(inplace=True)
+        benchmark = benchmark.transpose().copy()
+        benchmark.replace(to_replace=0, method='ffill', inplace=True)
+        benchmark = benchmark.transpose().copy()
+        benchmark.dropna(inplace=True)
+        return benchmark.copy()
+
+    @silence
     def get_cheese(self, symbol, dataframe, exchange):
         """Get signals and queue orders."""
         closes = dataframe['close'].tolist()
         if symbol in self._BENCHMARKS.keys():
             self._benchmark[symbol] = (closes[0], closes[-1])
         else:
+            e = self.sanitize_exchange(dataframe, exchange)
             for candle in dataframe.itertuples():
                 ts = candle[0].strftime('%Y-%m-%d %H:%M')
-                ex = self._EXCHANGE[exchange][ts]
-                signal = logic_block(candle, ex)
+                alpha = e.loc[candle[0]].copy()
+                signal = logic_block(candle, alpha)
                 if not signal: signal = 0
                 self._pending = self.__sorted_append__(ts, self._pending)
                 candle_close = float(candle.close)
