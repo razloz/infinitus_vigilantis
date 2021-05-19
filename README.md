@@ -12,14 +12,18 @@ Dependencies:
   - PyGObject (venv instructions @ https://pygobject.readthedocs.io/en/latest/devguide/dev_environ.html)
 
 Usage:
-  - with IVY as an environment variable path to infinitus vigilantis folder
-  - setup crond task to execute after market close
+  - with IVY as an absolute path to infinitus vigilantis folder
   - $IVY/updater.py --build
-  - $IVY/cartographer.py --cheeseless --all
+  - $IVY/updater.py --validate --start_date 2020-01-01
+  - $IVY/cartographer.py --all --size 160 --start_date 2020-01-01
+
+Systemd Daemon:
+  - Shell script, timer, and service located in daemon folder.
+  - Don't forget to set key, secret key, and path in the .service file
 
 
 Disclaimer:
-	The information provided by Infinitus Vigilantis for Python (the
+    The information provided by Infinitus Vigilantis for Python (the
 "Software") and accompanying material is for informational purposes
 only. It should not be considered legal or financial advice. You should
 consult with an attorney or other professional to determine what may be

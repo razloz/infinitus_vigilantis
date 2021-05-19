@@ -53,10 +53,9 @@ if __name__ == '__main__':
         charts.cartographer(**chart_args)
     elif args.all:
         import pandas
-        ci_path = './indexes/composite.index'
-        ivy_ndx = pandas.read_csv(ci_path, index_col=0)
-        symbols = [tuple(t) for t in ivy_ndx['symbols'].tolist()]
-        for symbol_pair in symbols:
+        from source.ivy_candles import composite_index
+        ivy_ndx = composite_index()
+        for symbol_pair in ivy_ndx:
             symbol = symbol_pair[0]
             chart_args['symbol'] = str(symbol)
             charts.cartographer(**chart_args)
