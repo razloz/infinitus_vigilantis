@@ -1,0 +1,10 @@
+[Unit]
+Description=Infinitus Vigilantis Update Daemon
+
+[Timer]
+Unit=infinitus_vigilantis.service
+OnCalendar=*-*-* 16:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
