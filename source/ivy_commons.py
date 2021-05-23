@@ -17,6 +17,7 @@ from multiprocessing import Process
 from pandas import date_range
 from pandas import DataFrame
 from dateutil import parser as date_parser
+from collections import Counter
 
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2021, Daniel Ward'
@@ -110,7 +111,7 @@ def money_line(points, fast=8, weight=34):
         return (0, 0, 0, 0, 0, 0)
 
 
-def get_money(points, fast=34, weight=89, sample=377):
+def get_money(points, fast=8, weight=40, sample=160):
     """Compile money line from points."""
     points_range = range(len(points))
     points_end = points_range[-1]
@@ -143,42 +144,88 @@ def get_trend(highs, lows):
     trend_range = range(high_len)
     trend_end = trend_range[-1]
     trend_strength = 0
+    trend_signal = 'neutral'
     for i in trend_range:
         if i >= 2:
-            trend_up = (
+            trending_up = all((
                 highs[i] > highs[i-1] > highs[i-2],
                 lows[i] > lows[i-1] > lows[i-2]
-                ) # trend_up
-            trend_down = (
+                ))
+            trending_down = all((
                 highs[i] < highs[i-1] < highs[i-2],
                 lows[i] < lows[i-1] < lows[i-2]
-                ) # trend_down
-            trending_up = all(trend_up)
-            trending_down = all(trend_down)
-            trend_strength = 0
+                ))
+            if trend_signal == 'neutral':
+                trend_strength = 0
+            elif trend_signal == 'buy':
+                trend_strength += 1
+            elif trend_signal == 'sell':
+                trend_strength -= 1
             if trending_up != trending_down:
-                if trending_up:
+                trend_strength = 0
+                if trending_up == True and trending_down == True:
+                    trend_signal = 'neutral'
+                elif trending_up:
+                    trend_signal = 'buy'
                     trend_strength = 1
                 elif trending_down:
+                    trend_signal = 'sell'
                     trend_strength = -1
-        trend.append(trend_strength)
+        trend.append((trend_strength, trend_signal))
     return trend
 
 
-def trend_line(trend):
-    """Get trend strength."""
-    strength = list()
-    t = 0
-    for v in trend:
-        if v > 0:
-            if t < 0:
-                t = 0
-        elif v < 0:
-            if t > 0:
-                t = 0
-        t += v
-        strength.append(t)
-    return strength
+@silence
+def get_pivot_points(*ohlc):
+    """Generate a list of pivot points at price."""
+    price_points = [p for l in ohlc for p in l]
+    return dict(Counter(price_points))
+
+
+@silence
+def logic_block(candle, exchange):
+    """Generate buy and sell signals."""
+    cdl_zscore = float(candle.money_zscore)
+    cdl_dh = float(candle.money_dh)
+    cdl_dl = float(candle.money_dl)
+    cdl_median = float(candle.money_mid)
+    cdl_money = float(candle.money_wema)
+    cdl_price = float(candle.close)
+    cdl_open = float(candle.open)
+    cdl_volume = float(candle.volume)
+    cdl_vwema = float(candle.volume_wema)
+    cdl_trend = float(candle.trend[0])
+    cdl_signal = str(candle.trend[1])
+    exc_zscore = float(exchange.money_zscore)
+    exc_median = float(exchange.money_mid)
+    exc_money = float(exchange.money_wema)
+    exc_price = float(exchange.close)
+    exc_dh = float(exchange.money_dh)
+    exc_dl = float(exchange.money_dl)
+    exc_trend = float(exchange.trend[0])
+    exc_signal = str(exchange.trend[1])
+    bull_candle = cdl_open < cdl_price
+    cdl_bullish = 0 != cdl_price > cdl_money > cdl_median != 0
+    cdl_bearish = 0 != cdl_price < cdl_money < cdl_median != 0
+    exc_bullish = 0 != exc_price > exc_money > exc_median != 0
+    exc_bearish = 0 != exc_price < exc_money < exc_median != 0
+    dbl_bull = cdl_signal == 'buy' == exc_signal
+    dbl_bear = cdl_signal == 'sell' == exc_signal
+    quad_bull = all((dbl_bull, cdl_bullish, exc_bullish))
+    quad_bear = all((dbl_bear, cdl_bearish, exc_bearish))
+    strong_bull = 0 != cdl_dl >= cdl_median != 0
+    strong_bear = 0 != cdl_dh <= cdl_median != 0
+    near_money = -0.3 <= cdl_zscore <= 0.3
+    far_bull = cdl_zscore >= 3
+    far_bear = cdl_zscore <= -3
+    buy_logic = all((dbl_bull, strong_bull, near_money))
+    sell_logic = all((strong_bear, far_bear, bull_candle))
+    if buy_logic:
+        return 1
+    elif sell_logic:
+        return -1
+    else:
+        return 0
 
 
 class TimeKeeper:
@@ -213,40 +260,6 @@ class TimeKeeper:
             since = '{} seconds'.format(round(elapsed, 5))
         self._timer = time()
         return (since, elapsed)
-
-
-@silence
-def logic_block(candle, exchange):
-    """Generate buy and sell signals."""
-    zscore = float(candle.money_zscore)
-    dh = float(candle.money_dh)
-    dl = float(candle.money_dl)
-    median = float(candle.money_mid)
-    money = float(candle.money_wema)
-    price = float(candle.close)
-    candle_open = float(candle.open)
-    volume = float(candle.volume)
-    vol_wema = float(candle.volume_wema)
-    alpha_zscore = float(exchange.money_zscore)
-    alpha_median = float(exchange.money_mid)
-    alpha_money = float(exchange.money_wema)
-    alpha_price = float(exchange.close)
-    alpha_up = 0 != alpha_price > alpha_money > alpha_median != 0
-    alpha_good = alpha_zscore > -0.3819661 and alpha_up
-    bull_candle = candle_open < price
-    bullish = 0 != price > money > median != 0
-    bearish = 0 != price < money < median != 0
-    good_volume = 0 != volume > vol_wema != 0
-    near_money = -0.3819661 < zscore <= 0.3819661
-    good_exit = zscore >= 5 and good_volume and not near_money
-    buy_logic = (alpha_good, bullish, near_money, good_volume, not bull_candle)
-    sell_logic = (good_exit, bearish, zscore <= -5)
-    if all(buy_logic):
-        return 1
-    elif any(sell_logic) and bull_candle:
-        return -1
-    else:
-        return 0
 
 
 class ThreeBlindMice:
@@ -340,7 +353,7 @@ class ThreeBlindMice:
                 price >= adj_target,
                 price <= adj_stop,
                 days >= self._max_days,
-                signal == -1 and equity > entry
+                signal == -1
                 )) # trade_stops
             time_check = True if self._day_trade else days > 1
             if time_check and trade_stops:
@@ -373,10 +386,13 @@ class ThreeBlindMice:
     def get_cheese(self, symbol, dataframe, exchange):
         """Get signals and queue orders."""
         closes = dataframe['close'].tolist()
-        if symbol in self._BENCHMARKS.keys():
-            self._benchmark[symbol] = (closes[0], closes[-1])
-        else:
+        self._benchmark[symbol] = (closes[0], closes[-1])
+        if symbol not in self._BENCHMARKS.keys():
+            df_high = dataframe['high'].tolist()
+            df_low = dataframe['low'].tolist()
             e = self.sanitize_exchange(dataframe, exchange)
+            e['trend'] = get_trend(e['high'].tolist(), e['low'].tolist())
+            dataframe['trend'] = get_trend(df_high, df_low)
             for candle in dataframe.itertuples():
                 ts = candle[0].strftime('%Y-%m-%d %H:%M')
                 alpha = e.loc[candle[0]].copy()
@@ -384,12 +400,9 @@ class ThreeBlindMice:
                 if not signal: signal = 0
                 self._pending = self.__sorted_append__(ts, self._pending)
                 candle_close = float(candle.close)
-                pargs = (
-                    str(symbol),
-                    candle_close,
-                    float(candle.money_dl),
-                    candle_close + float(candle.money_sdev) * 1.6180339
-                    ) # pargs
+                stop_loss = float(candle_close * self._risk)
+                target_price = float(candle_close * 1.6180339)
+                pargs = (str(symbol), candle_close, stop_loss, target_price)
                 if signal == 1:
                     self._pending[ts]['buy'].append(pargs)
                 elif signal == -1:
@@ -443,8 +456,11 @@ class ThreeBlindMice:
         r = self._buyin
         i = self._init_cash
         sd = safe_div
-        mo = sum(list(map(lambda s: b[s][0] * int(sd(r, b[s][0])), b)))
-        mc = sum(list(map(lambda s: b[s][1] * int(sd(r, b[s][1])), b)))
+        e = self._BENCHMARKS.keys()
+        mlo = lambda s: b[s][0] * int(sd(r, b[s][0])) if s in e else 0
+        mlc = lambda s: b[s][1] * int(sd(r, b[s][1])) if s in e else 0
+        mo = sum(list(map(mlo, b)))
+        mc = sum(list(map(mlc, b)))
         mark_close = (i - mo) + mc
         equity = sum(list(map(lambda s: b[s][1] * p[s][2], p)))
         net = self._cash + equity

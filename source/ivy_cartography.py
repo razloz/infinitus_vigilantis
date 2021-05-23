@@ -8,6 +8,7 @@ import matplotlib.ticker as mticker
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as patches
 from source.ivy_commons import ivy_dispatcher
+from source.ivy_commons import get_pivot_points as PivotPoints
 from source.ivy_candles import composite_index
 from source.ivy_candles import Candelabrum
 from os import path
@@ -21,13 +22,15 @@ __license__ = 'GPL v3'
 __version__ = '2021.05'
 __codename__ = 'bling'
 
+verbose = False
 
-def cartography(symbol, dataframe, cheese=None, adj=None,
+
+def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
                 chart_path='./charts/active.png', *ignore):
     """Charting for IVy candles."""
     global plt
     plt.close('all')
-    print(f'Cartography: creating chart for {symbol}...')
+    if verbose: print(f'Cartography: creating chart for {symbol}...')
     timestamps = dataframe.index.tolist()
     data_len = len(timestamps)
     data_range = range(data_len)
@@ -78,6 +81,26 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
     wid_wick = wid_base * 0.21
     wid_cdls = wid_base * 0.89
     wid_line = wid_base * 0.34
+    # Pivot Points plots
+    pivots = list(pivot_points.keys())
+    if len(pivots) > 0:
+        freqs = list(pivot_points.values())
+        f_min = min(freqs)
+        f_max = max(freqs)
+        shades = dict()
+        for i in range(f_max - f_min):
+            shades[i + f_min] = round(((f_max - i) / f_max), 2)
+        pkws = {'linestyle': 'solid', 'linewidth': wid_line}
+        for price in pivots:
+            shade = 0
+            freq = pivot_points[price]
+            for f in shades:
+                if f <= freq:
+                    shade = 1 - shades[f]
+                else:
+                    break
+            pkws['color'] = (0.3, 0, 0.3, shade)
+            ax1.plot((0, data_len), (price, price), **pkws)
     # Per candle plots
     signal_y = [min(cdl_dl), max(cdl_dh)]
     for i in data_range:
@@ -142,7 +165,7 @@ def cartography(symbol, dataframe, cheese=None, adj=None,
     fig.legend(ncol=4, loc='lower center', fontsize='xx-large', fancybox=True)
     plt.savefig(str(chart_path), dpi=dpi)
     plt.close(fig)
-    print("Cartography: chart's done!")
+    if verbose: print("Cartography: chart's done!")
     return False
 
 
@@ -157,6 +180,11 @@ def scaled_chart(symbol, chart_size, scale, signals,
     resample = candelabrum.resample_candles
     omenize = candelabrum.apply_indicators
     cdls = get_candles(symbol, start_date, end_date)
+    pivots = PivotPoints(
+        cdls['open'].tolist(),
+        cdls['high'].tolist(),
+        cdls['low'].tolist(),
+        cdls['close'].tolist())
     if scale: cdls = resample(cdls, scale)
     cdls = omenize(cdls)
     if len(cdls) > 0:
@@ -164,7 +192,7 @@ def scaled_chart(symbol, chart_size, scale, signals,
             scaled_cdls = cdls[cs:]
         else:
             scaled_cdls = cdls[:]
-        kargs = dict(cheese=signals, chart_path=cp)
+        kargs = dict(pivot_points=pivots, cheese=signals, chart_path=cp)
         if scale: kargs['adj'] = scale
         cartography(sym, scaled_cdls, **kargs)
         with open(f'./configs/{sym}.done', 'w') as f:
@@ -180,16 +208,16 @@ def cartographer(symbol=None, chart_size=100, adj_time=None,
     if adj_time:
         adj = adj_time if adj_time in valid_times else None
         if not adj:
-            print(f'Error: adj_time must be one of {valid_times}')
+            if verbose: print(f'Error: adj_time must be one of {valid_times}')
     else:
         adj = None
     cdlm = Candelabrum()
     if not do_once:
         ivy_ndx = composite_index('./indexes/default.ndx')
-        print(f'Cartographer: working on {len(ivy_ndx)} symbols.')
+        if verbose: print(f'Cartographer: working on {len(ivy_ndx)} symbols.')
     else:
         mk_msg = 'Cartographer: creating a {} width {} chart for {}.'
-        print(mk_msg.format(chart_size, adj, symbol))
+        if verbose: print(mk_msg.format(chart_size, adj, symbol))
     charting = True
     last_poll = 0
     try:
@@ -198,7 +226,7 @@ def cartographer(symbol=None, chart_size=100, adj_time=None,
         while charting:
             mouse_poll = path.getmtime(mp) if path.exists(mp) else 0
             if mouse_poll > last_poll or no_signals:
-                print('Cartographer: starting work.')
+                if verbose: print('Cartographer: starting work.')
                 try:
                     if not no_signals:
                         with open(ac, 'rb') as pkl:
@@ -216,9 +244,9 @@ def cartographer(symbol=None, chart_size=100, adj_time=None,
                 finally:
                     e = time() - t
                     last_poll = mouse_poll
-                    print(f'Cartographer: finished work in {e} seconds.')
+                    if verbose: print(f'Cartographer: finished work in {e} seconds.')
                 if daemon:
-                    print('Cartographer: going to sleep.')
+                    if verbose: print('Cartographer: going to sleep.')
             if not daemon:
                 charting = False
             else:
@@ -227,4 +255,4 @@ def cartographer(symbol=None, chart_size=100, adj_time=None,
         print('Keyboard Interrupt: Stopping loop.')
         charting = False
     finally:
-        print('Cartographer retired.')
+        if verbose: print('Cartographer retired.')
