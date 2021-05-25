@@ -3,8 +3,8 @@ Description=Infinitus Vigilantis Update Service
 
 [Service]
 Type=simple
-Environment="APCA_API_KEY_ID=<your key>"
-Environment="APCA_API_SECRET_KEY=<your secret key>"
+Environment="APCA_API_KEY_ID=PKH23IXBWH8FSOSTSPCJ"
+Environment="APCA_API_SECRET_KEY=jZw0dc1g67HkpGGqWG2qBhZ9BFxxQa4IMWtXbrpY"
 Environment="APCA_API_BASE_URL=https://paper-api.alpaca.markets"
-Environment="IVY=<absolute path to infinitus vigilantis folder>"
-ExecStart=-/absolute/path/to/script/infinitus_vigilantis.sh
+Environment="IVY=/var/mnt/7C9E13979E1348D2/Juno/infinitus_vigilantis-master"
+ExecStart=-/var/home/sol-invictus/.config/systemd/user/infinitus_vigilantis.sh
