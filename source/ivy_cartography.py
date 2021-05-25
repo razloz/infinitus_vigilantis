@@ -99,7 +99,7 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
                     shade = 1 - shades[f]
                 else:
                     break
-            pkws['color'] = (0.3, 0, 0.3, shade)
+            pkws['color'] = (0.25, 0, 0.25, shade)
             ax1.plot((0, data_len), (price, price), **pkws)
     # Per candle plots
     signal_y = [min(cdl_dl), max(cdl_dh)]
@@ -180,12 +180,12 @@ def scaled_chart(symbol, chart_size, scale, signals,
     resample = candelabrum.resample_candles
     omenize = candelabrum.apply_indicators
     cdls = get_candles(symbol, start_date, end_date)
+    if scale: cdls = resample(cdls, scale)
     pivots = PivotPoints(
         cdls['open'].tolist(),
         cdls['high'].tolist(),
         cdls['low'].tolist(),
         cdls['close'].tolist())
-    if scale: cdls = resample(cdls, scale)
     cdls = omenize(cdls)
     if len(cdls) > 0:
         if len(cdls) > s:
