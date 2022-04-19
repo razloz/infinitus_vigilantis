@@ -182,6 +182,33 @@ def get_pivot_points(*ohlc):
     return dict(Counter(price_points))
 
 
+def fibonacci(high_point, low_point, mid_point=None, bullish=True):
+    """Retraces price movement if mid_point is none, else extends."""
+    p = high_point - low_point
+    s = [-2.618, -1.618, -1, -0.786, -0.618, -0.5, -0.382, -0.236,
+         0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618]
+    if mid_point:
+        if bullish:
+            r = [round(mid_point + (p * i), 2) for i in s]
+        else:
+            r = [round(mid_point - (p * i), 2) for i in s]
+    else:
+        r = [round(high_point - (p * i), 2) for i in s]
+    return {s[i]: r[i] for i in range(len(s))}
+
+
+def gartley(five_point_wave):
+    """Check points for Gartley's harmonic pattern."""
+    p = five_point_wave
+    r1 = fibonacci(p[1], p[0])
+    r2 = fibonacci(p[1], p[2])
+    pattern = dict(target=0, stop_loss=0)
+    if all([p[2] == r1[0.618], p[3] == r2[0.382], p[4] == r1[0.786]]):
+        pattern['target'] = p[1] + ((p[1] - p[3]) * 1.618)
+        pattern['stop_loss'] = p[0]
+    return pattern
+
+
 @silence
 def logic_block(candle, exchange):
     """Generate buy and sell signals."""
