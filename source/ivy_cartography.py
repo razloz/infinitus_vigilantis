@@ -31,8 +31,8 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
     global plt
     plt.close('all')
     if verbose: print(f'Cartography: creating chart for {symbol}...')
-    timestamps = dataframe.index.tolist()
-    data_len = len(timestamps)
+    ts_lbls = [x.strftime('%Y-%m-%d %H:%M') for x in dataframe.index.tolist()]
+    data_len = len(ts_lbls)
     data_range = range(data_len)
     cdl_open = dataframe['open'].tolist()
     cdl_high = dataframe['high'].tolist()
@@ -53,7 +53,7 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
     ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
-    plt.xticks(data_range, timestamps, rotation=21, fontweight='bold')
+    plt.xticks(ticks=data_range, labels=ts_lbls, rotation=21, fontweight='bold')
     plt.subplots_adjust(left=0.08, bottom=0.20, right=0.92,
                         top=0.95, wspace=0, hspace=0.08)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
@@ -64,14 +64,13 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
     ax1.set_ylim((ylim_low * 0.98, ylim_high * 1.02))
     ax1.set_yticks(cdl_close)
     ax1.set_yticklabels(cdl_close)
-    ax1.yaxis.set_major_formatter(mticker.EngFormatter())
     ax1.yaxis.set_major_locator(mticker.AutoLocator())
-    ax1.xaxis.set_major_formatter(mticker.FixedFormatter(timestamps))
+    ax1.yaxis.set_major_formatter(mticker.EngFormatter())
     ax1.xaxis.set_major_locator(mticker.AutoLocator())
     ax2.grid(True, color=(0.4, 0.4, 0.4))
     ax2.set_ylabel('Volume', fontweight='bold')
-    ax2.yaxis.set_major_formatter(mticker.EngFormatter())
     ax2.yaxis.set_major_locator(mticker.AutoLocator())
+    ax2.yaxis.set_major_formatter(mticker.EngFormatter())
     xticks = ax1.xaxis.get_ticklabels()
     plt.setp(xticks[:], visible=False)
     # Dynamic width stuff
@@ -157,7 +156,7 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
     pkws['label'] = f'DevLow: {round(cdl_dl[-1], 2)}'
     ax1.plot(data_range, cdl_dl, **pkws)
     # Finalize
-    ts = timestamps[-1].strftime('%Y-%m-%d %H:%M')
+    ts = ts_lbls[-1]
     res = adj if adj else 'None'
     rnc = round(cdl_close[-1], 3)
     t = f'[ {rnc} ]   {symbol}  @  {ts} (resample: {res})'
