@@ -172,32 +172,30 @@ class Candelabrum:
                     self.save_candles(symbol, data.copy(), date_string)
 
     @SILENCE
-    def do_update(self, symbols, limit=None,
+    def do_update(self, symbol, limit=None,
                   start_date=None, end_date=None):
-        """Update historical data from index."""
-        symbols = [str(sp[0]) for sp in symbols]
-        verbose = (True if self._VERBOSE else False)
+        """Update historical price data for a given symbol."""
+        date_string = start_date.split('T')[0]
+        if path.exists(self.__get_path__(symbol, date_string)):
+            return True
+        verbose = True if self._VERBOSE else False
         tk = self._TIMER
         start_time = tk.reset
         tz = self._tz
         pts = pandas.Timestamp
         if verbose:
             self._VERBOSE = not self._VERBOSE
-            print(f'Candelabrum: updating {len(symbols)} symbols...')
+            m = 'Candelabrum: updating {} from {} to {}...'
+            print(m.format(symbol, start_date, end_date))
         qa = dict(limit=limit, start_date=start_date, end_date=end_date)
-        date_string = start_date.split('T')[0]
-        for s in symbols:
-            if path.exists(self.__get_path__(s, date_string)):
-                return True
-        candles = self.api.candles(symbols, **qa)
-        for symbol in candles:
-            cdls = pandas.DataFrame(candles[symbol])
-            if len(cdls) > 0:
-                cdls['time'] = [pts(t, unit='s', tz=tz) for t in cdls['t']]
-                cdls.set_index('time', inplace=True)
-                cdls.rename(columns=self._COL_NAMES, inplace=True)
-                tmp = self.fill_template(cdls.copy())
-                self.update_candles(symbol, tmp, date_string)
+        q = self.api.candles(symbol, **qa)
+        if len(q) > 0:
+            bars = pandas.DataFrame(q['bars'])
+            bars['time'] = [pts(t, unit='s', tz=tz) for t in bars['t']]
+            bars.set_index('time', inplace=True)
+            bars.rename(columns=self._COL_NAMES, inplace=True)
+            tmp = self.fill_template(bars.copy())
+            self.update_candles(symbol, tmp, date_string)
         if verbose:
             print(f'Candelabrum: finished update in {tk.final} seconds.')
             self._VERBOSE = not self._VERBOSE
@@ -271,7 +269,7 @@ class Candelabrum:
             name = str(candles.name)
             value = None
             if name == 'utc_ts':
-                value = float(candles[0])
+                value = float(make_utc(candles[0]))
             elif name == 'open':
                 value = float(candles[0])
             elif name == 'high':
@@ -475,32 +473,30 @@ def build_historical_database(verbose=False):
                 if ts_day > local_day:
                     print(msg.format("timestamp in the future, breaking loop."))
                     break
-        skippable = True
-        try:
-            o = str(calendar.loc[ts]['session_open'])
-            c = str(calendar.loc[ts]['session_close'])
-            pass_check = True
-            if len(o) != 4:
-                print(msg.format(f'open has wrong length.\n{o}\n'))
-                pass_check = False
-            if len(c) != 4:
-                print(msg.format(f'close has wrong length.\n{c}\n'))
-                pass_check = False
-            if pass_check:
-                market_open = query.format(ts, o[0:2], o[2:])
-                market_close = query.format(ts, c[0:2], c[2:])
-            else:
-                market_open = None
-                market_close = None
-            if all((market_open, market_close)):
-                if verbose:
-                    print(msg.format(f'collecting {market_open} to {market_close}.'))
-                uargs['start_date'] = market_open
-                uargs['end_date'] = market_close
-                skippable = cdlm.do_update(ivy_ndx, **uargs)
-        finally:
+        skippable = [True]
+        o = str(calendar.loc[ts]['session_open'])
+        c = str(calendar.loc[ts]['session_close'])
+        pass_check = True
+        if len(o) != 4:
+            print(msg.format(f'open has wrong length.\n{o}\n'))
+            pass_check = False
+        if len(c) != 4:
+            print(msg.format(f'close has wrong length.\n{c}\n'))
+            pass_check = False
+        if pass_check:
+            market_open = query.format(ts, o[0:2], o[2:])
+            market_close = query.format(ts, c[0:2], c[2:])
+        else:
+            market_open = None
+            market_close = None
+        if all((market_open, market_close)):
+            if verbose:
+                print(msg.format(f'collecting {market_open} to {market_close}.'))
+            uargs['start_date'] = market_open
+            uargs['end_date'] = market_close
+            skippable = [cdlm.do_update(s[0], **uargs) for s in ivy_ndx]
             e = keeper.update[1]
-            if e < zzz and not skippable:
+            if e < zzz and not all(skippable):
                 z = zzz - e
                 print(msg.format(f'going to sleep for {z} seconds.'))
                 time.sleep(zzz)

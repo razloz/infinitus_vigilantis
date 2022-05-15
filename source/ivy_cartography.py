@@ -66,7 +66,7 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
     ax1.set_yticklabels(cdl_close)
     ax1.yaxis.set_major_formatter(mticker.EngFormatter())
     ax1.yaxis.set_major_locator(mticker.AutoLocator())
-    ax1.xaxis.set_major_formatter(mticker.IndexFormatter(timestamps))
+    ax1.xaxis.set_major_formatter(mticker.FixedFormatter(timestamps))
     ax1.xaxis.set_major_locator(mticker.AutoLocator())
     ax2.grid(True, color=(0.4, 0.4, 0.4))
     ax2.set_ylabel('Volume', fontweight='bold')
