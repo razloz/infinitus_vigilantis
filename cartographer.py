@@ -2,10 +2,10 @@
 """Launcher for the IVy Cartographer."""
 
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2021, Daniel Ward'
+__copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2021.05'
-__codename__ = 'bling'
+__version__ = '2022.07'
+__codename__ = 'theia'
 
 
 if __name__ == '__main__':
