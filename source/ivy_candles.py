@@ -9,44 +9,53 @@ import source.ivy_alpaca as api
 from os import path
 
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2021, Daniel Ward'
+__copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2021.05'
-__codename__ = 'bling'
-
 SILENCE = icy.silence
 DIV = icy.safe_div
 PERCENT = icy.percent_change
+SHEPHERD = api.AlpacaShepherd()
 
 
 def daemonize():
     """Keep spinning in the background while GUI is running."""
     return icy.ivy_dispatcher(spin_wheel, ftype='process')
 
+
 def market_calendar(cpath='./indexes/calendar.index'):
     """Fetch the market calendar and store it locally."""
     if path.exists(cpath):
         ivy_calendar = pandas.read_csv(cpath, index_col=0, dtype=str)
     else:
-        shepherd = api.AlpacaShepherd()
-        c = shepherd.calendar()
+        c = SHEPHERD.calendar()
         ivy_calendar = pandas.DataFrame(c, dtype=str)
         ivy_calendar.set_index('date', inplace=True)
         ivy_calendar.to_csv(cpath)
     return ivy_calendar.copy()
 
+
 def composite_index(ndx_path='./indexes/default.ndx',
-                    ci_path='./indexes/composite.index'):
-    """Convert space separated list to csv."""
+                    ci_path='./indexes/composite.index',
+                    use_all_symbols=True):
+    """Convert space separated list to csv, or use all assets from alpaca."""
     if path.exists(ci_path):
         ivy_ndx = pandas.read_csv(ci_path, index_col=0)
     else:
-        tk = icy.TimeKeeper()
         with open(ndx_path, 'r') as symbols:
             ndx = symbols.read()
         valid_symbols = dict()
-        shepherd = api.AlpacaShepherd()
-        for asset in shepherd.assets():
+        assets = SHEPHERD.assets()
+        qa = dict(
+            limit=10000,
+            start_date='2019-01-02',
+            end_date='2019-01-02'
+            )
+        i = 0
+        f = len(assets)
+        b = ("t", "o", "h", "l", "c", "v")
+        print(f'Composite Index: {f} assets returned.')
+        for asset in assets:
+            i += 1
             exchange = None
             symbol = str(asset['symbol'])
             if symbol in ('QQQ', 'SPY'):
@@ -54,39 +63,56 @@ def composite_index(ndx_path='./indexes/default.ndx',
             else:
                 if asset['exchange'] == 'NYSE': exchange = 'SPY'
                 if asset['exchange'] == 'NASDAQ': exchange = 'QQQ'
-            # asset['status'] == 'active'
-            if exchange is not None:
-                valid_symbols[symbol] = exchange
-        print(f'Composite Index: {len(valid_symbols)} valid assets.')
-        sym_list = str(ndx).split()
-        syms = list()
-        exch = list()
-        for s, e in valid_symbols.items():
-            if s in sym_list:
-                syms.append(s)
-                exch.append(e)
+            validate_asset = (
+                asset['status'] == 'active',
+                asset['class'] == 'us_equity',
+                exchange is not None,
+                symbol.isalpha()
+                )
+            if all(validate_asset):
+                if use_all_symbols:
+                    print(f'Composite Index: Validating {symbol} ({i}/{f})...')
+                    q = SHEPHERD.candles(symbol, **qa)
+                    if type(q) is dict and 'bars' in q.keys():
+                        if type(q['bars']) is list and type(q['bars'][0]) is dict:
+                            k = q['bars'][0].keys()
+                            validated = [True if s in k else False for s in b]
+                            if all(validated):
+                                print(f'Composite Index: {symbol} validated!')
+                                valid_symbols[symbol] = exchange
+                else:
+                    valid_symbols[symbol] = exchange
+        if use_all_symbols:
+            syms = valid_symbols.keys()
+            exch = valid_symbols.values()
+        else:
+            sym_list = str(ndx).split()
+            syms = list()
+            exch = list()
+            for s, e in valid_symbols.items():
+                if s in sym_list:
+                    syms.append(s)
+                    exch.append(e)
         ivy_ndx = pandas.DataFrame()
         ivy_ndx['symbols'] = syms
         ivy_ndx['exchanges'] = exch
         ivy_ndx.to_csv(ci_path)
-        fin = tk.final
-        if fin < 1: time.sleep(1 - fin)
     s = ivy_ndx['symbols'].tolist()
     e = ivy_ndx['exchanges'].tolist()
     if len(s) != len(e): return None
+    print(f'Composite Index: {len(s)} valid assets.')
     return [(str(s[i]), str(e[i])) for i in range(len(s))]
 
 
 class Candelabrum:
     """Handler for historical price data."""
-    def __init__(self, data_path='./candelabrum', verbose=True,
-                 BENCHMARKS=('QQQ', 'SPY')):
-        self._BENCHMARKS = BENCHMARKS
-        self._PATH = data_path
+    def __init__(self, verbose=True):
+        self._BENCHMARKS = ('QQQ', 'SPY')
+        self._DATA_PATH = './candelabrum'
+        self._ERROR_PATH = './errors'
         self._VERBOSE = verbose
         icy.SILENT = not verbose
         self._TIMER = icy.TimeKeeper()
-        self.api = api.AlpacaShepherd()
         self.benchmarks = dict()
         tz = 'America/New_York'
         self._tz = tz
@@ -111,7 +137,7 @@ class Candelabrum:
     @SILENCE
     def __get_path__(self, symbol, date_string):
         """You no take candle!"""
-        p = f'{self._PATH}/{symbol.upper()}-{date_string}.ivy'
+        p = f'{self._DATA_PATH}/{symbol.upper()}-{date_string}.ivy'
         return path.abspath(p)
 
     @SILENCE
@@ -148,35 +174,16 @@ class Candelabrum:
     @SILENCE
     def save_candles(self, symbol, dataframe, date_string):
         """=^.^="""
-        dataframe.to_csv(self.__get_path__(symbol, date_string))
+        dataframe.to_csv(self.__get_path__(symbol, date_string), mode='w+')
 
     @SILENCE
-    def update_candles(self, symbol, new_data, date_string):
-        """Combine old data with new data."""
-        data_path = self.__get_path__(symbol, date_string)
-        do_merge = path.exists(data_path)
-        data = pandas.DataFrame()
-        new_data.dropna(inplace=True)
-        if len(new_data) > 0:
-            if do_merge:
-                if not local_data:
-                    local_data = self.load_candles(symbol, date_string)
-                local_data.dropna(inplace=True)
-                if len(local_data) > 0:
-                    data = local_data.combine_first(new_data)
-            else:
-                data = new_data
-            if len(data) > 0:
-                data.dropna(inplace=True)
-                if len(data) > 0:
-                    self.save_candles(symbol, data.copy(), date_string)
-
-    @SILENCE
-    def do_update(self, symbol, limit=None,
-                  start_date=None, end_date=None):
+    def do_update(self,
+                  symbol,
+                  limit=10000,
+                  start_date='2019-01-02',
+                  end_date='2019-01-02'):
         """Update historical price data for a given symbol."""
-        date_string = start_date.split('T')[0]
-        if path.exists(self.__get_path__(symbol, date_string)):
+        if path.exists(self.__get_path__(symbol, start_date)):
             return True
         verbose = True if self._VERBOSE else False
         tk = self._TIMER
@@ -188,14 +195,28 @@ class Candelabrum:
             m = 'Candelabrum: updating {} from {} to {}...'
             print(m.format(symbol, start_date, end_date))
         qa = dict(limit=limit, start_date=start_date, end_date=end_date)
-        q = self.api.candles(symbol, **qa)
-        if len(q) > 0:
-            bars = pandas.DataFrame(q['bars'])
-            bars['time'] = [pts(t, unit='s', tz=tz) for t in bars['t']]
-            bars.set_index('time', inplace=True)
-            bars.rename(columns=self._COL_NAMES, inplace=True)
-            tmp = self.fill_template(bars.copy())
-            self.update_candles(symbol, tmp, date_string)
+        q = SHEPHERD.candles(symbol, **qa)
+        catch_error = False
+        if type(q) != int:
+            if len(q) > 0:
+                bars = pandas.DataFrame(q['bars'])
+                if 't' in bars.keys():
+                    bars['time'] = [pts(t, unit='s', tz=tz) for t in bars['t']]
+                    bars.set_index('time', inplace=True)
+                    bars.rename(columns=self._COL_NAMES, inplace=True)
+                    tmp = self.fill_template(bars.copy())
+                    tmp.dropna(inplace=True)
+                    if len(tmp) > 0:
+                        self.save_candles(symbol, tmp.copy(), start_date)
+                else:
+                    catch_error = True
+        else:
+            catch_error = True
+        if catch_error:
+            print(f'Candelabrum: {symbol} returned {q}, date={start_date}')
+            err_path = f'{self._ERROR_PATH}/{symbol.upper()}-{start_date}.log'
+            with open(err_path, 'w+') as f:
+                f.write(str(q))
         if verbose:
             print(f'Candelabrum: finished update in {tk.final} seconds.')
             self._VERBOSE = not self._VERBOSE
@@ -291,13 +312,13 @@ def cheese_wheel(silent=True, max_days=34, do_update=True,
     icy.SILENT = silent
     cdlm = Candelabrum()
     ivy_ndx = composite_index()
-    api_clock = cdlm.api.clock()
+    api_clock = SHEPHERD.clock()
     status = bool(api_clock['is_open'])
     if not silent:
         print(f'Cheese Wheel: market status returned {status}')
     u = dict(limit=limit, start_date=market_open, end_date=market_close)
     cdlm.do_update(ivy_ndx, **u)
-    return api_clock
+    return status
 
 
 def validate_mice(start_date, end_date, silent=True, max_days=89, timing="1H"):
@@ -448,24 +469,19 @@ def build_historical_database(verbose=False):
     calendar = market_calendar()
     calendar_dates = calendar.index.tolist()
     ivy_ndx = composite_index()
-    market_open = None
-    market_close = None
-    current_year = False
-    current_month = False
     today = time.strftime('%Y-%m-%d', time.localtime())
     local_year = int(today[0:4])
     local_month = int(today[5:7])
     local_day = int(today[8:])
     cdlm = Candelabrum()
     msg = 'Build Historical Database: {}'
-    print(msg.format('starting...'))
-    uargs = dict(limit=1000)
-    query = '{}T{}:{}:00-04:00'
+    uargs = dict(limit=10000)
     keeper = icy.TimeKeeper()
-    zzz = (60 / (200 / len(ivy_ndx))) + 0.3
+    print(msg.format('starting...'))
     for ts in calendar_dates:
         ts_year = int(ts[0:4])
-        if ts_year < 2019: continue
+        if ts_year < 2019:
+            continue
         if ts_year == local_year:
             ts_month = int(ts[5:7])
             if ts_month == local_month:
@@ -473,31 +489,8 @@ def build_historical_database(verbose=False):
                 if ts_day > local_day:
                     print(msg.format("timestamp in the future, breaking loop."))
                     break
-        skippable = [True]
-        o = str(calendar.loc[ts]['session_open'])
-        c = str(calendar.loc[ts]['session_close'])
-        pass_check = True
-        if len(o) != 4:
-            print(msg.format(f'open has wrong length.\n{o}\n'))
-            pass_check = False
-        if len(c) != 4:
-            print(msg.format(f'close has wrong length.\n{c}\n'))
-            pass_check = False
-        if pass_check:
-            market_open = query.format(ts, o[0:2], o[2:])
-            market_close = query.format(ts, c[0:2], c[2:])
-        else:
-            market_open = None
-            market_close = None
-        if all((market_open, market_close)):
-            if verbose:
-                print(msg.format(f'collecting {market_open} to {market_close}.'))
-            uargs['start_date'] = market_open
-            uargs['end_date'] = market_close
-            skippable = [cdlm.do_update(s[0], **uargs) for s in ivy_ndx]
-            e = keeper.update[1]
-            if e < zzz and not all(skippable):
-                z = zzz - e
-                print(msg.format(f'going to sleep for {z} seconds.'))
-                time.sleep(zzz)
+        uargs['start_date'] = str(ts)
+        uargs['end_date'] = str(ts)
+        for s in ivy_ndx:
+            cdlm.do_update(s[0], **uargs)
     print(msg.format(f'completed after {keeper.final}.'))

@@ -3,12 +3,11 @@
 import requests
 import json
 import os
+import time
 
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2021, Daniel Ward'
+__copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2021.05'
-__codename__ = 'bling'
 
 
 class AlpacaShepherd:
@@ -23,7 +22,9 @@ class AlpacaShepherd:
         if not len(ALPACA_SECRET) > 0:
             print('AlpacaShepherd: ALPACA_SECRET required.')
             return None
-        self.ALPACA_URL = r'https://paper-api.alpaca.markets/v2/account'
+        self._last_query = 0
+        self.RATE_LIMIT = 0.33
+        self.ALPACA_URL = r'https://paper-api.alpaca.markets/v2/'
         self.DATA_URL = r'https://data.alpaca.markets/v2'
         self.CREDS = {
             "APCA-API-KEY-ID": r'{}'.format(ALPACA_ID),
@@ -32,14 +33,19 @@ class AlpacaShepherd:
 
     def __query__(self, url):
         URI = r'{}'.format(url)
+        rcode = 0
+        elapsed = time.time() - self._last_query
+        if elapsed < self.RATE_LIMIT:
+            time.sleep(self.RATE_LIMIT - elapsed)
         with requests.Session() as sess:
             rx = sess.get(URI, headers=self.CREDS)
+            self._last_query = time.time()
             rcode = rx.status_code
             if rcode == 200:
                 return json.loads(rx.text)
             else:
                 print(f'AlpacaShepherd: Query returned code {rcode}.')
-        return None
+        return rcode
 
     def calendar(self):
         """Get market calendar for open and close times."""

@@ -20,10 +20,8 @@ from dateutil import parser as date_parser
 from collections import Counter
 
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2021, Daniel Ward'
+__copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2021.05'
-__codename__ = 'bling'
 
 
 SILENT = True

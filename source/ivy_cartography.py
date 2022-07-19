@@ -15,13 +15,10 @@ from os import path
 from time import sleep
 from time import time
 
-plt.style.use('dark_background')
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2021, Daniel Ward'
+__copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2021.05'
-__codename__ = 'bling'
-
+plt.style.use('dark_background')
 verbose = False
 
 
