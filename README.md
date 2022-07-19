@@ -9,6 +9,7 @@ Dependencies:
   - numpy
   - pandas
   - pillow
+  - requests
   - PyGObject (venv instructions @ https://pygobject.readthedocs.io/en/latest/devguide/dev_environ.html)
 
 Usage:
