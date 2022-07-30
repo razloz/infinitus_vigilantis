@@ -12,7 +12,8 @@ from statistics import mean
 from datetime import datetime
 from numpy import busday_count
 from datetime import datetime
-from threading import Thread
+from threading import Thread, Lock
+from queue import Queue
 from multiprocessing import Process
 from pandas import date_range
 from pandas import DataFrame
@@ -38,6 +39,7 @@ def silence(fn):
     return proxy_fn
 
 
+THREAD_LOCK = Lock()
 def ivy_dispatcher(func, ftype='thread', args=None,
                    kwargs=None, daemon=True):
     """Create a new thread or process."""
@@ -51,6 +53,7 @@ def ivy_dispatcher(func, ftype='thread', args=None,
     else:
         return None
     f.daemon = daemon
+    f.start()
     return f
 
 

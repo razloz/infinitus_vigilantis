@@ -31,7 +31,9 @@ class AlpacaShepherd:
             "APCA-API-SECRET-KEY": r'{}'.format(ALPACA_SECRET)
             } # self.CREDS
 
-    def __query__(self, url):
+    def __query__(self, url, debugging=False):
+        if debugging:
+            print(f'AlpacaShepherd: {url}')
         URI = r'{}'.format(url)
         rcode = 0
         elapsed = time.time() - self._last_query
@@ -42,7 +44,10 @@ class AlpacaShepherd:
             self._last_query = time.time()
             rcode = rx.status_code
             if rcode == 200:
-                return json.loads(rx.text)
+                r = json.loads(rx.text)
+                if debugging:
+                    print(f'AlpacaShepherd: {rcode}\n{r}')
+                return r
             else:
                 print(f'AlpacaShepherd: Query returned code {rcode}.')
         return rcode

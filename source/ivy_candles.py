@@ -4,6 +4,7 @@ import time
 import pandas
 import numpy
 import pickle
+import json
 import source.ivy_commons as icy
 import source.ivy_alpaca as api
 from os import path
@@ -15,6 +16,8 @@ SILENCE = icy.silence
 DIV = icy.safe_div
 PERCENT = icy.percent_change
 SHEPHERD = api.AlpacaShepherd()
+MAX_THREADS = 8
+QUEUE = icy.Queue()
 
 
 def daemonize():
@@ -34,79 +37,76 @@ def market_calendar(cpath='./indexes/calendar.index'):
     return ivy_calendar.copy()
 
 
-def composite_index(ndx_path='./indexes/default.ndx',
-                    ci_path='./indexes/composite.index',
-                    use_all_symbols=True):
-    """Convert space separated list to csv, or use all assets from alpaca."""
+def alpaca_assets(asset_path='./indexes/alpaca.assets'):
+    """Get assets, filter them, and store locally."""
+    if path.exists(asset_path):
+        with open(asset_path, 'r') as f:
+            assets = json.loads(f.read())
+    else:
+        assets = dict()
+        for obj in SHEPHERD.assets():
+            symbol = obj['symbol']
+            qualified = all((
+                symbol.isalpha(),
+                obj['status'] == 'active',
+                obj['class'] == 'us_equity',
+                obj['tradable'] == True
+                ))
+            if qualified:
+                assets[symbol] = obj
+        with open(asset_path, 'w+') as f:
+            r = f.write(json.dumps(assets))
+    return assets
+
+
+def composite_index(ci_path='./indexes/composite.index'):
+    """Validates assets and returns an index of symbols."""
     if path.exists(ci_path):
         ivy_ndx = pandas.read_csv(ci_path, index_col=0)
     else:
-        with open(ndx_path, 'r') as symbols:
-            ndx = symbols.read()
         valid_symbols = dict()
-        assets = SHEPHERD.assets()
-        qa = dict(
-            limit=10000,
-            start_date='2019-01-02',
-            end_date='2019-01-02'
-            )
+        assets = alpaca_assets()
         i = 0
         f = len(assets)
-        b = ("t", "o", "h", "l", "c", "v")
         print(f'Composite Index: {f} assets returned.')
-        for asset in assets:
+        def validate_response(resp):
+            """Ensure data exists for the entire range of dates."""
+            validated = False
+            try:
+                k = resp['bars'][0].keys()
+                b = ('t', 'o', 'h', 'l', 'c', 'v')
+                validated = all([True if s in k else False for s in b])
+            finally:
+                return validated
+        qa = dict(limit=10000)
+        for symbol, v in assets.items():
             i += 1
-            exchange = None
-            symbol = str(asset['symbol'])
-            if symbol in ('QQQ', 'SPY'):
-                exchange = symbol
-            else:
-                if asset['exchange'] == 'NYSE': exchange = 'SPY'
-                if asset['exchange'] == 'NASDAQ': exchange = 'QQQ'
-            validate_asset = (
-                asset['status'] == 'active',
-                asset['class'] == 'us_equity',
-                exchange is not None,
-                symbol.isalpha()
-                )
-            if all(validate_asset):
-                if use_all_symbols:
-                    print(f'Composite Index: Validating {symbol} ({i}/{f})...')
-                    q = SHEPHERD.candles(symbol, **qa)
-                    if type(q) is dict and 'bars' in q.keys():
-                        if type(q['bars']) is list and type(q['bars'][0]) is dict:
-                            k = q['bars'][0].keys()
-                            validated = [True if s in k else False for s in b]
-                            if all(validated):
-                                print(f'Composite Index: {symbol} validated!')
-                                valid_symbols[symbol] = exchange
-                else:
-                    valid_symbols[symbol] = exchange
-        if use_all_symbols:
-            syms = valid_symbols.keys()
-            exch = valid_symbols.values()
-        else:
-            sym_list = str(ndx).split()
-            syms = list()
-            exch = list()
-            for s, e in valid_symbols.items():
-                if s in sym_list:
-                    syms.append(s)
-                    exch.append(e)
+            print(f'Composite Index: Validating {symbol} ({i}/{f})...')
+            validated = [False, False]
+            qa['start_date'] = '2019-01-02'
+            qa['end_date'] = '2019-01-02'
+            validated[0] = validate_response(SHEPHERD.candles(symbol, **qa))
+            qa['start_date'] = '2022-01-03'
+            qa['end_date'] = '2022-01-03'
+            validated[1] = validate_response(SHEPHERD.candles(symbol, **qa))
+            if all(validated):
+                print(f'Composite Index: {symbol} validated!')
+                valid_symbols[symbol] = v
         ivy_ndx = pandas.DataFrame()
-        ivy_ndx['symbols'] = syms
-        ivy_ndx['exchanges'] = exch
+        ivy_ndx['symbols'] = valid_symbols.keys()
+        ivy_ndx['exchanges'] = valid_symbols.values()
         ivy_ndx.to_csv(ci_path)
     s = ivy_ndx['symbols'].tolist()
     e = ivy_ndx['exchanges'].tolist()
     if len(s) != len(e): return None
     print(f'Composite Index: {len(s)} valid assets.')
-    return [(str(s[i]), str(e[i])) for i in range(len(s))]
+    return [(s[i], e[i]) for i in range(len(s))]
 
 
 class Candelabrum:
     """Handler for historical price data."""
     def __init__(self, verbose=True):
+        self._THREAD_LOCK = icy.THREAD_LOCK
         self._BENCHMARKS = ('QQQ', 'SPY')
         self._DATA_PATH = './candelabrum'
         self._ERROR_PATH = './errors'
@@ -176,7 +176,6 @@ class Candelabrum:
         """=^.^="""
         dataframe.to_csv(self.__get_path__(symbol, date_string), mode='w+')
 
-    @SILENCE
     def do_update(self,
                   symbol,
                   limit=10000,
@@ -185,42 +184,32 @@ class Candelabrum:
         """Update historical price data for a given symbol."""
         if path.exists(self.__get_path__(symbol, start_date)):
             return True
-        verbose = True if self._VERBOSE else False
         tk = self._TIMER
         start_time = tk.reset
         tz = self._tz
         pts = pandas.Timestamp
-        if verbose:
-            self._VERBOSE = not self._VERBOSE
-            m = 'Candelabrum: updating {} from {} to {}...'
-            print(m.format(symbol, start_date, end_date))
         qa = dict(limit=limit, start_date=start_date, end_date=end_date)
+        self._THREAD_LOCK.acquire()
         q = SHEPHERD.candles(symbol, **qa)
-        catch_error = False
-        if type(q) != int:
-            if len(q) > 0:
-                bars = pandas.DataFrame(q['bars'])
-                if 't' in bars.keys():
-                    bars['time'] = [pts(t, unit='s', tz=tz) for t in bars['t']]
-                    bars.set_index('time', inplace=True)
-                    bars.rename(columns=self._COL_NAMES, inplace=True)
-                    tmp = self.fill_template(bars.copy())
-                    tmp.dropna(inplace=True)
-                    if len(tmp) > 0:
-                        self.save_candles(symbol, tmp.copy(), start_date)
-                else:
-                    catch_error = True
-        else:
-            catch_error = True
-        if catch_error:
+        self._THREAD_LOCK.release()
+        try:
+            bars = pandas.DataFrame(q['bars'])
+            bars['time'] = [pts(t, unit='s', tz=tz) for t in bars['t']]
+            bars.set_index('time', inplace=True)
+            bars.rename(columns=self._COL_NAMES, inplace=True)
+            tmp = self.fill_template(bars.copy())
+            tmp.dropna(inplace=True)
+            if len(tmp) > 0:
+                print(f'Candelabrum: {symbol} updated {start_date}.')
+                self.save_candles(symbol, tmp.copy(), start_date)
+        except Exception as err:
+            print(f'Candelabrum: encountered exception {err}')
             print(f'Candelabrum: {symbol} returned {q}, date={start_date}')
-            err_path = f'{self._ERROR_PATH}/{symbol.upper()}-{start_date}.log'
+            err_path = f'{self._ERROR_PATH}/{symbol.upper()}-{start_date}.error'
             with open(err_path, 'w+') as f:
                 f.write(str(q))
-        if verbose:
-            print(f'Candelabrum: finished update in {tk.final} seconds.')
-            self._VERBOSE = not self._VERBOSE
-        return False
+            return False
+        return True
 
     @SILENCE
     def gather_benchmarks(self, start_date, end_date, timing):
@@ -474,23 +463,43 @@ def build_historical_database(verbose=False):
     local_month = int(today[5:7])
     local_day = int(today[8:])
     cdlm = Candelabrum()
-    msg = 'Build Historical Database: {}'
     uargs = dict(limit=10000)
     keeper = icy.TimeKeeper()
+    msg = 'Build Historical Database: {}'
+    thread_count = range(MAX_THREADS)
+    def thread_worker():
+        while True:
+            job = QUEUE.get()
+            if job == 'exit':
+                break
+            try:
+                symbol, kwargs = job[0], job[1]
+                cdlm.do_update(symbol, **kwargs)
+            except Exception as err:
+                print(msg.format(f'{err}'))
+            QUEUE.task_done()
+        QUEUE.task_done()
+    print(msg.format(f'creating {MAX_THREADS} threads...'))
+    threads = [icy.ivy_dispatcher(thread_worker) for _ in thread_count]
     print(msg.format('starting...'))
     for ts in calendar_dates:
         ts_year = int(ts[0:4])
+        ts_month = int(ts[5:7])
+        ts_day = int(ts[8:])
+        time_stop = (ts_year == local_year,
+                     ts_month == local_month,
+                     ts_day > local_day)
         if ts_year < 2019:
             continue
-        if ts_year == local_year:
-            ts_month = int(ts[5:7])
-            if ts_month == local_month:
-                ts_day = int(ts[8:])
-                if ts_day > local_day:
-                    print(msg.format("timestamp in the future, breaking loop."))
-                    break
+        elif all(time_stop):
+            break
         uargs['start_date'] = str(ts)
         uargs['end_date'] = str(ts)
         for s in ivy_ndx:
-            cdlm.do_update(s[0], **uargs)
+            QUEUE.put((s[0], uargs))
+    for _ in thread_count:
+        QUEUE.put('exit')
+    print(msg.format(f'awaiting {MAX_THREADS} threads...'))
+    for t in threads:
+        t.join()
     print(msg.format(f'completed after {keeper.final}.'))
