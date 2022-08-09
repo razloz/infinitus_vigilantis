@@ -16,6 +16,16 @@ SILENCE = icy.silence
 DIV = icy.safe_div
 PERCENT = icy.percent_change
 SHEPHERD = api.AlpacaShepherd()
+COLUMN_NAMES = {
+    't': 'utc_ts',
+    'o': 'open',
+    'h': 'high',
+    'l': 'low',
+    'c': 'close',
+    'v': 'volume',
+    'n': 'num_trades',
+    'vw': 'vol_wma_price'
+    }
 
 
 def daemonize():
@@ -72,7 +82,7 @@ def composite_index(ci_path='./indexes/composite.index'):
             validated = False
             try:
                 k = resp['bars'][0].keys()
-                b = ('t', 'o', 'h', 'l', 'c', 'v')
+                b = COLUMN_NAMES.keys()
                 validated = all([True if s in k else False for s in b])
             finally:
                 return validated
@@ -96,7 +106,8 @@ def composite_index(ci_path='./indexes/composite.index'):
         ivy_ndx.to_csv(ci_path)
     s = ivy_ndx['symbols'].tolist()
     e = ivy_ndx['exchanges'].tolist()
-    if len(s) != len(e): return None
+    if len(s) != len(e):
+        return None
     print(f'Composite Index: {len(s)} valid assets.')
     return [(s[i], e[i]) for i in range(len(s))]
 
@@ -116,7 +127,6 @@ class Candelabrum:
         self._QUEUE = icy.Queue()
         self._BENCHMARKS = ('QQQ', 'SPY')
         self._DATA_PATH = './candelabrum'
-        self._ERROR_PATH = './errors'
         self._TIMER = icy.TimeKeeper()
         self.benchmarks = dict()
         self._tz = 'America/New_York'
@@ -127,14 +137,6 @@ class Candelabrum:
             infer_datetime_format=True,
             date_parser=p
             )
-        self._COL_NAMES = {
-            't': 'utc_ts',
-            'o': 'open',
-            'h': 'high',
-            'l': 'low',
-            'c': 'close',
-            'v': 'volume'
-            }
         print(f'Candelabrum: creating {self._MAX_THREADS} threads...')
         for _ in self._THREAD_COUNT:
             self._THREADS.append(icy.ivy_dispatcher(self.__worker_thread__))
@@ -175,8 +177,8 @@ class Candelabrum:
         date_args['end'] = dataframe.index[-1]
         date_args['tz'] = self._tz
         date_args['freq'] = '1min'
-        c = ['utc_ts', 'open', 'high', 'low', 'close', 'volume']
         i = pandas.date_range(**date_args)
+        c = COLUMN_NAMES.values()
         template = pandas.DataFrame(index=i, columns=c)
         template.update(dataframe)
         template.fillna(method='ffill', inplace=True)
@@ -206,28 +208,15 @@ class Candelabrum:
         ts = kwargs['start']
         valid_symbols = list()
         for s in symbols:
-            skippable = False
-            file_name = f'{s.upper()}-{ts}'
-            ivy_path = path.abspath(f'{self._DATA_PATH}/{file_name}.ivy')
-            err_path = path.abspath(f'{self._ERROR_PATH}/{file_name}.error')
-            data_exists = path.exists(ivy_path)
-            error_exists = path.exists(err_path)
-            if data_exists:
-                skippable = True
-            elif error_exists:
-                with open(err_path, 'r') as error_file:
-                    error_message = error_file.read()
-                if """'bars': None""" in error_message:
-                    skippable = True
-            if not skippable:
+            ivy_path = f'{self._DATA_PATH}/{s.upper()}-{ts}.ivy'
+            if not path.exists(path.abspath(ivy_path)):
                 valid_symbols.append(s)
-        if len(valid_symbols) == 0:
+        if not valid_symbols:
             return True
         collected_data = dict()
         gathering_data = True
         while gathering_data:
             q = SHEPHERD.candles(valid_symbols, **kwargs)
-            print(f'Candelabrum: Alpaca Shepherd responded with type {type(q)}.')
             if type(q) != dict:
                 break
             bars_data = q['bars']
@@ -235,37 +224,28 @@ class Candelabrum:
                 break
             collected_keys = collected_data.keys()
             for s in bars_data.keys():
-                if not s in collected_keys:
-                    collected_data[s] = bars_data[s]
-                else:
-                    collected_data[s] += bars_data[s]
-                print(f'Candelabrum: Length of data for {s} is {len(collected_data[s])}.')
+                symbol_data = bars_data[s]
+                if symbol_data:
+                    if not s in collected_keys:
+                        collected_data[s] = symbol_data
+                    else:
+                        collected_data[s] += symbol_data
             token = q['next_page_token']
             if not token:
-                print('Candelabrum: next_page_token is None, breaking loop.')
                 gathering_data = False
             else:
-                print(f'Candelabrum: next_page_token is {token}, looping...')
-                kwargs['next_page_token'] = token
-        print(f'Candelabrum: Collected data for {collected_data.keys()}')
+                kwargs['page_token'] = token
         tz = self._tz
         timestamp = pandas.Timestamp
-        print(f'Candelabrum: Adding jobs for {len(collected_data.keys())} data entries.')
         for symbol in collected_data.keys():
-            try:
-                df = pandas.DataFrame(collected_data[symbol])
-                df['time'] = [timestamp(t, unit='s', tz=tz) for t in df['t']]
-                df.set_index('time', inplace=True)
-                df.rename(columns=self._COL_NAMES, inplace=True)
-                template = self.fill_template(df.copy())
-                if len(template) > 0:
-                    self._QUEUE.put((symbol, template.copy(), ts))
-            except Exception as err:
-                print(f'Candelabrum: encountered exception {err}')
-                print(f'Candelabrum: {valid_symbols} returned {q}, date={ts}')
-                with open(err_path, 'w+') as f:
-                    f.write(str(q))
-        print(f'Candelabrum: {ts} updated {len(valid_symbols)} symbols.')
+            df = pandas.DataFrame(collected_data[symbol])
+            df['time'] = [timestamp(t, unit='s', tz=tz) for t in df['t']]
+            df.set_index('time', inplace=True)
+            df.rename(columns=COLUMN_NAMES, inplace=True)
+            template = self.fill_template(df.copy())
+            if len(template) > 0:
+                self._QUEUE.put((symbol, template.copy(), ts))
+        print(f'Candelabrum: {ts} updated {len(collected_data)} symbols.')
         return True
 
     def gather_benchmarks(self, start_date, end_date, timing):
@@ -505,7 +485,7 @@ def spin_wheel(daemonized=True):
         print(f'Stopped spinning after {e} with {total_spins} spins.')
 
 
-def build_historical_database(verbose=False):
+def build_historical_database(starting_year=2019):
     """Cycle through calendar and update data accordingly."""
     calendar = market_calendar()
     calendar_dates = calendar.index.tolist()
@@ -518,11 +498,14 @@ def build_historical_database(verbose=False):
     uargs = dict(limit=10000)
     keeper = icy.TimeKeeper()
     msg = 'Build Historical Database: {}'
-    print(msg.format('starting...'))
+    batch_limit = 224
+    print(msg.format(f'BATCH_LIMIT={batch_limit}'))
+    print(msg.format(f'INDEX_LENGTH={len(ivy_ndx)}'))
     for ts in calendar_dates:
         ts_year = int(ts[0:4])
-        if ts_year < 2019:
+        if ts_year < starting_year:
             continue
+        print(msg.format(f'collecting data for {ts}'))
         ts_month = int(ts[5:7])
         ts_day = int(ts[8:])
         time_stop = (
@@ -536,7 +519,6 @@ def build_historical_database(verbose=False):
         uargs['end'] = str(ts)
         symbols = list()
         batch_count = 0
-        batch_limit = 100
         for s in ivy_ndx:
             symbols.append(s[0])
             batch_count += 1
