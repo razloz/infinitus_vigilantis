@@ -119,9 +119,8 @@ class Candelabrum:
         self._ERROR_PATH = './errors'
         self._TIMER = icy.TimeKeeper()
         self.benchmarks = dict()
-        tz = 'America/New_York'
-        self._tz = tz
-        p = lambda c: pandas.to_datetime(c, utc=True).tz_convert(tz)
+        self._tz = 'America/New_York'
+        p = lambda c: pandas.to_datetime(c, utc=True).tz_convert(self._tz)
         self._CSV_ARGS = dict(
             index_col=0,
             parse_dates=True,
@@ -204,39 +203,69 @@ class Candelabrum:
 
     def do_update(self, symbols, **kwargs):
         """Update historical price data for a given symbol."""
-        ivy_path = f'{self._DATA_PATH}/{symbol.upper()}-{start_date}.ivy'
-        ivy_path = path.abspath(ivy_path)
-        if path.exists(ivy_path):
+        ts = kwargs['start']
+        valid_symbols = list()
+        for s in symbols:
+            skippable = False
+            file_name = f'{s.upper()}-{ts}'
+            ivy_path = path.abspath(f'{self._DATA_PATH}/{file_name}.ivy')
+            err_path = path.abspath(f'{self._ERROR_PATH}/{file_name}.error')
+            data_exists = path.exists(ivy_path)
+            error_exists = path.exists(err_path)
+            if data_exists:
+                skippable = True
+            elif error_exists:
+                with open(err_path, 'r') as error_file:
+                    error_message = error_file.read()
+                if """'bars': None""" in error_message:
+                    skippable = True
+            if not skippable:
+                valid_symbols.append(s)
+        if len(valid_symbols) == 0:
             return True
-        err_path = f'{self._ERROR_PATH}/{symbol.upper()}-{start_date}.error'
-        err_path = path.abspath(err_path)
-        if path.exists(err_path):
-            with open(err_path, 'r') as error_file:
-                error_message = error_file.read()
-            if """'bars': None""" in error_message:
-                return True
-        tk = self._TIMER
-        start_time = tk.reset
+        collected_data = dict()
+        gathering_data = True
+        while gathering_data:
+            q = SHEPHERD.candles(valid_symbols, **kwargs)
+            print(f'Candelabrum: Alpaca Shepherd responded with type {type(q)}.')
+            if type(q) != dict:
+                break
+            bars_data = q['bars']
+            if type(bars_data) != dict:
+                break
+            collected_keys = collected_data.keys()
+            for s in bars_data.keys():
+                if not s in collected_keys:
+                    collected_data[s] = bars_data[s]
+                else:
+                    collected_data[s] += bars_data[s]
+                print(f'Candelabrum: Length of data for {s} is {len(collected_data[s])}.')
+            token = q['next_page_token']
+            if not token:
+                print('Candelabrum: next_page_token is None, breaking loop.')
+                gathering_data = False
+            else:
+                print(f'Candelabrum: next_page_token is {token}, looping...')
+                kwargs['next_page_token'] = token
+        print(f'Candelabrum: Collected data for {collected_data.keys()}')
         tz = self._tz
-        pts = pandas.Timestamp
-        q = SHEPHERD.candles(symbols, **kwargs)
-        t = type(symbols)
-        try:
-            bars = pandas.DataFrame(q['bars'])
-            bars['time'] = [pts(t, unit='s', tz=tz) for t in bars['t']]
-            bars.set_index('time', inplace=True)
-            bars.rename(columns=self._COL_NAMES, inplace=True)
-            tmp = self.fill_template(bars.copy())
-            tmp.dropna(inplace=True)
-            if len(tmp) > 0:
-                print(f'Candelabrum: {symbol} updated {start_date}.')
-                self._QUEUE.put((symbol, tmp.copy(), start_date))
-        except Exception as err:
-            print(f'Candelabrum: encountered exception {err}')
-            print(f'Candelabrum: {symbol} returned {q}, date={start_date}')
-            with open(err_path, 'w+') as f:
-                f.write(str(q))
-            return False
+        timestamp = pandas.Timestamp
+        print(f'Candelabrum: Adding jobs for {len(collected_data.keys())} data entries.')
+        for symbol in collected_data.keys():
+            try:
+                df = pandas.DataFrame(collected_data[symbol])
+                df['time'] = [timestamp(t, unit='s', tz=tz) for t in df['t']]
+                df.set_index('time', inplace=True)
+                df.rename(columns=self._COL_NAMES, inplace=True)
+                template = self.fill_template(df.copy())
+                if len(template) > 0:
+                    self._QUEUE.put((symbol, template.copy(), ts))
+            except Exception as err:
+                print(f'Candelabrum: encountered exception {err}')
+                print(f'Candelabrum: {valid_symbols} returned {q}, date={ts}')
+                with open(err_path, 'w+') as f:
+                    f.write(str(q))
+        print(f'Candelabrum: {ts} updated {len(valid_symbols)} symbols.')
         return True
 
     def gather_benchmarks(self, start_date, end_date, timing):
@@ -503,9 +532,19 @@ def build_historical_database(verbose=False):
             )
         if all(time_stop):
             break
-        uargs['start_date'] = str(ts)
-        uargs['end_date'] = str(ts)
+        uargs['start'] = str(ts)
+        uargs['end'] = str(ts)
+        symbols = list()
+        batch_count = 0
+        batch_limit = 100
         for s in ivy_ndx:
-            cdlm.do_update(s[0], **uargs)
+            symbols.append(s[0])
+            batch_count += 1
+            if batch_count == batch_limit:
+                cdlm.do_update(symbols, **uargs)
+                symbols = list()
+                batch_count = 0
+        if batch_count > 0:
+            cdlm.do_update(symbols, **uargs)
     cdlm.join_threads()
     print(msg.format(f'completed after {keeper.final}.'))

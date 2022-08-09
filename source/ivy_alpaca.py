@@ -34,6 +34,10 @@ class AlpacaShepherd:
     def __query__(self, url, debugging=False):
         if debugging:
             print(f'AlpacaShepherd: {url}')
+        l = len(url)
+        if l > 2048:
+            print(f'AlpacaShepherd: URL of length {l} exceeds the 2048 limit.')
+            return None
         URI = r'{}'.format(url)
         rcode = 0
         elapsed = time.time() - self._last_query
