@@ -69,12 +69,20 @@ class AlpacaShepherd:
         """Get an array of assets."""
         return self.__query__(f'{self.ALPACA_URL}/assets')
 
-    def candles(self, symbol, limit=None, start_date=None, end_date=None):
-        """Get historical price data for a specific symbol."""
-        if len(symbol) > 0:
-            url = f'{self.DATA_URL}/stocks/{symbol}/bars?timeframe=1Min'
-            if limit is not None: url += f'&limit={limit}'
-            if start_date is not None: url += f'&start={start_date}'
-            if end_date is not None: url += f'&end={end_date}'
-            return self.__query__(url)
-        return None
+    def candles(self, symbols, **kwargs):
+        """Get historical price data for a symbol or list of symbols."""
+        params = 'timeframe=1Min'
+        for p in ('limit', 'start', 'end', 'page_token'):
+            if p in kwargs:
+                params += f'&{p}={kwargs[p]}'
+        t = type(symbols)
+        if t == list:
+            url = f'{self.DATA_URL}/stocks/bars?symbols='
+            for s in symbols:
+                url += f'{s},'
+            url = f'{url[:-1]}&'
+        elif t == str and t.isalpha():
+            url = f'{self.DATA_URL}/stocks/{symbols}/bars?'
+        else:
+            return None
+        return self.__query__(f'{url}{params}')

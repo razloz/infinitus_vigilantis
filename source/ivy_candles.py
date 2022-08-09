@@ -16,8 +16,6 @@ SILENCE = icy.silence
 DIV = icy.safe_div
 PERCENT = icy.percent_change
 SHEPHERD = api.AlpacaShepherd()
-MAX_THREADS = 8
-QUEUE = icy.Queue()
 
 
 def daemonize():
@@ -105,13 +103,20 @@ def composite_index(ci_path='./indexes/composite.index'):
 
 class Candelabrum:
     """Handler for historical price data."""
-    def __init__(self, verbose=True):
-        self._THREAD_LOCK = icy.THREAD_LOCK
+    def __init__(self, index=None):
+        """Set symbol index from composite index."""
+        self.set_index = lambda n: [t[0] for t in n]
+        if index:
+            self._INDEX = self.set_index(index)
+        else:
+            self._INDEX = list()
+        self._THREADS = list()
+        self._MAX_THREADS = 8
+        self._THREAD_COUNT = range(self._MAX_THREADS)
+        self._QUEUE = icy.Queue()
         self._BENCHMARKS = ('QQQ', 'SPY')
         self._DATA_PATH = './candelabrum'
         self._ERROR_PATH = './errors'
-        self._VERBOSE = verbose
-        icy.SILENT = not verbose
         self._TIMER = icy.TimeKeeper()
         self.benchmarks = dict()
         tz = 'America/New_York'
@@ -122,7 +127,7 @@ class Candelabrum:
             parse_dates=True,
             infer_datetime_format=True,
             date_parser=p
-            ) # self._CSV_ARGS
+            )
         self._COL_NAMES = {
             't': 'utc_ts',
             'o': 'open',
@@ -130,17 +135,40 @@ class Candelabrum:
             'l': 'low',
             'c': 'close',
             'v': 'volume'
-            } # self._COL_NAMES
-        if verbose:
-            print('Candelabrum: initialized.')
+            }
+        print(f'Candelabrum: creating {self._MAX_THREADS} threads...')
+        for _ in self._THREAD_COUNT:
+            self._THREADS.append(icy.ivy_dispatcher(self.__worker_thread__))
+        print('Candelabrum: initialized.')
 
-    @SILENCE
     def __get_path__(self, symbol, date_string):
         """You no take candle!"""
         p = f'{self._DATA_PATH}/{symbol.upper()}-{date_string}.ivy'
         return path.abspath(p)
 
-    @SILENCE
+    def __worker_thread__(self):
+        """Get jobs and save data locally."""
+        while True:
+            job = self._QUEUE.get()
+            if job == 'exit':
+                break
+            try:
+                symbol, data, start_date = job[0], job[1], job[2]
+                p = f'{self._DATA_PATH}/{symbol.upper()}-{start_date}.ivy'
+                data.to_csv(path.abspath(p), mode='w+')
+            except Exception as err:
+                print(f'Worker Thread: {err}\n{job}')
+            finally:
+                self._QUEUE.task_done()
+        self._QUEUE.task_done()
+
+    def join_threads(self):
+        """Block until all jobs are finished."""
+        print('Candelabrum: waiting for all jobs to finish...')
+        for _ in self._THREAD_COUNT:
+            self._QUEUE.put('exit')
+        self._QUEUE.join()
+
     def fill_template(self, dataframe):
         """Populate template and interpolate missing data."""
         date_args = dict(name='time')
@@ -161,7 +189,6 @@ class Candelabrum:
         template.dropna(inplace=True)
         return template.copy()
 
-    @SILENCE
     def load_candles(self, symbol, date_string):
         """=^.^="""
         data_path = self.__get_path__(symbol, date_string)
@@ -171,27 +198,29 @@ class Candelabrum:
             df = pandas.read_csv(pth, **self._CSV_ARGS)
         return df.copy()
 
-    @SILENCE
     def save_candles(self, symbol, dataframe, date_string):
         """=^.^="""
         dataframe.to_csv(self.__get_path__(symbol, date_string), mode='w+')
 
-    def do_update(self,
-                  symbol,
-                  limit=10000,
-                  start_date='2019-01-02',
-                  end_date='2019-01-02'):
+    def do_update(self, symbols, **kwargs):
         """Update historical price data for a given symbol."""
-        if path.exists(self.__get_path__(symbol, start_date)):
+        ivy_path = f'{self._DATA_PATH}/{symbol.upper()}-{start_date}.ivy'
+        ivy_path = path.abspath(ivy_path)
+        if path.exists(ivy_path):
             return True
+        err_path = f'{self._ERROR_PATH}/{symbol.upper()}-{start_date}.error'
+        err_path = path.abspath(err_path)
+        if path.exists(err_path):
+            with open(err_path, 'r') as error_file:
+                error_message = error_file.read()
+            if """'bars': None""" in error_message:
+                return True
         tk = self._TIMER
         start_time = tk.reset
         tz = self._tz
         pts = pandas.Timestamp
-        qa = dict(limit=limit, start_date=start_date, end_date=end_date)
-        self._THREAD_LOCK.acquire()
-        q = SHEPHERD.candles(symbol, **qa)
-        self._THREAD_LOCK.release()
+        q = SHEPHERD.candles(symbols, **kwargs)
+        t = type(symbols)
         try:
             bars = pandas.DataFrame(q['bars'])
             bars['time'] = [pts(t, unit='s', tz=tz) for t in bars['t']]
@@ -201,17 +230,15 @@ class Candelabrum:
             tmp.dropna(inplace=True)
             if len(tmp) > 0:
                 print(f'Candelabrum: {symbol} updated {start_date}.')
-                self.save_candles(symbol, tmp.copy(), start_date)
+                self._QUEUE.put((symbol, tmp.copy(), start_date))
         except Exception as err:
             print(f'Candelabrum: encountered exception {err}')
             print(f'Candelabrum: {symbol} returned {q}, date={start_date}')
-            err_path = f'{self._ERROR_PATH}/{symbol.upper()}-{start_date}.error'
             with open(err_path, 'w+') as f:
                 f.write(str(q))
             return False
         return True
 
-    @SILENCE
     def gather_benchmarks(self, start_date, end_date, timing):
         if len(self._BENCHMARKS) < 1: return False
         for symbol in self._BENCHMARKS:
@@ -223,7 +250,6 @@ class Candelabrum:
                 continue
         return True
 
-    @SILENCE
     def gather_data(self, symbol, start_date, end_date):
         calendar = market_calendar()
         calendar_dates = calendar.index.tolist()
@@ -246,7 +272,6 @@ class Candelabrum:
                 pass
         return candles.copy()
 
-    @SILENCE
     def apply_indicators(self, candles):
         global icy
         money = icy.get_money(candles['close'].tolist())
@@ -267,13 +292,11 @@ class Candelabrum:
         candles['volume_mid'] = mid_v
         return candles.copy()
 
-    @SILENCE
     def resample_candles(self, candles, scale):
         c = candles.resample(scale).apply(self.candle_maker)
         c.dropna(inplace=True)
         return c.copy()
 
-    @SILENCE
     def candle_maker(self, candles):
         if len(candles) > 0 and type(candles) == pandas.Series:
             name = str(candles.name)
@@ -466,40 +489,23 @@ def build_historical_database(verbose=False):
     uargs = dict(limit=10000)
     keeper = icy.TimeKeeper()
     msg = 'Build Historical Database: {}'
-    thread_count = range(MAX_THREADS)
-    def thread_worker():
-        while True:
-            job = QUEUE.get()
-            if job == 'exit':
-                break
-            try:
-                symbol, kwargs = job[0], job[1]
-                cdlm.do_update(symbol, **kwargs)
-            except Exception as err:
-                print(msg.format(f'{err}'))
-            QUEUE.task_done()
-        QUEUE.task_done()
-    print(msg.format(f'creating {MAX_THREADS} threads...'))
-    threads = [icy.ivy_dispatcher(thread_worker) for _ in thread_count]
     print(msg.format('starting...'))
     for ts in calendar_dates:
         ts_year = int(ts[0:4])
-        ts_month = int(ts[5:7])
-        ts_day = int(ts[8:])
-        time_stop = (ts_year == local_year,
-                     ts_month == local_month,
-                     ts_day > local_day)
         if ts_year < 2019:
             continue
-        elif all(time_stop):
+        ts_month = int(ts[5:7])
+        ts_day = int(ts[8:])
+        time_stop = (
+            ts_year == local_year,
+            ts_month == local_month,
+            ts_day >= local_day
+            )
+        if all(time_stop):
             break
         uargs['start_date'] = str(ts)
         uargs['end_date'] = str(ts)
         for s in ivy_ndx:
-            QUEUE.put((s[0], uargs))
-    for _ in thread_count:
-        QUEUE.put('exit')
-    print(msg.format(f'awaiting {MAX_THREADS} threads...'))
-    for t in threads:
-        t.join()
+            cdlm.do_update(s[0], **uargs)
+    cdlm.join_threads()
     print(msg.format(f'completed after {keeper.final}.'))
