@@ -122,11 +122,12 @@ class Candelabrum:
         else:
             self._INDEX = list()
         self._THREADS = list()
-        self._MAX_THREADS = 8
+        self._MAX_THREADS = 5
         self._THREAD_COUNT = range(self._MAX_THREADS)
         self._QUEUE = icy.Queue()
         self._BENCHMARKS = ('QQQ', 'SPY')
         self._DATA_PATH = './candelabrum'
+        self._ERROR_PATH = './errors'
         self._TIMER = icy.TimeKeeper()
         self.benchmarks = dict()
         self._tz = 'America/New_York'
@@ -154,11 +155,39 @@ class Candelabrum:
             if job == 'exit':
                 break
             try:
-                symbol, data, start_date = job[0], job[1], job[2]
-                p = f'{self._DATA_PATH}/{symbol.upper()}-{start_date}.ivy'
-                data.to_csv(path.abspath(p), mode='w+')
+                data = json.loads(job[0])
+                bars = data['bars']
+                date_string = job[1]
+                requested_symbols = job[2]
+                returned_symbols = bars.keys()
+                tz = self._tz
+                pts = pandas.Timestamp
+                for symbol in returned_symbols:
+                    df = pandas.DataFrame(bars[symbol])
+                    df['time'] = [pts(t, unit='s', tz=tz) for t in df['t']]
+                    df.set_index('time', inplace=True)
+                    df.rename(columns=COLUMN_NAMES, inplace=True)
+                    template = self.fill_template(df.copy())
+                    file_name = f'{symbol.upper()}-{date_string}'
+                    if len(template) > 0:
+                        ivy_path = f'./candelabrum/{file_name}.ivy'
+                        template.to_csv(path.abspath(ivy_path), mode='w+')
+                    else:
+                        err_path = f'./errors/{file_name}.error'
+                        with open(path.abspath(err_path), 'w+') as err_file:
+                            err_file.write('empty template')
+                for symbol in requested_symbols:
+                    if symbol not in returned_symbols:
+                        file_name = f'{symbol.upper()}-{date_string}'
+                        err_path = f'./errors/{file_name}.error'
+                        with open(path.abspath(err_path), 'w+') as err_file:
+                            err_file.write('not in returned symbols')
             except Exception as err:
-                print(f'Worker Thread: {err}\n{job}')
+                err_path = f'./{time.time()}-worker.exception'
+                err_msg = f'{type(err)}:{err.args}\n\n{job}'
+                with open(path.abspath(err_path), 'w+') as err_file:
+                    err_file.write(err_msg)
+                print(f'Worker Thread: {err_msg}')
             finally:
                 self._QUEUE.task_done()
         self._QUEUE.task_done()
@@ -208,44 +237,30 @@ class Candelabrum:
         ts = kwargs['start']
         valid_symbols = list()
         for s in symbols:
-            ivy_path = f'{self._DATA_PATH}/{s.upper()}-{ts}.ivy'
+            file_name = f'{s.upper()}-{ts}'
+            ivy_path = f'{self._DATA_PATH}/{file_name}.ivy'
+            err_path = f'{self._ERROR_PATH}/{file_name}.error'
             if not path.exists(path.abspath(ivy_path)):
-                valid_symbols.append(s)
+                if not path.exists(path.abspath(err_path)):
+                    valid_symbols.append(s)
         if not valid_symbols:
             return True
-        collected_data = dict()
         gathering_data = True
         while gathering_data:
             q = SHEPHERD.candles(valid_symbols, **kwargs)
-            if type(q) != dict:
-                break
-            bars_data = q['bars']
-            if type(bars_data) != dict:
-                break
-            collected_keys = collected_data.keys()
-            for s in bars_data.keys():
-                symbol_data = bars_data[s]
-                if symbol_data:
-                    if not s in collected_keys:
-                        collected_data[s] = symbol_data
-                    else:
-                        collected_data[s] += symbol_data
-            token = q['next_page_token']
-            if not token:
-                gathering_data = False
+            if type(q) == str:
+                self._QUEUE.put((q, ts, valid_symbols))
+                token_str = '"next_page_token":'
+                token_location = q.find(token_str, -100) + len(token_str)
+                parsed_token = q[token_location:-1]
+                if parsed_token != 'null':
+                    kwargs['page_token'] = parsed_token[1:-1]
+                    print(f"Candelabrum: Set page_token to {kwargs['page_token']}")
+                else:
+                    gathering_data = False
             else:
-                kwargs['page_token'] = token
-        tz = self._tz
-        timestamp = pandas.Timestamp
-        for symbol in collected_data.keys():
-            df = pandas.DataFrame(collected_data[symbol])
-            df['time'] = [timestamp(t, unit='s', tz=tz) for t in df['t']]
-            df.set_index('time', inplace=True)
-            df.rename(columns=COLUMN_NAMES, inplace=True)
-            template = self.fill_template(df.copy())
-            if len(template) > 0:
-                self._QUEUE.put((symbol, template.copy(), ts))
-        print(f'Candelabrum: {ts} updated {len(collected_data)} symbols.')
+                gathering_data = False
+        print(f'Candelabrum: {ts} updated {len(valid_symbols)} symbols.')
         return True
 
     def gather_benchmarks(self, start_date, end_date, timing):

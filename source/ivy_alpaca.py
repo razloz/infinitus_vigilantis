@@ -31,9 +31,7 @@ class AlpacaShepherd:
             "APCA-API-SECRET-KEY": r'{}'.format(ALPACA_SECRET)
             } # self.CREDS
 
-    def __query__(self, url, debugging=False):
-        if debugging:
-            print(f'AlpacaShepherd: {url}')
+    def __query__(self, url, just_text=False):
         l = len(url)
         if l > 2048:
             print(f'AlpacaShepherd: URL of length {l} exceeds the 2048 limit.')
@@ -48,10 +46,10 @@ class AlpacaShepherd:
             self._last_query = time.time()
             rcode = rx.status_code
             if rcode == 200:
-                r = json.loads(rx.text)
-                if debugging:
-                    print(f'AlpacaShepherd: {rcode}\n{r}')
-                return r
+                if just_text:
+                    return rx.text
+                else:
+                    return json.loads(rx.text)
             else:
                 print(f'AlpacaShepherd: Query returned code {rcode}.')
         return rcode
@@ -85,8 +83,8 @@ class AlpacaShepherd:
             for s in symbols:
                 url += f'{s},'
             url = f'{url[:-1]}&'
+            return self.__query__(f'{url}{params}', just_text=True)
         elif t == str and t.isalpha():
             url = f'{self.DATA_URL}/stocks/{symbols}/bars?'
-        else:
-            return None
-        return self.__query__(f'{url}{params}')
+            return self.__query__(f'{url}{params}')
+        return None
