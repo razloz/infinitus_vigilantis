@@ -77,20 +77,21 @@ def percent_change(current, previous):
         return float(round(100 * chg, 2))
 
 
-_WEIGHTED = lambda c, p, w: c * w + (p * (1 - w))
-_EMA = lambda c, p, l: _WEIGHTED(mean(c), mean(p), 2/l)
+__weighted__ = lambda c, p, w: c * w + (p * (1 - w))
+__ema__ = lambda c, p, l: __weighted__(mean(c), mean(p), 2/l)
+_NO_MONEY_ = {'zs': 0, 'sdev': 0, 'wema': 0, 'dh': 0, 'dl': 0, 'mid': 0}
 def money_line(points, fast=8, weight=34):
     """Will it cheese?"""
+    money = dict(_NO_MONEY_)
     try:
-        global _EMA
         # flip kwargs for use in reverse list comprehension
         slow = len(points)
         wp = ((fast - 1) * -1, (slow - 1) * -1, (weight - 1) * -1)
         wc = (fast * -1, slow * -1, weight * -1)
         # calculate moving averages
-        fast_ema = _EMA(points[wc[0]:], points[wp[0]:], slow)
-        slow_ema = _EMA(points[wc[1]:], points[wp[1]:], fast)
-        weight_ema = _EMA(points[wc[2]:], points[wp[2]:], weight)
+        fast_ema = __ema__(points[wc[0]:], points[wp[0]:], slow)
+        slow_ema = __ema__(points[wc[1]:], points[wp[1]:], fast)
+        weight_ema = __ema__(points[wc[2]:], points[wp[2]:], weight)
         # calculate weighted exponential average
         wema = ((slow_ema + fast_ema) / 2) * 0.5
         wema += weight_ema * 0.5
@@ -104,80 +105,20 @@ def money_line(points, fast=8, weight=34):
         cl = min(points)
         mid = 0.5 * (max(points) - cl) + cl
         # get the money
-        return (zs, sdev, wema, dh, dl, mid)
+        money['zs'] = zs
+        money['sdev'] = sdev
+        money['wema'] = wema
+        money['dh'] = dh
+        money['dl'] = dl
+        money['mid'] = mid
     except Exception as details:
-        if not SILENT:
-            print(f'money_line encountered {details.args}')
-            traceback.print_exc()
-        return (0, 0, 0, 0, 0, 0)
+        print(f'money_line encountered {details.args}')
+        traceback.print_exc()
+    finally:
+        return money
 
 
-def get_money(points, fast=8, weight=40, sample=160):
-    """Compile money line from points."""
-    points_range = range(len(points))
-    points_end = points_range[-1]
-    money = list()
-    sample = int(sample)
-    s = sample * -1
-    min_size = sample - 1
-    weights = dict(fast=int(fast), weight=int(weight))
-    for i in points_range:
-        if i == points_end:
-            money.append(money_line(points[s:], **weights))
-        elif i >= min_size:
-            si = i + (s + 1)
-            ei = i + 1
-            money.append(money_line(points[si:ei], **weights))
-        else:
-            money.append((0, 0, 0, 0, 0, 0))
-    return money
-
-
-def get_trend(highs, lows):
-    """Trend detection."""
-    high_len = len(highs)
-    low_len = len(lows)
-    if high_len != low_len:
-        if not SILENT:
-            print('Lists must be of same length.')
-        return None
-    trend = list()
-    trend_range = range(high_len)
-    trend_end = trend_range[-1]
-    trend_strength = 0
-    trend_signal = 'neutral'
-    for i in trend_range:
-        if i >= 2:
-            trending_up = all((
-                highs[i] > highs[i-1] > highs[i-2],
-                lows[i] > lows[i-1] > lows[i-2]
-                ))
-            trending_down = all((
-                highs[i] < highs[i-1] < highs[i-2],
-                lows[i] < lows[i-1] < lows[i-2]
-                ))
-            if trend_signal == 'neutral':
-                trend_strength = 0
-            elif trend_signal == 'buy':
-                trend_strength += 1
-            elif trend_signal == 'sell':
-                trend_strength -= 1
-            if trending_up != trending_down:
-                trend_strength = 0
-                if trending_up == True and trending_down == True:
-                    trend_signal = 'neutral'
-                elif trending_up:
-                    trend_signal = 'buy'
-                    trend_strength = 1
-                elif trending_down:
-                    trend_signal = 'sell'
-                    trend_strength = -1
-        trend.append((trend_strength, trend_signal))
-    return trend
-
-
-@silence
-def get_pivot_points(*ohlc):
+def pivot_points(*ohlc):
     """Generate a list of pivot points at price."""
     price_points = [p for l in ohlc for p in l]
     return dict(Counter(price_points))
@@ -189,13 +130,15 @@ def fibonacci(high_point, low_point, mid_point=None, bullish=True):
     s = [-2.618, -1.618, -1, -0.786, -0.618, -0.5, -0.382, -0.236,
          0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618]
     if mid_point:
+        prefix = 'fib_extend_'
         if bullish:
             r = [round(mid_point + (p * i), 2) for i in s]
         else:
             r = [round(mid_point - (p * i), 2) for i in s]
     else:
+        prefix = 'fib_retrace_'
         r = [round(high_point - (p * i), 2) for i in s]
-    return {s[i]: r[i] for i in range(len(s))}
+    return {f'{prefix}{s[i]}': r[i] for i in range(len(s))}
 
 
 def gartley(five_point_wave):
@@ -203,14 +146,13 @@ def gartley(five_point_wave):
     p = five_point_wave
     r1 = fibonacci(p[1], p[0])
     r2 = fibonacci(p[1], p[2])
-    pattern = dict(target=0, stop_loss=0)
+    pattern = dict(gartley_target=0, gartley_stop_loss=0)
     if all([p[2] == r1[0.618], p[3] == r2[0.382], p[4] == r1[0.786]]):
-        pattern['target'] = p[1] + ((p[1] - p[3]) * 1.618)
-        pattern['stop_loss'] = p[0]
+        pattern['gartley_target'] = p[1] + ((p[1] - p[3]) * 1.618)
+        pattern['gartley_stop_loss'] = p[0]
     return pattern
 
 
-@silence
 def logic_block(candle, exchange):
     """Generate buy and sell signals."""
     cdl_zscore = float(candle.money_zscore)
@@ -254,6 +196,85 @@ def logic_block(candle, exchange):
         return -1
     else:
         return 0
+
+
+def get_pivot_points():
+    pass
+def get_fibonacci():
+    pass
+def get_gartley():
+    pass
+def get_indicators(dataframe):
+    """Collects indicators and adds them to the dataframe."""
+    trend_strength = 0
+    last_wave_points = [0, 0, 0, 0, 0]
+    last_wave_index = 0
+    trend = list()
+    fibs = list()
+    waves = list()
+    sample = 89
+    money_start = sample - 1
+    s = sample * -1
+    weights = dict(fast=8, weight=34)
+    money_p = {k: list() for k in _NO_MONEY_.keys()}
+    money_v = dict(money_p)
+    df_range = range(len(dataframe))
+    df_last = df_range[-1]
+    # localize dataframe columns
+    o = dataframe['open']
+    h = dataframe['high']
+    l = dataframe['low']
+    c = dataframe['close']
+    v = dataframe['volume']
+    for i in df_range:
+        # trend detection and tracking
+        if i >= 2:
+            ii = i - 1
+            iii = i - 2
+            trending_up = all((
+                h.iloc[i] > h.iloc[ii] > h.iloc[iii],
+                l.iloc[i] > l.iloc[ii] > l.iloc[iii]
+                ))
+            trending_down = all((
+                h.iloc[i] < h.iloc[ii] < h.iloc[iii],
+                l.iloc[i] < l.iloc[ii] < l.iloc[iii]
+                ))
+            if trending_up and trending_down:
+                trend_strength = 0
+            elif trend_strength < 0:
+                if trending_up:
+                    trend_strength = 1
+                else:
+                    trend_strength -= 1
+            elif trend_strength > 0:
+                if trending_down:
+                    trend_strength = -1
+                else:
+                    trend_strength += 1
+        trend.append(trend_strength)
+        # Collect money line for price and volume
+        if i == df_last:
+            mp = money_line(c.iloc[s:], **weights)
+            mv = money_line(v.iloc[s:], **weights)
+        elif i >= money_start:
+            si = 1 + i + s
+            ei = 1 + i
+            mp = money_line(c.iloc[si:ei], **weights)
+            mv = money_line(v.iloc[si:ei], **weights)
+        else:
+            mp = dict(_NO_MONEY_)
+            mv = dict(_NO_MONEY_)
+        for key, value in mp.items():
+            money_p[key].append(value)
+        for key, value in mv.items():
+            money_v[key].append(value)
+    # Add each indicator column to dataframe
+    dataframe['trend'] = trend
+    for key, value in money_p.items():
+        dataframe[f'price_{key}'] = value
+    for key, value in money_v.items():
+        dataframe[f'volume_{key}'] = value
+    return dataframe.copy()
 
 
 class TimeKeeper:

@@ -4,6 +4,7 @@ import requests
 import json
 import os
 import time
+from requests.exceptions import RequestException
 
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
@@ -14,16 +15,19 @@ class AlpacaShepherd:
     """Handler for communicating with the Alpaca Markets API."""
     def __init__(self):
         """Load auth keys and create session."""
+        self.PREFIX = 'AlpacaShepherd:'
         ALPACA_ID = os.environ["APCA_API_KEY_ID"]
         if not len(ALPACA_ID) > 0:
-            print('AlpacaShepherd: ALPACA_ID required.')
+            print(f'{self.PREFIX} ALPACA_ID required.')
             return None
         ALPACA_SECRET = os.environ["APCA_API_SECRET_KEY"]
         if not len(ALPACA_SECRET) > 0:
-            print('AlpacaShepherd: ALPACA_SECRET required.')
+            print(f'{self.PREFIX} ALPACA_SECRET required.')
             return None
         self._last_query = 0
         self.RATE_LIMIT = 0.33
+        self.RETRY_WAIT = 90
+        self.RETRY_CODES = [408, 429]
         self.ALPACA_URL = r'https://paper-api.alpaca.markets/v2/'
         self.DATA_URL = r'https://data.alpaca.markets/v2'
         self.CREDS = {
@@ -34,25 +38,34 @@ class AlpacaShepherd:
     def __query__(self, url, just_text=False):
         l = len(url)
         if l > 2048:
-            print(f'AlpacaShepherd: URL of length {l} exceeds the 2048 limit.')
+            print(f'{self.PREFIX} URL of length {l} exceeds the 2048 limit.')
             return None
         URI = r'{}'.format(url)
         rcode = 0
         elapsed = time.time() - self._last_query
         if elapsed < self.RATE_LIMIT:
             time.sleep(self.RATE_LIMIT - elapsed)
-        with requests.Session() as sess:
-            rx = sess.get(URI, headers=self.CREDS)
-            self._last_query = time.time()
-            rcode = rx.status_code
+        try:
+            with requests.Session() as sess:
+                self._last_query = time.time()
+                rx = sess.get(URI, headers=self.CREDS, timeout=5)
+                rcode = rx.status_code
+        except RequestException as err:
+            print(f'{self.PREFIX} Encountered {type(err)}: {err.args}.')
+            rcode = 408
+        finally:
             if rcode == 200:
                 if just_text:
                     return rx.text
                 else:
                     return json.loads(rx.text)
+            elif rcode in self.RETRY_CODES:
+                print(f'{self.PREFIX} Retry in {self.RETRY_WAIT} seconds.')
+                time.sleep(self.RETRY_WAIT)
+                return self.__query__(url, just_text=just_text)
             else:
-                print(f'AlpacaShepherd: Query returned code {rcode}.')
-        return rcode
+                print(f'{self.PREFIX} Query returned code {rcode}.')
+                return rcode
 
     def calendar(self):
         """Get market calendar for open and close times."""

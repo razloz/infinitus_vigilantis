@@ -245,6 +245,7 @@ class Candelabrum:
                     valid_symbols.append(s)
         if not valid_symbols:
             return True
+        print(f'Candelabrum: {ts} updating {len(valid_symbols)} symbols.')
         gathering_data = True
         while gathering_data:
             q = SHEPHERD.candles(valid_symbols, **kwargs)
@@ -255,12 +256,10 @@ class Candelabrum:
                 parsed_token = q[token_location:-1]
                 if parsed_token != 'null':
                     kwargs['page_token'] = parsed_token[1:-1]
-                    print(f"Candelabrum: Set page_token to {kwargs['page_token']}")
                 else:
                     gathering_data = False
             else:
                 gathering_data = False
-        print(f'Candelabrum: {ts} updated {len(valid_symbols)} symbols.')
         return True
 
     def gather_benchmarks(self, start_date, end_date, timing):
@@ -292,28 +291,25 @@ class Candelabrum:
                         candles = day_data.copy()
                     else:
                         candles = pandas.concat([candles, day_data])
-            finally:
-                pass
+            except Exception as details:
+                print(f'Candelabrum: Encountered {details.args}')
+                continue
         return candles.copy()
 
     def apply_indicators(self, candles):
         global icy
-        money = icy.get_money(candles['close'].tolist())
-        zs, sdev, wema, dh, dl, mid = zip(*money)
-        candles['money_zscore'] = zs
-        candles['money_sdev'] = sdev
-        candles['money_wema'] = wema
-        candles['money_dh'] = dh
-        candles['money_dl'] = dl
-        candles['money_mid'] = mid
-        vm = icy.get_money(candles['volume'].tolist())
-        zs_v, sdev_v, wema_v, dh_v, dl_v, mid_v = zip(*vm)
-        candles['volume_zscore'] = zs_v
-        candles['volume_sdev'] = sdev_v
-        candles['volume_wema'] = wema_v
-        candles['volume_dh'] = dh_v
-        candles['volume_dl'] = dl_v
-        candles['volume_mid'] = mid_v
+        o = candles['open'].tolist()
+        h = candles['high'].tolist()
+        l = candles['low'].tolist()
+        c = candles['close'].tolist()
+        v = candles['volume'].tolist()
+        indicators = dict()
+        indicators.update(icy.get_money(c, prefix='money'))
+        indicators.update(icy.get_money(v, prefix='volume'))
+        indicators.update(get_trend(h, l))
+        indicators.update(get_pivot_points(o, h, l, c))
+        # fibonacci(high_point, low_point, mid_point=None, bullish=True)
+        # gartley(five_point_wave)
         return candles.copy()
 
     def resample_candles(self, candles, scale):
@@ -516,11 +512,11 @@ def build_historical_database(starting_year=2019):
     batch_limit = 224
     print(msg.format(f'BATCH_LIMIT={batch_limit}'))
     print(msg.format(f'INDEX_LENGTH={len(ivy_ndx)}'))
+    print(msg.format(f'Checking calendar dates for missing data.'))
     for ts in calendar_dates:
         ts_year = int(ts[0:4])
         if ts_year < starting_year:
             continue
-        print(msg.format(f'collecting data for {ts}'))
         ts_month = int(ts[5:7])
         ts_day = int(ts[8:])
         time_stop = (
