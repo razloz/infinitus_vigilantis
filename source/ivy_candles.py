@@ -7,7 +7,7 @@ import pickle
 import json
 import source.ivy_commons as icy
 import source.ivy_alpaca as api
-from os import path
+from os import path, listdir
 
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
@@ -128,6 +128,7 @@ class Candelabrum:
         self._BENCHMARKS = ('QQQ', 'SPY')
         self._DATA_PATH = './candelabrum'
         self._ERROR_PATH = './errors'
+        self._IVI_PATH = './indicators'
         self._TIMER = icy.TimeKeeper()
         self.benchmarks = dict()
         self._tz = 'America/New_York'
@@ -155,33 +156,42 @@ class Candelabrum:
             if job == 'exit':
                 break
             try:
-                data = json.loads(job[0])
-                bars = data['bars']
-                date_string = job[1]
-                requested_symbols = job[2]
-                returned_symbols = bars.keys()
-                tz = self._tz
-                pts = pandas.Timestamp
-                for symbol in returned_symbols:
-                    df = pandas.DataFrame(bars[symbol])
-                    df['time'] = [pts(t, unit='s', tz=tz) for t in df['t']]
-                    df.set_index('time', inplace=True)
-                    df.rename(columns=COLUMN_NAMES, inplace=True)
-                    template = self.fill_template(df.copy())
-                    file_name = f'{symbol.upper()}-{date_string}'
-                    if len(template) > 0:
-                        ivy_path = f'./candelabrum/{file_name}.ivy'
-                        template.to_csv(path.abspath(ivy_path), mode='w+')
-                    else:
-                        err_path = f'./errors/{file_name}.error'
-                        with open(path.abspath(err_path), 'w+') as err_file:
-                            err_file.write('empty template')
-                for symbol in requested_symbols:
-                    if symbol not in returned_symbols:
+                if job[0] == 'indicators':
+                    ivi_path = path.abspath(job[1])
+                    ivy_path = path.abspath(job[2])
+                    if not path.exists(ivi_path):
+                        with open(ivy_path) as f:
+                            candles = pandas.read_csv(f, **self._CSV_ARGS)
+                        ivi = icy.get_indicators(candles)
+                        ivi.to_csv(ivi_path)
+                else:
+                    data = json.loads(job[0])
+                    bars = data['bars']
+                    date_string = job[1]
+                    requested_symbols = job[2]
+                    returned_symbols = bars.keys()
+                    tz = self._tz
+                    pts = pandas.Timestamp
+                    for symbol in returned_symbols:
+                        df = pandas.DataFrame(bars[symbol])
+                        df['time'] = [pts(t, unit='s', tz=tz) for t in df['t']]
+                        df.set_index('time', inplace=True)
+                        df.rename(columns=COLUMN_NAMES, inplace=True)
+                        template = self.fill_template(df.copy())
                         file_name = f'{symbol.upper()}-{date_string}'
-                        err_path = f'./errors/{file_name}.error'
-                        with open(path.abspath(err_path), 'w+') as err_file:
-                            err_file.write('not in returned symbols')
+                        if len(template) > 0:
+                            ivy_path = f'./candelabrum/{file_name}.ivy'
+                            template.to_csv(path.abspath(ivy_path), mode='w+')
+                        else:
+                            err_path = f'./errors/{file_name}.error'
+                            with open(path.abspath(err_path), 'w+') as err_file:
+                                err_file.write('empty template')
+                    for symbol in requested_symbols:
+                        if symbol not in returned_symbols:
+                            file_name = f'{symbol.upper()}-{date_string}'
+                            err_path = f'./errors/{file_name}.error'
+                            with open(path.abspath(err_path), 'w+') as err_file:
+                                err_file.write('not in returned symbols')
             except Exception as err:
                 err_path = f'./{time.time()}-worker.exception'
                 err_msg = f'{type(err)}:{err.args}\n\n{job}'
@@ -231,6 +241,18 @@ class Candelabrum:
     def save_candles(self, symbol, dataframe, date_string):
         """=^.^="""
         dataframe.to_csv(self.__get_path__(symbol, date_string), mode='w+')
+
+    def apply_indicators(self):
+        """For each ivy file get indicators and save ivi file."""
+        data_path = path.abspath(self._DATA_PATH)
+        ivy_files = listdir(data_path)
+        total_files = len(ivy_files)
+        i = 0
+        for file_name in ivy_files:
+            i += 1
+            ivi_path = f'{self._IVI_PATH}/{file_name[:-4]}.ivi'
+            ivy_path = f'{data_path}/{file_name}'
+            self._QUEUE.put(('indicators', ivi_path, ivy_path))
 
     def do_update(self, symbols, **kwargs):
         """Update historical price data for a given symbol."""
@@ -294,22 +316,6 @@ class Candelabrum:
             except Exception as details:
                 print(f'Candelabrum: Encountered {details.args}')
                 continue
-        return candles.copy()
-
-    def apply_indicators(self, candles):
-        global icy
-        o = candles['open'].tolist()
-        h = candles['high'].tolist()
-        l = candles['low'].tolist()
-        c = candles['close'].tolist()
-        v = candles['volume'].tolist()
-        indicators = dict()
-        indicators.update(icy.get_money(c, prefix='money'))
-        indicators.update(icy.get_money(v, prefix='volume'))
-        indicators.update(get_trend(h, l))
-        indicators.update(get_pivot_points(o, h, l, c))
-        # fibonacci(high_point, low_point, mid_point=None, bullish=True)
-        # gartley(five_point_wave)
         return candles.copy()
 
     def resample_candles(self, candles, scale):

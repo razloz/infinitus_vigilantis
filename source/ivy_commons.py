@@ -19,6 +19,7 @@ from pandas import date_range
 from pandas import DataFrame
 from dateutil import parser as date_parser
 from collections import Counter
+from math import isclose
 
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
@@ -111,9 +112,6 @@ def money_line(points, fast=8, weight=34):
         money['dh'] = dh
         money['dl'] = dl
         money['mid'] = mid
-    except Exception as details:
-        print(f'money_line encountered {details.args}')
-        traceback.print_exc()
     finally:
         return money
 
@@ -124,33 +122,36 @@ def pivot_points(*ohlc):
     return dict(Counter(price_points))
 
 
-def fibonacci(high_point, low_point, mid_point=None, bullish=True):
-    """Retraces price movement if mid_point is none, else extends."""
-    p = high_point - low_point
-    s = [-2.618, -1.618, -1, -0.786, -0.618, -0.5, -0.382, -0.236,
-         0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618]
-    if mid_point:
-        prefix = 'fib_extend_'
-        if bullish:
-            r = [round(mid_point + (p * i), 2) for i in s]
-        else:
-            r = [round(mid_point - (p * i), 2) for i in s]
+_FIB_LEVELS_ = [0.236, 0.382, 0.5, 0.618, 0.786, 0.886]
+def fibonacci(points, trend=0, extend=False):
+    """Extends/retraces price movement based on the trend's polarity."""
+    a = max(points)
+    b = min(points)
+    c = points[-1]
+    s = a - b
+    x = c if extend else a
+    m = 'fib_extend_' if extend else 'fib_retrace_'
+    if trend > 0:
+        fibs = {f'{m}{i}': round(x + s * i, 2) for i in _FIB_LEVELS_}
     else:
-        prefix = 'fib_retrace_'
-        r = [round(high_point - (p * i), 2) for i in s]
-    return {f'{prefix}{s[i]}': r[i] for i in range(len(s))}
+        fibs = {f'{m}{i}': round(x - s * i, 2) for i in _FIB_LEVELS_}
+    return fibs
 
 
-def gartley(five_point_wave):
+def gartley(five_point_wave, tolerance = 0.001):
     """Check points for Gartley's harmonic pattern."""
     p = five_point_wave
-    r1 = fibonacci(p[1], p[0])
-    r2 = fibonacci(p[1], p[2])
-    pattern = dict(gartley_target=0, gartley_stop_loss=0)
-    if all([p[2] == r1[0.618], p[3] == r2[0.382], p[4] == r1[0.786]]):
-        pattern['gartley_target'] = p[1] + ((p[1] - p[3]) * 1.618)
-        pattern['gartley_stop_loss'] = p[0]
-    return pattern
+    t = tolerance
+    r1 = fibonacci((p[1], p[0]))
+    r2 = fibonacci((p[1], p[2]))
+    c1 = isclose(p[2], r1['fib_retrace_0.618'], rel_tol=t)
+    c2 = isclose(p[3], r2['fib_retrace_0.382'], rel_tol=t)
+    c3 = isclose(p[4], r1['fib_retrace_0.786'], rel_tol=t)
+    g = dict(gartley_target=0, gartley_stop_loss=0)
+    if all((c1, c2, c3)):
+        g['gartley_target'] = p[1] + ((p[1] - p[3]) * 1.618033988749)
+        g['gartley_stop_loss'] = p[0]
+    return g
 
 
 def logic_block(candle, exchange):
@@ -198,83 +199,96 @@ def logic_block(candle, exchange):
         return 0
 
 
-def get_pivot_points():
-    pass
-def get_fibonacci():
-    pass
-def get_gartley():
-    pass
-def get_indicators(dataframe):
+__next_wave__ = lambda i, l: i + 1 if i + 1 < l else 0
+def get_indicators(df, index_key='time'):
     """Collects indicators and adds them to the dataframe."""
     trend_strength = 0
-    last_wave_points = [0, 0, 0, 0, 0]
-    last_wave_index = 0
+    wave_points = [0, 0, 0, 0, 0]
+    wave_index = 0
+    wave_length = len(wave_points)
     trend = list()
-    fibs = list()
-    waves = list()
+    fibs_extended = list()
+    fibs_retraced = list()
+    gartley_checks = list()
     sample = 89
-    money_start = sample - 1
-    s = sample * -1
     weights = dict(fast=8, weight=34)
-    money_p = {k: list() for k in _NO_MONEY_.keys()}
-    money_v = dict(money_p)
-    df_range = range(len(dataframe))
+    money_p = {f'price_{k}': list() for k in _NO_MONEY_.keys()}
+    money_v = {f'volume_{k}': list() for k in _NO_MONEY_.keys()}
+    df_range = range(len(df))
     df_last = df_range[-1]
+    if sample >= df_last + 1:
+        return df.copy()
     # localize dataframe columns
-    o = dataframe['open']
-    h = dataframe['high']
-    l = dataframe['low']
-    c = dataframe['close']
-    v = dataframe['volume']
+    o = df['open'].tolist()
+    h = df['high'].tolist()
+    l = df['low'].tolist()
+    c = df['close'].tolist()
+    v = df['volume'].tolist()
     for i in df_range:
         # trend detection and tracking
         if i >= 2:
             ii = i - 1
             iii = i - 2
-            trending_up = all((
-                h.iloc[i] > h.iloc[ii] > h.iloc[iii],
-                l.iloc[i] > l.iloc[ii] > l.iloc[iii]
-                ))
-            trending_down = all((
-                h.iloc[i] < h.iloc[ii] < h.iloc[iii],
-                l.iloc[i] < l.iloc[ii] < l.iloc[iii]
-                ))
+            hp1 = h[i]
+            hp2 = h[ii]
+            hp3 = h[iii]
+            lp1 = l[i]
+            lp2 = l[ii]
+            lp3 = l[iii]
+            trending_up = hp1 > hp2 > hp3 and lp1 > lp2 > lp3
+            trending_down = hp1 < hp2 < hp3 and lp1 < lp2 < lp3
             if trending_up and trending_down:
                 trend_strength = 0
-            elif trend_strength < 0:
-                if trending_up:
-                    trend_strength = 1
-                else:
-                    trend_strength -= 1
-            elif trend_strength > 0:
-                if trending_down:
-                    trend_strength = -1
-                else:
-                    trend_strength += 1
+                wave_points[wave_index] = 0
+                wave_index = __next_wave__(wave_index, wave_length)
+            elif trending_up:
+                if trend_strength <= 0:
+                    trend_strength = 0
+                    wave_points[wave_index] = lp3
+                    wave_index = __next_wave__(wave_index, wave_length)
+                trend_strength += 1
+            elif trending_down:
+                if trend_strength >= 0:
+                    trend_strength = 0
+                    wave_points[wave_index] = hp3
+                    wave_index = __next_wave__(wave_index, wave_length)
+                trend_strength -= 1
+        r = fibonacci(wave_points, trend=trend_strength)
+        e = fibonacci(wave_points, trend=trend_strength, extend=True)
+        g = gartley(wave_points)
+        fibs_retraced.append(r)
+        fibs_extended.append(e)
         trend.append(trend_strength)
+        gartley_checks.append(g)
         # Collect money line for price and volume
+        si = i - sample
+        ei = i + 1
         if i == df_last:
-            mp = money_line(c.iloc[s:], **weights)
-            mv = money_line(v.iloc[s:], **weights)
-        elif i >= money_start:
-            si = 1 + i + s
-            ei = 1 + i
-            mp = money_line(c.iloc[si:ei], **weights)
-            mv = money_line(v.iloc[si:ei], **weights)
+            mp = money_line(c[si:], **weights)
+            mv = money_line(v[si:], **weights)
+        elif i >= sample:
+            mp = money_line(c[si:ei], **weights)
+            mv = money_line(v[si:ei], **weights)
         else:
             mp = dict(_NO_MONEY_)
             mv = dict(_NO_MONEY_)
         for key, value in mp.items():
-            money_p[key].append(value)
+            money_p[f'price_{key}'].append(value)
         for key, value in mv.items():
-            money_v[key].append(value)
+            money_v[f'volume_{key}'].append(value)
     # Add each indicator column to dataframe
-    dataframe['trend'] = trend
-    for key, value in money_p.items():
-        dataframe[f'price_{key}'] = value
-    for key, value in money_v.items():
-        dataframe[f'volume_{key}'] = value
-    return dataframe.copy()
+    df['trend'] = trend
+    indicators = [
+        DataFrame(fibs_retraced),
+        DataFrame(fibs_extended),
+        DataFrame(gartley_checks),
+        DataFrame(money_p),
+        DataFrame(money_v)
+        ]
+    for dataframe in indicators:
+        for c, s in dataframe.iteritems():
+            df[c] = s.tolist()
+    return df.copy()
 
 
 class TimeKeeper:
