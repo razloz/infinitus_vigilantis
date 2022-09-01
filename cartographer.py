@@ -4,8 +4,8 @@
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2022.08'
-__codename__ = 'kardia'
+__version__ = '2022.09'
+__codename__ = 'fae'
 
 
 if __name__ == '__main__':
