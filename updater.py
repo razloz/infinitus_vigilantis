@@ -49,5 +49,4 @@ if __name__ == '__main__':
         print('Applying indicators...')
         cdlm = updater.Candelabrum()
         cdlm.apply_indicators()
-        cdlm.join_threads()
         print("""Job's done!""")
