@@ -7,7 +7,7 @@ import pickle
 import json
 import source.ivy_commons as icy
 import source.ivy_alpaca as api
-from os import path, listdir
+from os import path, listdir, cpu_count
 
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
@@ -114,17 +114,17 @@ def composite_index(ci_path='./indexes/composite.index'):
 
 class Candelabrum:
     """Handler for historical price data."""
-    def __init__(self, index=None):
+    def __init__(self, index=None, ftype='process'):
         """Set symbol index from composite index."""
         self.set_index = lambda n: [t[0] for t in n]
         if index:
             self._INDEX = self.set_index(index)
         else:
             self._INDEX = list()
-        self._THREADS = list()
-        self._MAX_THREADS = 5
-        self._THREAD_COUNT = range(self._MAX_THREADS)
-        self._QUEUE = icy.Queue()
+        self._FTYPE = str(ftype)
+        self._WORKERS = list()
+        self._CPU_COUNT = cpu_count()
+        self._MAX_THREADS = self._CPU_COUNT * 2 - 1
         self._BENCHMARKS = ('QQQ', 'SPY')
         self._DATA_PATH = './candelabrum'
         self._ERROR_PATH = './errors'
@@ -139,9 +139,21 @@ class Candelabrum:
             infer_datetime_format=True,
             date_parser=p
             )
-        print(f'Candelabrum: creating {self._MAX_THREADS} threads...')
-        for _ in self._THREAD_COUNT:
-            self._THREADS.append(icy.ivy_dispatcher(self.__worker_thread__))
+        if self._FTYPE == 'process':
+            self._QUEUE = icy.mpQueue()
+            print(f'Candelabrum: creating {self._CPU_COUNT - 1} processes...')
+            r = range(self._CPU_COUNT - 1)
+        else:
+            self._QUEUE = icy.Queue()
+            print(f'Candelabrum: creating {self._MAX_THREADS} threads...')
+            r = range(self._MAX_THREADS)
+        for _ in r:
+            self._WORKERS.append(
+                icy.ivy_dispatcher(
+                    self.__worker__,
+                    ftype=ftype
+                    )
+                )
         print('Candelabrum: initialized.')
 
     def __get_path__(self, symbol, date_string):
@@ -149,7 +161,7 @@ class Candelabrum:
         p = f'{self._DATA_PATH}/{symbol.upper()}-{date_string}.ivy'
         return path.abspath(p)
 
-    def __worker_thread__(self):
+    def __worker__(self):
         """Get jobs and save data locally."""
         while True:
             job = self._QUEUE.get()
@@ -157,13 +169,11 @@ class Candelabrum:
                 break
             try:
                 if job[0] == 'indicators':
-                    ivi_path = path.abspath(job[1])
-                    ivy_path = path.abspath(job[2])
-                    if not path.exists(ivi_path):
-                        with open(ivy_path) as f:
+                    if not path.exists(job[1]):
+                        with open(job[2]) as f:
                             candles = pandas.read_csv(f, **self._CSV_ARGS)
                         ivi = icy.get_indicators(candles)
-                        ivi.to_csv(ivi_path)
+                        ivi.to_csv(job[1])
                 else:
                     data = json.loads(job[0])
                     bars = data['bars']
@@ -198,16 +208,20 @@ class Candelabrum:
                 with open(path.abspath(err_path), 'w+') as err_file:
                     err_file.write(err_msg)
                 print(f'Worker Thread: {err_msg}')
-            finally:
-                self._QUEUE.task_done()
-        self._QUEUE.task_done()
+#            finally:
+#                self._QUEUE.task_done()
+#        self._QUEUE.task_done()
 
-    def join_threads(self):
+    def join_workers(self):
         """Block until all jobs are finished."""
         print('Candelabrum: waiting for all jobs to finish...')
-        for _ in self._THREAD_COUNT:
+        for _ in self._WORKERS:
             self._QUEUE.put('exit')
-        self._QUEUE.join()
+        if self._FTYPE == 'process':
+            for w in self._WORKERS:
+                w.join()
+        else:
+            self._QUEUE.join()
 
     def fill_template(self, dataframe):
         """Populate template and interpolate missing data."""
@@ -250,9 +264,10 @@ class Candelabrum:
         i = 0
         for file_name in ivy_files:
             i += 1
-            ivi_path = f'{self._IVI_PATH}/{file_name[:-4]}.ivi'
-            ivy_path = f'{data_path}/{file_name}'
+            ivi_path = path.abspath(f'{self._IVI_PATH}/{file_name[:-4]}.ivi')
+            ivy_path = path.abspath(f'{data_path}/{file_name}')
             self._QUEUE.put(('indicators', ivi_path, ivy_path))
+        self.join_workers()
 
     def do_update(self, symbols, **kwargs):
         """Update historical price data for a given symbol."""
@@ -545,5 +560,5 @@ def build_historical_database(starting_year=2019):
                 batch_count = 0
         if batch_count > 0:
             cdlm.do_update(symbols, **uargs)
-    cdlm.join_threads()
+    cdlm.join_workers()
     print(msg.format(f'completed after {keeper.final}.'))

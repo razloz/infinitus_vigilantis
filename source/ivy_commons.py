@@ -15,6 +15,7 @@ from datetime import datetime
 from threading import Thread, Lock
 from queue import Queue
 from multiprocessing import Process
+from multiprocessing import Queue as mpQueue
 from pandas import date_range
 from pandas import DataFrame
 from dateutil import parser as date_parser
@@ -277,18 +278,19 @@ def get_indicators(df, index_key='time'):
         for key, value in mv.items():
             money_v[f'volume_{key}'].append(value)
     # Add each indicator column to dataframe
-    df['trend'] = trend
-    indicators = [
+    indicators = DataFrame(index=df.index)
+    indicators['trend'] = trend
+    dfs = [
         DataFrame(fibs_retraced),
         DataFrame(fibs_extended),
         DataFrame(gartley_checks),
         DataFrame(money_p),
         DataFrame(money_v)
         ]
-    for dataframe in indicators:
+    for dataframe in dfs:
         for c, s in dataframe.iteritems():
-            df[c] = s.tolist()
-    return df.copy()
+            indicators[c] = s.tolist()
+    return indicators.copy()
 
 
 class TimeKeeper:
@@ -325,239 +327,6 @@ class TimeKeeper:
         return (since, elapsed)
 
 
-class ThreeBlindMice:
-    """
-        Backtest handler for Infinitus Vigilantis.
-            Properties:
-                stats, benchmark, symbols,
-                pending, positions, ledger
-    """
-    def __init__(self, symbols, cash=5e5, risk=0.0038196,
-                 max_days=34, day_trade=False, BENCHMARKS=dict()):
-        """Set local variables."""
-        self._BENCHMARKS = BENCHMARKS
-        self._symbols = list(symbols)
-        self._init_cash = float(cash)
-        self._cash = float(cash)
-        self._risk = float(risk)
-        self._buyin = round(safe_div(self._init_cash, len(self._symbols)))
-        self._total_trades = 0
-        self._roi = 0
-        self._gain = 0
-        self._loss = 0
-        self._max_days = int(max_days)
-        self._day_trade = bool(day_trade)
-        self._benchmark = dict()
-        self._positions = dict()
-        self._signals = dict()
-        self._pending = dict()
-
-    @silence
-    def __get_day__(self, t):
-        """Drop extra time info from string."""
-        ts = (t.split(" ")[0] if " " in t else t)
-        return str(ts)
-
-    @silence
-    def __sorted_append__(self, key, obj):
-        """Get sorted obj after adding key."""
-        if key not in obj:
-            obj[key] = dict(buy=[], sell=[], neutral=[])
-            sorted_keys = sorted(obj, reverse=False)
-            return {k: obj[k] for k in sorted_keys}
-        else:
-            return obj
-
-    @silence
-    def __validate_trade__(self, timestamp, symbol, signal,
-                           price, stop_loss, target):
-        """Manage trade signals."""
-        _SAPP = self.__sorted_append__
-        _SARGS = (symbol, price, stop_loss, target)
-        if symbol not in self._positions:
-            valid = self._day_trade
-            ts_day = timestamp.split(' ')[0]
-            if not valid:
-                valid = True
-                for ts in self._signals.keys():
-                    if ts_day in ts:
-                        s = self._signals[ts]['sell']
-                        if len(s) > 0:
-                            for cheese in s:
-                                if cheese[0] == symbol:
-                                    valid = False
-                                    break
-            if valid and signal == 1:
-                shares = int(safe_div(self._buyin, price))
-                cost = price * shares
-                if cost > self._cash:
-                    shares = int(safe_div(self._cash, price))
-                    cost = price * shares
-                if self._cash - cost >= 0 and cost > 0 < self._cash:
-                    self._cash -= cost
-                    risk_adj = price * self._risk
-                    new_position = (
-                        timestamp,
-                        cost,
-                        shares,
-                        stop_loss - risk_adj,
-                        target + risk_adj
-                        ) # new_position
-                    self._positions[symbol] = new_position
-                    self._signals = _SAPP(timestamp, self._signals)
-                    self._signals[timestamp]['buy'].append(_SARGS)
-        else:
-            ts, entry, shares, adj_stop, adj_target = self._positions[symbol]
-            equity = price * shares
-            entry_day = self.__get_day__(ts)
-            curr_day = self.__get_day__(timestamp)
-            days = busday_count(entry_day, curr_day)
-            trade_stops = any((
-                price >= adj_target,
-                price <= adj_stop,
-                days >= self._max_days,
-                signal == -1
-                )) # trade_stops
-            time_check = True if self._day_trade else days > 1
-            if time_check and trade_stops:
-                self._cash += equity
-                roi = percent_change(equity, entry)
-                if roi > 0:
-                    self._gain += 1
-                elif roi < 0:
-                    self._loss += 1
-                self._roi += roi
-                self._total_trades += 1
-                self._signals = _SAPP(timestamp, self._signals)
-                self._signals[timestamp]['sell'].append(_SARGS)
-                del self._positions[symbol]
-
-    @silence
-    def sanitize_exchange(self, beta, exchange):
-        benchmark = DataFrame().reindex_like(beta)
-        benchmark.update(self._BENCHMARKS[exchange])
-        benchmark.fillna(method='ffill', inplace=True)
-        benchmark.fillna(method='bfill', inplace=True)
-        benchmark.dropna(inplace=True)
-        benchmark = benchmark.transpose().copy()
-        benchmark.replace(to_replace=0, method='ffill', inplace=True)
-        benchmark = benchmark.transpose().copy()
-        benchmark.dropna(inplace=True)
-        return benchmark.copy()
-
-    @silence
-    def get_cheese(self, symbol, dataframe, exchange):
-        """Get signals and queue orders."""
-        closes = dataframe['close'].tolist()
-        self._benchmark[symbol] = (closes[0], closes[-1])
-        if symbol not in self._BENCHMARKS.keys():
-            df_high = dataframe['high'].tolist()
-            df_low = dataframe['low'].tolist()
-            e = self.sanitize_exchange(dataframe, exchange)
-            e['trend'] = get_trend(e['high'].tolist(), e['low'].tolist())
-            dataframe['trend'] = get_trend(df_high, df_low)
-            for candle in dataframe.itertuples():
-                ts = candle[0].strftime('%Y-%m-%d %H:%M')
-                alpha = e.loc[candle[0]].copy()
-                signal = logic_block(candle, alpha)
-                if not signal: signal = 0
-                self._pending = self.__sorted_append__(ts, self._pending)
-                candle_close = float(candle.close)
-                stop_loss = float(candle_close * self._risk)
-                target_price = float(candle_close * 1.6180339)
-                pargs = (str(symbol), candle_close, stop_loss, target_price)
-                if signal == 1:
-                    self._pending[ts]['buy'].append(pargs)
-                elif signal == -1:
-                    self._pending[ts]['sell'].append(pargs)
-                else:
-                    self._pending[ts]['neutral'].append(pargs)
-
-    @silence
-    def validate_trades(self):
-        """Check pending signals."""
-        validate = self.__validate_trade__
-        for ts, cheese in self._pending.items():
-            for s in cheese['buy']:
-                validate(ts, s[0], 1, s[1], s[2], s[3])
-            for s in cheese['sell']:
-                validate(ts, s[0], -1, s[1], s[2], s[3])
-            for s in cheese['neutral']:
-                validate(ts, s[0], 0, s[1], s[2], s[3])
-        print(self.stats)
-
-    @property
-    def positions(self):
-        """Get positions."""
-        return dict(self._positions)
-
-    @property
-    def signals(self):
-        """Get signals."""
-        return dict(self._signals)
-
-    @property
-    def pending(self):
-        """Get pending."""
-        return dict(self._pending)
-
-    @property
-    def symbols(self):
-        """Get symbols."""
-        return list(self._symbols)
-
-    @property
-    def benchmark(self):
-        """Get benchmark."""
-        return dict(self._benchmark)
-
-    @property
-    def stats(self):
-        """Get full backtest results."""
-        b = self._benchmark
-        p = self._positions
-        r = self._buyin
-        i = self._init_cash
-        sd = safe_div
-        e = self._BENCHMARKS.keys()
-        mlo = lambda s: b[s][0] * int(sd(r, b[s][0])) if s in e else 0
-        mlc = lambda s: b[s][1] * int(sd(r, b[s][1])) if s in e else 0
-        mo = sum(list(map(mlo, b)))
-        mc = sum(list(map(mlc, b)))
-        mark_close = (i - mo) + mc
-        equity = sum(list(map(lambda s: b[s][1] * p[s][2], p)))
-        net = self._cash + equity
-        t = list(self._signals.keys())
-        gains = int(self._gain)
-        losses = int(self._loss)
-        profit_loss = (1, 1)
-        if gains != 0 != losses:
-            if gains > losses:
-                profit_loss = (round(sd(gains, losses), 2), 1)
-            elif gains < losses:
-                profit_loss = (1, round(sd(losses, gains), 2))
-        stats = {
-            'sample entries': len(t),
-            'initial cash': float(i),
-            'current cash': round(self._cash, 2),
-            'equity': round(equity, 2),
-            'net balance': round(net, 2),
-            'net change': percent_change(net, i),
-            'benchmark': percent_change(mark_close, i),
-            'risk threshhold': float(self._risk),
-            'buy limit': float(r),
-            'intra day': bool(self._day_trade),
-            'max days': int(self._max_days),
-            'trades': int(self._total_trades),
-            'positions': len(p),
-            'roi': round(sd(self._roi, self._total_trades), 2),
-            'gains': gains,
-            'losses': losses,
-            'profit_loss': profit_loss
-            } # stats
-        return stats
-
-
 def posix_from_time(t, f='%Y-%m-%d %H:%M'):
     """Python time struct to POSIX timestamp."""
     ts = mktime(strptime(t, f))
@@ -591,3 +360,23 @@ class UpdateSchedule(object):
             return strftime('%Y-%m-%d %H:%M:%S', gmtime(ts.timestamp()))
         else:
             raise StopIteration()
+
+
+class FibonacciSequencer():
+    def __init__(self):
+        self.n = 0
+        self.previous = 0
+        self.current = 1
+    def __seq_gen__(self, steps=1):
+        n = self.n + steps
+        while self.n <= n:
+            next_number = self.current + self.previous
+            self.previous = self.current
+            self.current = next_number
+            self.n += 1
+            yield next_number
+    def next(self, n=1):
+        return [i for i in self.__seq_gen__(steps=n)]
+    def skip(self, n):
+        for _ in self.__seq_gen__(steps=n):
+            pass
