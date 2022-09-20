@@ -1,12 +1,14 @@
 """Updater for Infinitus Vigilantis"""
-
-import time
-import pandas
-import numpy
-import pickle
 import json
+import numpy
+import pandas
+import pickle
+import random
+import time
 import source.ivy_commons as icy
 import source.ivy_alpaca as api
+from source.ivy_mouse import ThreeBlindMice
+from datetime import datetime
 from os import path, listdir, cpu_count
 
 __author__ = 'Daniel Ward'
@@ -129,6 +131,7 @@ class Candelabrum:
         self._DATA_PATH = './candelabrum'
         self._ERROR_PATH = './errors'
         self._IVI_PATH = './indicators'
+        self._PREFIX = 'Candelabrum:'
         self._TIMER = icy.TimeKeeper()
         self.benchmarks = dict()
         self._tz = 'America/New_York'
@@ -141,11 +144,11 @@ class Candelabrum:
             )
         if self._FTYPE == 'process':
             self._QUEUE = icy.mpQueue()
-            print(f'Candelabrum: creating {self._CPU_COUNT - 1} processes...')
+            print(self._PREFIX, f'creating {self._CPU_COUNT - 1} processes...')
             r = range(self._CPU_COUNT - 1)
         else:
             self._QUEUE = icy.Queue()
-            print(f'Candelabrum: creating {self._MAX_THREADS} threads...')
+            print(self._PREFIX, f'creating {self._MAX_THREADS} threads...')
             r = range(self._MAX_THREADS)
         for _ in r:
             self._WORKERS.append(
@@ -203,18 +206,15 @@ class Candelabrum:
                             with open(path.abspath(err_path), 'w+') as err_file:
                                 err_file.write('not in returned symbols')
             except Exception as err:
-                err_path = f'./{time.time()}-worker.exception'
+                err_path = f'./errors/{time.time()}-worker.exception'
                 err_msg = f'{type(err)}:{err.args}\n\n{job}'
                 with open(path.abspath(err_path), 'w+') as err_file:
                     err_file.write(err_msg)
-                print(f'Worker Thread: {err_msg}')
-#            finally:
-#                self._QUEUE.task_done()
-#        self._QUEUE.task_done()
+                print(self._PREFIX, f'Worker Thread: {err_msg}')
 
     def join_workers(self):
         """Block until all jobs are finished."""
-        print('Candelabrum: waiting for all jobs to finish...')
+        print(self._PREFIX, 'waiting for all jobs to finish...')
         for _ in self._WORKERS:
             self._QUEUE.put('exit')
         if self._FTYPE == 'process':
@@ -256,18 +256,21 @@ class Candelabrum:
         """=^.^="""
         dataframe.to_csv(self.__get_path__(symbol, date_string), mode='w+')
 
-    def apply_indicators(self):
-        """For each ivy file get indicators and save ivi file."""
-        data_path = path.abspath(self._DATA_PATH)
-        ivy_files = listdir(data_path)
-        total_files = len(ivy_files)
-        i = 0
-        for file_name in ivy_files:
-            i += 1
-            ivi_path = path.abspath(f'{self._IVI_PATH}/{file_name[:-4]}.ivi')
-            ivy_path = path.abspath(f'{data_path}/{file_name}')
-            self._QUEUE.put(('indicators', ivi_path, ivy_path))
-        self.join_workers()
+    def apply_indicators(self, dataframe=None):
+        """Save IVi file for every IVy file unless dataframe is provided."""
+        if dataframe is None:
+            data_path = path.abspath(self._DATA_PATH)
+            ivy_files = listdir(data_path)
+            total_files = len(ivy_files)
+            i = 0
+            for file_name in ivy_files:
+                i += 1
+                ivi_path = path.abspath(f'{self._IVI_PATH}/{file_name[:-4]}.ivi')
+                ivy_path = path.abspath(f'{data_path}/{file_name}')
+                self._QUEUE.put(('indicators', ivi_path, ivy_path))
+            self.join_workers()
+        else:
+            return icy.get_indicators(dataframe)
 
     def do_update(self, symbols, **kwargs):
         """Update historical price data for a given symbol."""
@@ -282,7 +285,7 @@ class Candelabrum:
                     valid_symbols.append(s)
         if not valid_symbols:
             return True
-        print(f'Candelabrum: {ts} updating {len(valid_symbols)} symbols.')
+        print(self._PREFIX, f'{ts} updating {len(valid_symbols)} symbols.')
         gathering_data = True
         while gathering_data:
             q = SHEPHERD.candles(valid_symbols, **kwargs)
@@ -299,21 +302,9 @@ class Candelabrum:
                 gathering_data = False
         return True
 
-    def gather_benchmarks(self, start_date, end_date, timing):
-        if len(self._BENCHMARKS) < 1: return False
-        for symbol in self._BENCHMARKS:
-            try:
-                candles = self.gather_data(symbol, start_date, end_date)
-                scaled = self.resample_candles(candles, timing)
-                self.benchmarks[symbol] = self.apply_indicators(scaled)
-            finally:
-                continue
-        return True
-
-    def gather_data(self, symbol, start_date, end_date):
+    def gather_data(self, symbol, start_date, end_date, daily=False):
         calendar = market_calendar()
         calendar_dates = calendar.index.tolist()
-        from datetime import datetime
         date_obj = lambda t: datetime.strptime(t, '%Y-%m-%d')
         dates = (date_obj(start_date), date_obj(end_date))
         candles = None
@@ -323,20 +314,84 @@ class Candelabrum:
             if day_obj > dates[1]: break
             try:
                 day_data = self.load_candles(symbol, ts)
-                if len(day_data) > 0:
-                    if candles is None:
-                        candles = day_data.copy()
-                    else:
-                        candles = pandas.concat([candles, day_data])
+                if daily and day_data is not None:
+                    yield ts, day_data
+                elif candles is None:
+                    candles = day_data.copy()
+                else:
+                    candles = pandas.concat([candles, day_data])
             except Exception as details:
-                print(f'Candelabrum: Encountered {details.args}')
+                print(self._PREFIX, f'Encountered {details}')
                 continue
-        return candles.copy()
+        if not daily:
+            return candles.copy()
 
-    def resample_candles(self, candles, scale):
-        c = candles.resample(scale).apply(self.candle_maker)
-        c.dropna(inplace=True)
-        return c.copy()
+    def get_daily_candles(self, symbol, start_time=None, end_time=None):
+        """Gets all of the data and transforms it into daily candles."""
+        gather_data = self.gather_data
+        make_candle = self.daily_candle
+        if start_time is None:
+            start_time = '2019-01-01'
+        if end_time is None:
+            tomorrow = time.localtime(time.time() + 86400)
+            end_time = time.strftime('%Y-%m-%d', tomorrow)
+        candles = list()
+        timestamps = list()
+        daily_data = gather_data(symbol, start_time, end_time, daily=True)
+        for ts, day_data in daily_data:
+            candle = make_candle(day_data)
+            if candle is not None:
+                candles.append(candle)
+                timestamps.append(ts)
+        return pandas.DataFrame(candles, index=timestamps)
+
+    def daily_candle(self, day_data):
+        """Takes minute data and converts it into a daily candle."""
+        if len(day_data) == 0: return None
+        ohlc = day_data[['open', 'high', 'low', 'close']]
+        return {
+            'open': float(ohlc['open'][0]),
+            'high': float(max(ohlc.max())),
+            'low': float(min(ohlc.min())),
+            'close': float(ohlc['close'][-1]),
+            'volume': float(day_data['volume'].sum()),
+            'num_trades': float(day_data['num_trades'].sum()),
+            'vol_wma_price': float(day_data['vol_wma_price'].mean()),
+            }
+
+    def research_candles(self):
+        get_daily = self.get_daily_candles
+        omenize = self.apply_indicators
+        moirai = ThreeBlindMice(34, 4)
+        print(self._PREFIX, 'Starting research loop...')
+        symbols = [s for s, e in composite_index()]
+        symbols_researched = 0
+        symbols_total = len(symbols)
+        symbols_remaining = symbols_total
+        epoch_msg = self._PREFIX + ' Sent {} to The Moirai. ( {} / {} ) '
+        loop_start = time.time()
+        while symbols_remaining > 0:
+            index = random.randint(0, symbols_remaining)
+            symbol = symbols[index]
+            symbols.pop(index)
+            bars = get_daily(symbol)
+            indicators = omenize(bars)
+            candles = bars.merge(indicators, left_index=True, right_index=True)
+            print(epoch_msg.format(symbol, symbols_researched, symbols_total))
+            moirai.study(symbol, candles, n_predictions=13)
+            symbols_researched += 1
+            symbols_remaining = len(symbols)
+        elapsed = time.time() - loop_start
+        message = 'Research of {} complete after {}.'
+        if elapsed > 86400:
+            message += '{} days'.format(round(elapsed / 86400, 5))
+        elif elapsed > 3600:
+            message += '{} hours'.format(round(elapsed / 3600, 5))
+        elif elapsed > 60:
+            message += '{} minutes'.format(round(elapsed / 60, 5))
+        else:
+            message += '{} seconds'.format(round(elapsed, 5))
+        print(self._PREFIX, message.format(symbols_total, elapsed))
 
     def candle_maker(self, candles):
         if len(candles) > 0 and type(candles) == pandas.Series:
@@ -357,66 +412,10 @@ class Candelabrum:
             return value
         return None
 
-
-def cheese_wheel(silent=True, max_days=34, do_update=True,
-                 limit=None, market_open=None, market_close=None):
-    """Update and test historical data."""
-    global icy
-    icy.SILENT = silent
-    cdlm = Candelabrum()
-    ivy_ndx = composite_index()
-    api_clock = SHEPHERD.clock()
-    status = bool(api_clock['is_open'])
-    if not silent:
-        print(f'Cheese Wheel: market status returned {status}')
-    u = dict(limit=limit, start_date=market_open, end_date=market_close)
-    cdlm.do_update(ivy_ndx, **u)
-    return status
-
-
-def validate_mice(start_date, end_date, silent=True, max_days=89, timing="1H"):
-    """Collect cheese from mice and do tests."""
-    global icy
-    icy.SILENT = silent
-    cdlm = Candelabrum()
-    ivy_ndx = composite_index()
-    benchmarked = cdlm.gather_benchmarks(start_date, end_date, timing)
-    mice = icy.ThreeBlindMice(ivy_ndx, max_days=max_days,
-                              BENCHMARKS=dict(cdlm.benchmarks))
-    make_cheese = mice.get_cheese
-    get_candles = cdlm.gather_data
-    resample = cdlm.resample_candles
-    omenize = cdlm.apply_indicators
-    print('Validate Mice: starting quest for the ALL CHEESE.')
-    tk = icy.TimeKeeper()
-    for symbol_pair in ivy_ndx:
-        try:
-            symbol = symbol_pair[0]
-            exchange = symbol_pair[1]
-            if not silent:
-                print(f'Validate Mice: omenizing {symbol}...')
-            cdls = get_candles(symbol, start_date, end_date)
-            cdls = resample(cdls, timing)
-            cdls = omenize(cdls)
-            make_cheese(symbol, cdls, exchange)
-        finally:
-            pass
-    print('Validate Mice: performing historical trades...')
-    mice.validate_trades()
-    if mice:
-        with open('./configs/all.cheese', 'wb') as f:
-            pickle.dump(mice, f, pickle.HIGHEST_PROTOCOL)
-        with open('./configs/last.update', 'w') as f:
-            f.write("nya~")
-        if not silent:
-            m = 'Validate Mice: After {} the quest '
-            m += 'for the ALL CHEESE comes to an end.'
-            print(m.format(tk.update[0]))
-        return mice
-    else:
-        if not silent:
-            print('Validate Mice: quest failed due to no mice.')
-        return None
+    def resample_candles(self, candles, scale):
+        c = candles.resample(scale).apply(self.candle_maker)
+        c.dropna(inplace=True)
+        return c.copy()
 
 
 def make_utc(time_string):
@@ -426,95 +425,6 @@ def make_utc(time_string):
     second_annoyance = time.mktime(first_annoyance)
     third_annoyance = time.gmtime(second_annoyance)
     return time.mktime(third_annoyance)
-
-
-def spin_wheel(daemonized=True):
-    """Spin to win."""
-    get_schedule = icy.UpdateSchedule
-    spinning = True
-    sleep_until = 0
-    sleep_date = ''
-    total_spins = 0
-    today = ''
-    schedule = list()
-    calendar = market_calendar()
-    calendar_dates = calendar.index.tolist()
-    market_open = None
-    market_close = None
-    keeper = icy.TimeKeeper()
-    try:
-        print('Spinning the cheese wheel...')
-        while spinning:
-            utc_tup = time.gmtime()
-            utc_ts = time.mktime(utc_tup)
-            utc_now = time.strftime('%Y-%m-%d %H:%M:%S', utc_tup)
-            check_day = utc_now.split(' ')[0]
-            if check_day != today:
-                today = check_day
-                if today in calendar_dates:
-                    mo = calendar.loc[today]['session_open']
-                    mc = calendar.loc[today]['session_close']
-                    qt = '{}T{}:{}:00-04:00'
-                    pass_check = True
-                    if len(mo) != 4:
-                        print(f'Error: open has wrong length.\n{mo}\n')
-                        pass_check = False
-                    if len(mc) != 4:
-                        print(f'Error: close has wrong length.\n{mc}\n')
-                        pass_check = False
-                    if pass_check:
-                        market_open = qt.format(today, mo[0:2], mo[2:])
-                        market_close = qt.format(today, mc[0:2], mc[2:])
-                        print(f'Range: {market_open} to {market_close}.')
-                    else:
-                        market_open = None
-                        market_close = None
-                else:
-                    print(f"Error: Couldn't find {today} in calendar.")
-                schedule = list(get_schedule(today, freq='5min'))
-            if utc_now in schedule and all((market_open, market_close)):
-                total_spins += 1
-                print(f'Spin: {total_spins}')
-                wheel_args = dict(max_days=89)
-                wheel_args['limit'] = 1000
-                wheel_args['market_open'] = market_open
-                wheel_args['market_close'] = market_close
-                s = cheese_wheel(**wheel_args)
-                status = bool(s['is_open'])
-                with open('./configs/last.update', 'w') as f:
-                    f.write('spin-to-win')
-                print('Going to sleep until next scheduled spin.')
-                if status is False:
-                    if not daemonized:
-                        spin = input('Keep spinning? [y/N]: ')
-                        if spin.lower() != 'y':
-                            spinning = False
-                        else:
-                            print('Spin! Spin! Spin!')
-                    else:
-                        sleep_date = str(s['next_open'])
-                        sleep_until = make_utc(sleep_date)
-            if spinning:
-                if utc_ts >= sleep_until:
-                    time.sleep(1)
-                else:
-                    u = sleep_until - utc_ts
-                    if u > 86400:
-                        t = '{} day(s)'.format(round(u / 86400, 2))
-                    elif u > 3600:
-                        t = '{} hour(s)'.format(round(u / 3600, 2))
-                    elif u > 60:
-                        t = '{} minute(s)'.format(round(u / 60, 2))
-                    else:
-                        t = '{} second(s)'.format(round(u, 2))
-                    print(f'Next spin scheduled for {sleep_date} in {t}')
-                    time.sleep(u)
-    except KeyboardInterrupt:
-        print('Keyboard Interrupt: Stopping loop.')
-        looping = False
-    finally:
-        e = keeper.update[0]
-        print(f'Stopped spinning after {e} with {total_spins} spins.')
 
 
 def build_historical_database(starting_year=2019):
