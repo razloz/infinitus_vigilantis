@@ -5,6 +5,7 @@ Requirements:
   - Alpaca Markets API keys
 
 Dependencies:
+  - pytorch
   - matplotlib
   - numpy
   - pandas
@@ -15,7 +16,7 @@ Dependencies:
 Usage:
   - with IVY as an absolute path to infinitus vigilantis folder
   - $IVY/updater.py --build
-  - $IVY/updater.py --validate --start_date 2020-01-01
+  - $IVY/updater.py --research
   - $IVY/cartographer.py --all --size 160 --start_date 2020-01-01
 
 Systemd Daemon:

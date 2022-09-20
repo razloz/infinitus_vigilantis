@@ -5,7 +5,7 @@ __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
 __version__ = '2022.09'
-__codename__ = 'fae'
+__codename__ = 'moirai'
 
 
 if __name__ == '__main__':
@@ -18,6 +18,8 @@ if __name__ == '__main__':
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument('--build', action='store_true',
+                   help='Build historical database.')
+    p.add_argument('--research', action='store_true',
                    help='Build historical database.')
     p.add_argument('--validate', action='store_true',
                    help='Begin the quest for the ALL CHEESE.')
@@ -45,6 +47,9 @@ if __name__ == '__main__':
     elif args.build:
         print('Starting historical update loop...')
         updater.build_historical_database()
+    elif args.research:
+        cdlm = updater.Candelabrum()
+        cdlm.research_candles()
     else:
         print('Applying indicators...')
         cdlm = updater.Candelabrum()
