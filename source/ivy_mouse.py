@@ -8,6 +8,20 @@ from os.path import abspath
 from torch.utils.data import default_collate
 from torch.nn import MSELoss, LSTM, Module, Parameter, ParameterDict
 from torch.optim import SGD
+from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.lr_scheduler import MultiplicativeLR
+from torch.optim.lr_scheduler import StepLR
+from torch.optim.lr_scheduler import MultiStepLR
+from torch.optim.lr_scheduler import ConstantLR
+from torch.optim.lr_scheduler import LinearLR
+from torch.optim.lr_scheduler import ExponentialLR
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ChainedScheduler
+from torch.optim.lr_scheduler import SequentialLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import CyclicLR
+from torch.optim.lr_scheduler import OneCycleLR
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -41,46 +55,34 @@ class ThreeBlindMice(Module):
             'device': self._device_
             }
         opt_params = {
-            'lr': 0.03,
-            'momentum': 0.99,
-            'weight_decay': 0.99,
+            'lr': 0.3,
+            'momentum': 0.9,
+            'weight_decay': 0.3,
             'nesterov': True,
-            'maximize': True,
-            'foreach': False
+            'maximize': False,
+            'foreach': True
             }
-        # Clotho the mouse, sister of Lachesis and Atropos.
-        Clotho = self._Clotho_ = ParameterDict()
-        Clotho['candles'] = None
-        Clotho['data_final'] = None
-        Clotho['data_inputs'] = None
-        Clotho['data_targets'] = None
-        Clotho['loss_fn'] = MSELoss()
-        Clotho['lstm'] = LSTM(**lstm_params)
-        Clotho['metrics'] = {'accuracy': 0, 'mse': 0, 'mae': 0}
-        Clotho['name'] = 'Clotho'
-        Clotho['optim'] = SGD(Clotho['lstm'].parameters(), **opt_params)
-        # Lachesis the mouse, sister of Atropos and Clotho.
-        Lachesis = self._Lachesis_ = ParameterDict()
-        Lachesis['candles'] = None
-        Lachesis['data_final'] = None
-        Lachesis['data_inputs'] = None
-        Lachesis['data_targets'] = None
-        Lachesis['loss_fn'] = MSELoss()
-        Lachesis['lstm'] = LSTM(**lstm_params)
-        Lachesis['metrics'] = {'accuracy': 0, 'mse': 0, 'mae': 0}
-        Lachesis['name'] = 'Lachesis'
-        Lachesis['optim'] = SGD(Lachesis['lstm'].parameters(), **opt_params)
         # Atropos the mouse, sister of Clotho and Lachesis.
         Atropos = self._Atropos_ = ParameterDict()
-        Atropos['candles'] = None
-        Atropos['data_final'] = None
-        Atropos['data_inputs'] = None
-        Atropos['data_targets'] = None
-        Atropos['loss_fn'] = MSELoss()
-        Atropos['lstm'] = LSTM(**lstm_params)
-        Atropos['metrics'] = {'accuracy': 0, 'mse': 0, 'mae': 0}
         Atropos['name'] = 'Atropos'
-        Atropos['optim'] = SGD(Atropos['lstm'].parameters(), **opt_params)
+        # Clotho the mouse, sister of Lachesis and Atropos.
+        Clotho = self._Clotho_ = ParameterDict()
+        Clotho['name'] = 'Clotho'
+        # Lachesis the mouse, sister of Atropos and Clotho.
+        Lachesis = self._Lachesis_ = ParameterDict()
+        Lachesis['name'] = 'Lachesis'
+        for mouse in [Atropos, Clotho, Lachesis]:
+            mouse['candles'] = None
+            mouse['loss_fn'] = MSELoss()
+            mouse['lstm'] = LSTM(**lstm_params)
+            mouse['metrics'] = {}
+            mouse['optim'] = SGD(mouse['lstm'].parameters(), **opt_params)
+            mouse['schedulers'] = [
+                ExponentialLR(mouse['optim'], 0.003),
+                LinearLR(mouse['optim'], total_iters=89),
+                ]
+            mouse['warm_lr'] = CosineAnnealingWarmRestarts(mouse['optim'], 89)
+            mouse['chainedscheduler'] = ChainedScheduler(mouse['schedulers'])
         self.predictions = ParameterDict()
         self.to(self._device_)
         self.verbose = verbose
@@ -105,7 +107,7 @@ class ThreeBlindMice(Module):
                 print(self._prefix_, 'Encountered an exception.')
                 traceback.print_exception(details)
 
-    def __time_step__(self, mouse, inputs, targets, study=False, timestamps=0):
+    def __time_step__(self, mouse, inputs, targets, study=False, ts=0):
         """Let Clotho mold the candles
            Let Lachesis measure the candles
            Let Atropos seal the candles"""
@@ -116,21 +118,15 @@ class ThreeBlindMice(Module):
             mouse['candles'] = mouse['lstm'](inputs)[0]
             mouse['loss_fn'](mouse['candles'], targets).backward()
             mouse['optim'].step()
+            mouse['warm_lr'].step()
             diff = mouse['candles'] - targets
-            mouse['metrics']['mae'] = float(
-                mouse['mae'] + torch.abs(diff).sum().data
-                )
-            mouse['metrics']['mse'] = float(
-                mouse['mse'] + (diff ** 2).sum().data
-                )
-            mouse['metrics']['accuracy'] = float(
-                (diff ** 2) < 0.01).float().mean()
-                )
+            mouse['metrics']['mae'] += torch.abs(diff).sum().data
+            mouse['metrics']['mse'] += (diff ** 2).sum().data
         else:
             with torch.no_grad():
                 try:
-                    mouse['metrics']['mse'] = sqrt(mouse['mse'] / timestamps)
-                    mouse['metrics']['mae'] = mouse['mae'] / timestamps
+                    mouse['metrics']['mae'] = mouse['metrics']['mae'] / ts
+                    mouse['metrics']['mse'] = sqrt(mouse['metrics']['mse'] / ts)
                 except Exception as details:
                     if self.verbose:
                         msg = '{} Encountered an exception.'
@@ -172,20 +168,20 @@ class ThreeBlindMice(Module):
         Clotho['data_targets'] = tensor(c_targets[batch:], **t_args)
         Lachesis['data_targets'] = tensor(l_targets[batch:], **t_args)
         Atropos['data_targets'] = tensor(a_targets[batch:], **t_args)
-        moirai = [Clotho, Lachesis, Atropos]
-        target_accuracy = 99.95
-        timeout = 3
+        moirai = [Atropos, Clotho, Lachesis]
+        target_loss = 0.618
+        timeout = 89
         epochs = 0
-        final_accuracy = 0
-        while final_accuracy < target_accuracy:
+        final_loss = 1
+        while final_loss > target_loss:
             if epochs == timeout: break
             inputs = [[],[],[]]
             targets = [[],[],[]]
             batch_count = 0
-            final_accuracy = 0
+            final_loss = 1
             for mouse in moirai:
-                mouse['mse'] = Parameter(0.0)
-                mouse['mae'] = Parameter(0.0)
+                mouse['metrics']['mae'] = 0
+                mouse['metrics']['mse'] = 0
             for i in candles_index:
                 if batch_count == batch:
                     for m_i, mouse in enumerate(moirai):
@@ -199,40 +195,49 @@ class ThreeBlindMice(Module):
                         targets[m_i].append(mouse['data_targets'][i].clone())
                     batch_count += 1
             for mouse in moirai:
-                print(mouse['name'], 'MSError', mouse['mse'])
-                print(mouse['name'], 'MAError', mouse['mae'])
                 time_step(
                     mouse,
                     mouse['data_final'].clone(),
                     None,
-                    timestamps=timestamps
+                    ts=timestamps
                     )
-            final_accuracy += float(Clotho['accuracy'][-1])
-            final_accuracy += float(Atropos['accuracy'][-1])
-            final_accuracy = round(final_accuracy * 0.5, 2)
+                name = mouse['name']
+                if name in ['Clotho', 'Atropos']:
+                    final_loss += mouse['metrics']['mae']
+                mouse['chainedscheduler'].step()
+                if self.verbose:
+                    print(prefix,'LR:',mouse['chainedscheduler'].get_last_lr())
+                    for k in mouse['metrics'].keys():
+                        print(f'{prefix} {k}: {mouse["metrics"][k]}')
             epochs += 1
+            final_loss = float(final_loss.mean())
+            if final_loss != 0:
+                final_loss = (final_loss / epochs) ** 2
             if self.verbose:
-                msg = '({}) A moment of research yielded an accuracy of {}%'
-                print(prefix, msg.format(epochs, final_accuracy))
+                msg = '({}) A moment of research yielded a final loss of {}'
+                if self.verbose:
+                    print(prefix, msg.format(epochs, final_loss))
         sealed = list()
         for mouse in moirai:
             sealed.append(mouse['candles'].detach().cpu().numpy())
-            print(mouse['name'], mouse['accuracy'])
-        last_pred = float(sealed[1][-1])
-        last_price = float(Atropos['data_final'][-1][-1].item())
+            if self.verbose:
+                print(mouse['name'], mouse['metrics']['mae'])
+        last_pred = float(sealed[0][-1].item())
+        last_price = float(Atropos['data_final'][-1:, 3:4].item())
         proj_gain = percent_change(last_pred, last_price)
         self.predictions[symbol] = {
+            'final_loss': final_loss,
             'sealed_candles': sealed,
             'last_price': last_price,
             'num_epochs': epochs,
-            'proj_accuracy': final_accuracy,
+            'metrics': dict(mouse['metrics']),
             'proj_gain': proj_gain,
             'proj_time': time.time()
             }
         if self.verbose:
             epoch_str = 'epoch' if epochs == 1 else 'epochs'
-            msg = 'After {} {}, a prediction accuracy of {}% was realized.'
-            print(prefix, msg.format(epochs, epoch_str, final_accuracy))
+            msg = 'After {} {}, a loss of {} was realized.'
+            print(prefix, msg.format(epochs, epoch_str, final_loss))
         data_labels = ['data_inputs', 'data_targets', 'data_final']
         for label in data_labels:
             Clotho[label] = None

@@ -10,7 +10,6 @@ import source.ivy_alpaca as api
 from source.ivy_mouse import ThreeBlindMice
 from datetime import datetime
 from os import path, listdir, cpu_count
-
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -383,7 +382,8 @@ class Candelabrum:
             moirai.research(symbol, candles)
             pred = moirai.predictions[symbol]
             prefix = f'{self._PREFIX} {symbol}'
-            print(prefix, 'proj_accuracy:', pred['proj_accuracy'])
+            for k in pred['metrics'].keys():
+                print(f'{k}:', pred['metrics'][k])
             print(prefix, 'last_price:', pred['last_price'])
             print(prefix, 'proj_close:', pred['sealed_candles'][-1][-1].item())
             print(prefix, 'proj_gain:', pred['proj_gain'])
