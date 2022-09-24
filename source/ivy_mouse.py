@@ -3,7 +3,7 @@ import time
 import torch
 import traceback
 import source.ivy_commons as icy
-from math import sqrt
+from math import sqrt, log
 from os.path import abspath
 from torch.nn import GLU, GRU, Module, ParameterDict, SmoothL1Loss, Softplus
 from torch.optim import SGD
@@ -121,9 +121,16 @@ class ThreeBlindMice(Module):
             mouse['warm_lr'].step()
             correct = difference[difference == 1].shape[0]
             wrong = batch_size - correct
-            prob = loss.item() / batch_size if loss.item() != 0 else 0
-            mouse['metrics']['prob'] = prob
+            confidence = 0
+            smooth_loss = loss.item()
+            if smooth_loss != 0:
+                if batch_size > 0:
+                    confidence = log(smooth_loss) / batch_size
+                else:
+                    confidence = log(smooth_loss)
+            mouse['metrics']['confidence'] = round(confidence, 2)
             mouse['metrics']['acc'] = 100 - percent_change(correct, wrong) * -1
+            mouse['metrics']['acc'] = round(mouse['metrics']['acc'], 2)
             mouse['metrics']['mae'] += torch.abs(difference).sum().data
             mouse['metrics']['mse'] += (difference ** 2).sum().data
         else:
@@ -148,17 +155,17 @@ class ThreeBlindMice(Module):
             ]
         if any(verbosity_check):
             lr = mouse['warm_lr'].get_last_lr()[0]
-            prob = mouse['metrics']['prob']
+            confidence = mouse['metrics']['confidence']
             acc = mouse['metrics']['acc']
             mae = mouse['metrics']['mae']
             mse = mouse['metrics']['mse']
             msg = f'{self._prefix_} {mouse["name"]} ' + '{}: {}'
             print(msg.format('Learning Rate', lr))
-            print(msg.format('Probability', prob))
+            print(msg.format('Confidence', confidence))
             print(msg.format('Accuracy', acc))
             print(msg.format('Mean Absolute Error', mae))
             print(msg.format('Mean Squared Error', mse))
-            print(msg.format('Target', mouse['candles'][-1]))
+            print(msg.format('Target', round(mouse['candles'][-1], 2)))
 
     def research(self, symbol, candles, timeout=3):
         """Moirai research session, fully stocked with cheese and drinks."""
@@ -257,11 +264,11 @@ class ThreeBlindMice(Module):
         last_price = float(Atropos['data_final'][-1:, 3:4].item())
         proj_gain = percent_change(last_pred, last_price)
         self.predictions[symbol] = {
-            'final_accuracy': final_accuracy,
-            'volume_accuracy': volume_accuracy,
+            'final_accuracy': round(final_accuracy, 2),
+            'volume_accuracy': round(volume_accuracy, 2),
             'sealed_candles': sealed,
-            'last_price': last_price,
-            'batch_pred': sealed[0][-1].item(),
+            'last_price': round(last_price, 2),
+            'batch_pred': round(sealed[0][-1].item(), 5),
             'num_epochs': epochs,
             'metrics': dict(mouse['metrics']),
             'proj_gain': proj_gain,
@@ -273,16 +280,20 @@ class ThreeBlindMice(Module):
             print(prefix, msg.format(epochs, epoch_str, final_accuracy))
             print(f'{prefix} {symbol} Metrics;')
             for k, v in self.predictions[symbol].items():
-                if k == 'sealed_candles':
+                if k in ['final_accuracy', 'volume_accuracy']:
+                    print(f'{prefix}     {k}: {v}%')
+                elif k == 'sealed_candles':
                     if self.verbosity > 1:
                         print(f'{prefix}     {k}: {v}')
                 elif k == 'metrics':
-                    print(f'{prefix}     {k}:')
                     for m_k, m_v in v.items():
-                        print(f'{prefix}         {m_k}: {m_v}')
+                        if m_k in ['acc', 'confidence']:
+                            print(f'{prefix}     {m_k}: {m_v}%')
+                        else:
+                            print(f'{prefix}     {m_k}: {m_v}')
                 else:
                     print(f'{prefix}     {k}: {v}')
-            print('\n')
+            print('')
         data_labels = ['data_inputs', 'data_targets', 'data_final']
         for label in data_labels:
             Clotho[label] = None
