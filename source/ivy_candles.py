@@ -362,13 +362,13 @@ class Candelabrum:
     def research_candles(self):
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        moirai = ThreeBlindMice(34, 4, verbose=True)
+        moirai = ThreeBlindMice(34, verbosity=1)
         print(self._PREFIX, 'Starting research loop...')
         symbols = [s for s, e in composite_index()]
         symbols_researched = 0
         symbols_total = len(symbols)
         symbols_remaining = symbols_total
-        epoch_msg = self._PREFIX + ' Sent {} to The Moirai. ( {} / {} ) '
+        msg = self._PREFIX + ' Sent {} to The Moirai. ( {} / {} ) '
         loop_start = time.time()
         while symbols_remaining > 0:
             symbols_researched += 1
@@ -378,15 +378,9 @@ class Candelabrum:
             bars = get_daily(symbol)
             indicators = omenize(bars)
             candles = bars.merge(indicators, left_index=True, right_index=True)
-            print(epoch_msg.format(symbol, symbols_researched, symbols_total))
+            print(msg.format(symbol, symbols_researched, symbols_total))
             moirai.research(symbol, candles)
             pred = moirai.predictions[symbol]
-            prefix = f'{self._PREFIX} {symbol}'
-            for k in pred['metrics'].keys():
-                print(f'{k}:', pred['metrics'][k])
-            print(prefix, 'last_price:', pred['last_price'])
-            print(prefix, 'proj_close:', pred['sealed_candles'][-1][-1].item())
-            print(prefix, 'proj_gain:', pred['proj_gain'])
             symbols_remaining = len(symbols)
         elapsed = time.time() - loop_start
         message = 'Research of {} complete after {}.'
