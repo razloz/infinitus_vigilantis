@@ -27,7 +27,7 @@ class GatedSequence(torch.nn.Sequential):
 
 class ThreeBlindMice(Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, n_features, verbosity=0, batch_size=8, min_size=90):
+    def __init__(self, n_features, verbosity=0, min_size=90):
         """Inputs: n_features and n_targets must be of type int()"""
         super(ThreeBlindMice, self).__init__()
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -35,24 +35,26 @@ class ThreeBlindMice(Module):
         self._min_size_ = min_size
         self._prefix_ = 'Moirai:'
         self._state_path_ = abspath('./rnn/moirai.state')
-        self._batch_size_ = int(batch_size)
-        self._n_features_ = int(n_features)
+        batch_size = self._batch_size_ = 16
+        n_features = self._n_features_ = int(n_features)
+        n_hidden = int(batch_size ** 2)
+        n_gates = 5
         self._tensor_args_ = dict(
             device=self._device_,
             dtype=torch.float,
             requires_grad=True
             )
         gru_params = dict(
-            input_size=self._n_features_,
-            hidden_size=int(batch_size ** 2),
-            num_layers=self._n_features_,
+            input_size=n_features,
+            hidden_size=n_hidden,
+            num_layers=n_features,
             bias=True,
             batch_first=True,
-            dropout=0.003,
+            dropout=0.34,
             bidirectional=True,
             )
         opt_params = dict(
-            lr=0.9,
+            lr=0.618,
             momentum=0.9,
             nesterov=True,
             maximize=True,
@@ -70,10 +72,15 @@ class ThreeBlindMice(Module):
             mouse['candles'] = None
             mouse['loss_fn'] = SmoothL1Loss()
             mouse['metrics'] = {}
-            mouse['nn_gates'] = GatedSequence(
-                GRU(**gru_params), GLU(),
-                GLU(), GLU(), GLU(),
-                )
+            gates = list()
+            for gate in range(n_gates):
+                gates.append(GRU(**gru_params))
+                gates.append(GLU())
+                gru_params['input_size'] = int(gru_params['hidden_size'])
+                gru_params['hidden_size'] = int(gru_params['hidden_size'] / 2)
+            gru_params['hidden_size'] = n_hidden
+            gru_params['input_size'] = n_features
+            mouse['nn_gates'] = GatedSequence(*gates)
             mouse['optim'] = SGD(mouse['nn_gates'].parameters(), **opt_params)
             mouse['warm_lr'] = WarmRestarts(mouse['optim'], 55)
         self.predictions = ParameterDict()
@@ -114,7 +121,6 @@ class ThreeBlindMice(Module):
             mouse['candles'] = mouse['nn_gates'](inputs)[0]
             mouse['candles'] = vstack(mouse['candles'].split(1))
             difference = mouse['candles'] - targets
-            loss_target = torch.ones(batch_size, 1, **self._tensor_args_)
             loss = mouse['loss_fn'](mouse['candles'], targets)
             loss.backward()
             mouse['optim'].step()
