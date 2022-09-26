@@ -19,10 +19,12 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--build', action='store_true',
                    help='Build historical database.')
+    p.add_argument('--clean', action='store_true',
+                   help='Remove all corruption from the candelabrum.')
+    p.add_argument('--indicators', action='store_true',
+                   help='Build historical indicators.')
     p.add_argument('--research', action='store_true',
-                   help='Build historical database.')
-    p.add_argument('--validate', action='store_true',
-                   help='Begin the quest for the ALL CHEESE.')
+                   help='Visit the three blind mice.')
     p.add_argument('--start_date', help='Defaults to 2019-01-01.')
     p.add_argument('--end_date', help='Defaults to today.')
     vt = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
@@ -30,28 +32,16 @@ if __name__ == '__main__':
     args = p.parse_args()
     print('Loading IVy Updater...')
     import source.ivy_candles as updater
-    if args.validate:
-        print('Starting validation routine...')
-        import time
-        today = time.strftime('%Y-%m-%d', time.localtime())
-        s = str(args.start_date) if args.start_date else '2019-01-01'
-        e = str(args.end_date) if args.end_date else today
-        if args.timing:
-            if args.timing in vt:
-                timing = str(args.timing)
-            else:
-                timing = '1H'
-        else:
-            timing = '1H'
-        updater.validate_mice(s, e, max_days=89, timing=timing)
-    elif args.build:
+    if args.build:
         print('Starting historical update loop...')
         updater.build_historical_database()
+    elif args.clean:
+        updater.Candelabrum().clean_candelabrum()
     elif args.research:
-        cdlm = updater.Candelabrum()
-        cdlm.research_candles()
-    else:
+        updater.Candelabrum().research_candles()
+    elif args.indicators:
         print('Applying indicators...')
-        cdlm = updater.Candelabrum()
-        cdlm.apply_indicators()
+        updater.Candelabrum().apply_indicators()
         print("""Job's done!""")
+    else:
+        print('Missing argument.')
