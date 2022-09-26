@@ -1,7 +1,7 @@
 """Updater for Infinitus Vigilantis"""
 import json
 import numpy
-import pandas
+import pandas as pd
 import pickle
 import random
 import time
@@ -9,7 +9,7 @@ import source.ivy_commons as icy
 import source.ivy_alpaca as api
 from source.ivy_mouse import ThreeBlindMice
 from datetime import datetime
-from os import path, listdir, cpu_count
+from os import path, listdir, cpu_count, remove
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -34,13 +34,25 @@ def daemonize():
     return icy.ivy_dispatcher(spin_wheel, ftype='process')
 
 
+def format_time(elapsed, message=''):
+    if elapsed > 86400:
+        message += ' {} days'.format(round(elapsed / 86400, 5))
+    elif elapsed > 3600:
+        message += ' {} hours'.format(round(elapsed / 3600, 5))
+    elif elapsed > 60:
+        message += ' {} minutes'.format(round(elapsed / 60, 5))
+    else:
+        message += ' {} seconds'.format(round(elapsed, 5))
+    return message
+
+
 def market_calendar(cpath='./indexes/calendar.index'):
     """Fetch the market calendar and store it locally."""
     if path.exists(cpath):
-        ivy_calendar = pandas.read_csv(cpath, index_col=0, dtype=str)
+        ivy_calendar = pd.read_csv(cpath, index_col=0, dtype=str)
     else:
         c = SHEPHERD.calendar()
-        ivy_calendar = pandas.DataFrame(c, dtype=str)
+        ivy_calendar = pd.DataFrame(c, dtype=str)
         ivy_calendar.set_index('date', inplace=True)
         ivy_calendar.to_csv(cpath)
     return ivy_calendar.copy()
@@ -71,7 +83,7 @@ def alpaca_assets(asset_path='./indexes/alpaca.assets'):
 def composite_index(ci_path='./indexes/composite.index'):
     """Validates assets and returns an index of symbols."""
     if path.exists(ci_path):
-        ivy_ndx = pandas.read_csv(ci_path, index_col=0)
+        ivy_ndx = pd.read_csv(ci_path, index_col=0)
     else:
         valid_symbols = dict()
         assets = alpaca_assets()
@@ -101,7 +113,7 @@ def composite_index(ci_path='./indexes/composite.index'):
             if all(validated):
                 print(f'Composite Index: {symbol} validated!')
                 valid_symbols[symbol] = v
-        ivy_ndx = pandas.DataFrame()
+        ivy_ndx = pd.DataFrame()
         ivy_ndx['symbols'] = valid_symbols.keys()
         ivy_ndx['exchanges'] = valid_symbols.values()
         ivy_ndx.to_csv(ci_path)
@@ -132,10 +144,15 @@ class Candelabrum:
         self._IVI_PATH = './indicators'
         self._PREFIX = 'Candelabrum:'
         self._TIMER = icy.TimeKeeper()
-        self.benchmarks = dict()
+        self._exceptions_ = dict()
+        self._max_price_ = 0
+        self._min_price_ = 1e30
+        self._max_volume_ = 0
+        self._min_volume_ = 1e30
         self._tz = 'America/New_York'
-        p = lambda c: pandas.to_datetime(c, utc=True).tz_convert(self._tz)
-        self._CSV_ARGS = dict(
+        self.benchmarks = dict()
+        p = lambda c: pd.to_datetime(c, utc=True).tz_convert(self._tz)
+        self._CSV_PARAMS = dict(
             index_col=0,
             parse_dates=True,
             infer_datetime_format=True,
@@ -164,7 +181,12 @@ class Candelabrum:
         return path.abspath(p)
 
     def __worker__(self):
-        """Get jobs and save data locally."""
+        """Get jobs and do work."""
+        csv_params = dict(self._CSV_PARAMS)
+        candelabrum_path = path.abspath(self._DATA_PATH)
+        candle_keys = ('utc_ts','open','high','low','close',
+                       'volume','num_trades','vol_wma_price')
+        ohlc = ('open','high','low','close')
         while True:
             job = self._QUEUE.get()
             if job == 'exit':
@@ -173,10 +195,44 @@ class Candelabrum:
                 if job[0] == 'indicators':
                     if not path.exists(job[1]):
                         with open(job[2]) as f:
-                            candles = pandas.read_csv(f, **self._CSV_ARGS)
+                            candles = pd.read_csv(f, **csv_params)
                         ivi = icy.get_indicators(candles)
                         ivi.to_csv(job[1])
-                #elif job[0] == 'cartography':
+                elif job[0] == 'clean':
+                    try:
+                        candle_name = str(job[1])
+                        candle_path = f'{candelabrum_path}/{candle_name}'
+                        if candle_name[-4:] != '.ivy':
+                            exc = f'Candle must end in .ivy ({candle_name})'
+                            continue
+                        if not path.exists(candle_path):
+                            exc = f'Candle does not exist ({candle_name})'
+                            continue
+                        with open(candle_path) as candle_file:
+                            candle = pd.read_csv(candle_file, **csv_params)
+                        features = candle.keys()
+                        match = all([k in features for k in candle_keys])
+                        if not match:
+                            raise Exception(f'{candle_path} missing features.')
+                        candle_max = max([max(candle[k]) for k in ohlc])
+                        candle_min = min([min(candle[k]) for k in ohlc])
+                        volume_max = float(max(candle['volume']))
+                        volume_min = float(min(candle['volume']))
+                        if candle_max > self._max_price_:
+                            self._max_price_ = float(candle_max)
+                        if candle_min < self._min_price_:
+                            self._min_price_ = float(candle_min)
+                        if volume_max > self._max_volume_:
+                            self._max_volume_ = float(volume_max)
+                        if volume_min < self._min_volume_:
+                            self._min_volume_ = float(volume_min)
+                    except Exception as details:
+                        self._exceptions_[candle_path] = details.args
+                        print(details.args)
+                        print('Removing:', candle_path)
+                        remove(candle_path)
+                    finally:
+                        continue
                 else:
                     data = json.loads(job[0])
                     bars = data['bars']
@@ -184,9 +240,9 @@ class Candelabrum:
                     requested_symbols = job[2]
                     returned_symbols = bars.keys()
                     tz = self._tz
-                    pts = pandas.Timestamp
+                    pts = pd.Timestamp
                     for symbol in returned_symbols:
-                        df = pandas.DataFrame(bars[symbol])
+                        df = pd.DataFrame(bars[symbol])
                         df['time'] = [pts(t, unit='s', tz=tz) for t in df['t']]
                         df.set_index('time', inplace=True)
                         df.rename(columns=COLUMN_NAMES, inplace=True)
@@ -230,9 +286,9 @@ class Candelabrum:
         date_args['end'] = dataframe.index[-1]
         date_args['tz'] = self._tz
         date_args['freq'] = '1min'
-        i = pandas.date_range(**date_args)
+        i = pd.date_range(**date_args)
         c = COLUMN_NAMES.values()
-        template = pandas.DataFrame(index=i, columns=c)
+        template = pd.DataFrame(index=i, columns=c)
         template.update(dataframe)
         template.fillna(method='ffill', inplace=True)
         template.fillna(method='bfill', inplace=True)
@@ -247,9 +303,9 @@ class Candelabrum:
         """=^.^="""
         data_path = self.__get_path__(symbol, date_string)
         if not path.exists(data_path):
-            return pandas.DataFrame()
+            return pd.DataFrame()
         with open(data_path) as pth:
-            df = pandas.read_csv(pth, **self._CSV_ARGS)
+            df = pd.read_csv(pth, **self._CSV_PARAMS)
         return df.copy()
 
     def save_candles(self, symbol, dataframe, date_string):
@@ -319,7 +375,7 @@ class Candelabrum:
                 elif candles is None:
                     candles = day_data.copy()
                 else:
-                    candles = pandas.concat([candles, day_data])
+                    candles = pd.concat([candles, day_data])
             except Exception as details:
                 print(self._PREFIX, f'Encountered {details}')
                 continue
@@ -343,7 +399,7 @@ class Candelabrum:
             if candle is not None:
                 candles.append(candle)
                 timestamps.append(ts)
-        return pandas.DataFrame(candles, index=timestamps)
+        return pd.DataFrame(candles, index=timestamps)
 
     def daily_candle(self, day_data):
         """Takes minute data and converts it into a daily candle."""
@@ -360,6 +416,7 @@ class Candelabrum:
             }
 
     def research_candles(self):
+        """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
         moirai = ThreeBlindMice(34, verbosity=1)
@@ -384,18 +441,12 @@ class Candelabrum:
             symbols_remaining = len(symbols)
         elapsed = time.time() - loop_start
         message = 'Research of {} complete after {}.'
-        if elapsed > 86400:
-            message += '{} days'.format(round(elapsed / 86400, 5))
-        elif elapsed > 3600:
-            message += '{} hours'.format(round(elapsed / 3600, 5))
-        elif elapsed > 60:
-            message += '{} minutes'.format(round(elapsed / 60, 5))
-        else:
-            message += '{} seconds'.format(round(elapsed, 5))
+        message = format_time(elapsed, message=message)
         print(self._PREFIX, message.format(symbols_total, elapsed))
 
     def candle_maker(self, candles):
-        if len(candles) > 0 and type(candles) == pandas.Series:
+        """Makes a candle."""
+        if len(candles) > 0 and type(candles) == pd.Series:
             name = str(candles.name)
             value = None
             if name == 'utc_ts':
@@ -414,9 +465,31 @@ class Candelabrum:
         return None
 
     def resample_candles(self, candles, scale):
+        """Reshapes a candle with different timing."""
         c = candles.resample(scale).apply(self.candle_maker)
         c.dropna(inplace=True)
         return c.copy()
+
+    def clean_candelabrum(self):
+        """Gets min/max price and volume from candles.
+           If features don't match, removes the file."""
+        candelabrum = path.abspath(self._DATA_PATH)
+        candles = listdir(candelabrum)
+        total_candles = len(candles)
+        print(f'Cleaning {total_candles} candles.')
+        start_time = time.time()
+        for candle_name in candles:
+            if candle_name[-4:] == '.ivy':
+                self._QUEUE.put(('clean', candle_name))
+        self.join_workers()
+        elapsed = time.time() - start_time
+        message = format_time(elapsed, message='Finished cleaning after')
+        print(self._PREFIX, message)
+        print(self._PREFIX, 'Largest price:', self._max_price_)
+        print(self._PREFIX, 'Smallest price:', self._min_price_)
+        print(self._PREFIX, 'Largest volume:', self._max_volume_)
+        print(self._PREFIX, 'Smallest volume:', self._min_volume_)
+        print(self._PREFIX, 'Corruption removed:', len(self._exceptions_))
 
 
 def make_utc(time_string):

@@ -5,23 +5,25 @@ import traceback
 import source.ivy_commons as icy
 from math import sqrt, log
 from os.path import abspath
-from torch.nn import GLU, GRU, Module, ParameterDict, SmoothL1Loss, Softplus
+from torch.nn import GLU, GRU, Module, MSELoss, ParameterDict, Sequential
 from torch.optim import SGD
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
+__split_gru__ = GLU()
 
 
-class GatedSequence(torch.nn.Sequential):
-    """Subclass of torch.nn.Sequential"""
+class GatedSequence(Sequential):
+    """Gated Recurrent Unit output size reduction with abs(tanh) activation."""
     def forward(self, *inputs):
-        """Link GRU and GLU inputs to outputs."""
+        """For each GRU, splits it, applies activations, and sends to next."""
         for module in self._modules.values():
             if type(inputs) == tuple:
                 inputs = module(inputs[0])
             else:
                 inputs = module(inputs)
+            inputs = __split_gru__(inputs[0].tanh().abs())
         return inputs
 
 
@@ -57,7 +59,7 @@ class ThreeBlindMice(Module):
             lr=0.618,
             momentum=0.9,
             nesterov=True,
-            maximize=True,
+            maximize=False,
             )
         # Atropos the mouse, sister of Clotho and Lachesis.
         Atropos = self._Atropos_ = ParameterDict()
@@ -70,19 +72,18 @@ class ThreeBlindMice(Module):
         Lachesis['name'] = 'Lachesis'
         for mouse in [Atropos, Clotho, Lachesis]:
             mouse['candles'] = None
-            mouse['loss_fn'] = SmoothL1Loss()
+            mouse['loss_fn'] = MSELoss()
             mouse['metrics'] = {}
             gates = list()
             for gate in range(n_gates):
                 gates.append(GRU(**gru_params))
-                gates.append(GLU())
                 gru_params['input_size'] = int(gru_params['hidden_size'])
                 gru_params['hidden_size'] = int(gru_params['hidden_size'] / 2)
             gru_params['hidden_size'] = n_hidden
             gru_params['input_size'] = n_features
             mouse['nn_gates'] = GatedSequence(*gates)
             mouse['optim'] = SGD(mouse['nn_gates'].parameters(), **opt_params)
-            mouse['warm_lr'] = WarmRestarts(mouse['optim'], 55)
+            mouse['warm_lr'] = WarmRestarts(mouse['optim'], batch_size * 3)
         self.predictions = ParameterDict()
         self.to(self._device_)
         self.verbosity = verbosity
@@ -119,7 +120,8 @@ class ThreeBlindMice(Module):
             batch_size = inputs.shape[0]
             mouse['optim'].zero_grad()
             mouse['candles'] = mouse['nn_gates'](inputs)[0]
-            mouse['candles'] = vstack(mouse['candles'].split(1))
+            mouse['candles'] = vstack(mouse['candles'].split(1)) * 1e6
+            print(mouse['candles'])
             difference = mouse['candles'] - targets
             loss = mouse['loss_fn'](mouse['candles'], targets)
             loss.backward()
