@@ -5,8 +5,9 @@ import traceback
 import source.ivy_commons as icy
 from math import sqrt, log
 from os.path import abspath
-from torch.nn import GLU, GRU, Module, MSELoss, ParameterDict, Sequential
-from torch.optim import SGD
+from torch.nn import BatchNorm1d, Conv3d, GLU, GRU, HuberLoss
+from torch.nn import Module, PairwiseDistance, ParameterDict, Sequential
+from torch.optim import Rprop
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
@@ -37,30 +38,57 @@ class ThreeBlindMice(Module):
         self._min_size_ = min_size
         self._prefix_ = 'Moirai:'
         self._state_path_ = abspath('./rnn/moirai.state')
-        batch_size = self._batch_size_ = 16
+        batch_size = self._batch_size_ = 8
         n_features = self._n_features_ = int(n_features)
-        n_hidden = int(batch_size ** 2)
-        n_gates = 5
-        self._tensor_args_ = dict(
+        n_gates = 7
+        n_hidden = self._batch_size_
+        for i in range(n_gates):
+            n_hidden *= 2
+        print(self._prefix_, 'set batch_size to', batch_size)
+        print(self._prefix_, 'set n_features to', n_features)
+        print(self._prefix_, 'set n_hidden to', n_hidden)
+        print(self._prefix_, 'set n_gates to', n_gates)
+        t_args = self._tensor_args_ = dict(
             device=self._device_,
             dtype=torch.float,
-            requires_grad=True
             )
         gru_params = dict(
             input_size=n_features,
             hidden_size=n_hidden,
-            num_layers=n_features,
+            num_layers=batch_size,
             bias=True,
             batch_first=True,
             dropout=0.34,
-            bidirectional=True,
+            bidirectional=False,
             )
         opt_params = dict(
-            lr=0.618,
-            momentum=0.9,
-            nesterov=True,
-            maximize=False,
+            lr=0.01,
+            etas=(0.5, 1.2),
+            step_sizes=(1e-06, 50),
+            foreach=True,
             )
+        loss_params = dict(
+            reduction='sum',
+            delta=0.97,
+            )
+        # Setup a cauldron for our candles
+        cauldron = self._cauldron_ = ParameterDict()
+        cauldron['size'] = int(batch_size * 3)
+        cauldron['candles'] = None
+        cauldron['loss_fn'] = HuberLoss(**loss_params)
+        cauldron['loss_targets'] = torch.zeros(batch_size, 1, **t_args)
+        cauldron['metrics'] = {}
+        gates = list()
+        for gate in range(n_gates):
+            gates.append(GRU(**gru_params))
+            gru_params['hidden_size'] = int(gru_params['hidden_size'] / 2)
+            gru_params['input_size'] = int(gru_params['hidden_size'])
+        gru_params['hidden_size'] = n_hidden
+        gru_params['input_size'] = n_features
+        cauldron['nn_gates'] = GatedSequence(*gates)
+        cauldron['optim'] = Rprop(cauldron['nn_gates'].parameters(), **opt_params)
+        cauldron['warm_lr'] = WarmRestarts(cauldron['optim'], n_hidden)
+        print(self._cauldron_)
         # Atropos the mouse, sister of Clotho and Lachesis.
         Atropos = self._Atropos_ = ParameterDict()
         Atropos['name'] = 'Atropos'
@@ -72,18 +100,20 @@ class ThreeBlindMice(Module):
         Lachesis['name'] = 'Lachesis'
         for mouse in [Atropos, Clotho, Lachesis]:
             mouse['candles'] = None
-            mouse['loss_fn'] = MSELoss()
+            mouse['loss_fn'] = HuberLoss(**loss_params)
+            mouse['loss_targets'] = torch.zeros(batch_size, 1, **t_args)
             mouse['metrics'] = {}
             gates = list()
             for gate in range(n_gates):
                 gates.append(GRU(**gru_params))
-                gru_params['input_size'] = int(gru_params['hidden_size'])
                 gru_params['hidden_size'] = int(gru_params['hidden_size'] / 2)
+                gru_params['input_size'] = int(gru_params['hidden_size'])
             gru_params['hidden_size'] = n_hidden
             gru_params['input_size'] = n_features
             mouse['nn_gates'] = GatedSequence(*gates)
-            mouse['optim'] = SGD(mouse['nn_gates'].parameters(), **opt_params)
-            mouse['warm_lr'] = WarmRestarts(mouse['optim'], batch_size * 3)
+            mouse['optim'] = Rprop(mouse['nn_gates'].parameters(), **opt_params)
+            mouse['warm_lr'] = WarmRestarts(mouse['optim'], n_hidden)
+        self._tensor_args_['requires_grad'] = True
         self.predictions = ParameterDict()
         self.to(self._device_)
         self.verbosity = verbosity
@@ -120,27 +150,21 @@ class ThreeBlindMice(Module):
             batch_size = inputs.shape[0]
             mouse['optim'].zero_grad()
             mouse['candles'] = mouse['nn_gates'](inputs)[0]
-            mouse['candles'] = vstack(mouse['candles'].split(1)) * 1e6
-            print(mouse['candles'])
-            difference = mouse['candles'] - targets
-            loss = mouse['loss_fn'](mouse['candles'], targets)
+            mouse['candles'] = vstack(mouse['candles'].split(1))
+            difference = (mouse['candles'] * 3e3 - targets).abs()
+            difference = difference.tanh().abs()
+            loss = mouse['loss_fn'](difference, mouse['loss_targets'])
             loss.backward()
             mouse['optim'].step()
             mouse['warm_lr'].step()
-            correct = difference[difference == 1].shape[0]
+            mouse['metrics']['mae'] += difference.abs().sum()
+            mouse['metrics']['mse'] += (difference ** 2).sum()
+            correct = difference[difference == 0].shape[0]
             wrong = batch_size - correct
-            confidence = 0
-            smooth_loss = loss.item()
-            if smooth_loss != 0:
-                if batch_size > 0:
-                    confidence = log(smooth_loss) / batch_size
-                else:
-                    confidence = log(smooth_loss)
-            mouse['metrics']['confidence'] = round(confidence, 2)
+            confidence = float(1 - loss.item() * 100)
             mouse['metrics']['acc'] = 100 - percent_change(correct, wrong) * -1
             mouse['metrics']['acc'] = round(mouse['metrics']['acc'], 2)
-            mouse['metrics']['mae'] += torch.abs(difference).sum().data
-            mouse['metrics']['mse'] += (difference ** 2).sum().data
+            mouse['metrics']['confidence'] = round(confidence, 2)
         else:
             with torch.no_grad():
                 try:
@@ -157,6 +181,7 @@ class ThreeBlindMice(Module):
                 finally:
                     mouse['candles'] = mouse['nn_gates'](inputs)[0]
                     mouse['candles'] = vstack(mouse['candles'].split(1))
+                    mouse['candles'] = (mouse['candles'] * 3e3).clone()
         verbosity_check = [
             self.verbosity > 2,
             self.verbosity == 2 and study is False
@@ -173,9 +198,9 @@ class ThreeBlindMice(Module):
             print(msg.format('Accuracy', acc))
             print(msg.format('Mean Absolute Error', mae))
             print(msg.format('Mean Squared Error', mse))
-            print(msg.format('Target', round(mouse['candles'][-1], 2)))
+            print(msg.format('Target', round(mouse['candles'][-1].item(), 2)))
 
-    def research(self, symbol, candles, timeout=3):
+    def research(self, symbol, candles, timeout=1):
         """Moirai research session, fully stocked with cheese and drinks."""
         if not all((
             len(candles.keys()) == self._n_features_,
@@ -221,6 +246,7 @@ class ThreeBlindMice(Module):
             final_accuracy = 0
             volume_accuracy = 0
             for mouse in moirai:
+                mouse['metrics']['confidence'] = 0
                 mouse['metrics']['acc'] = 0
                 mouse['metrics']['mae'] = 0
                 mouse['metrics']['mse'] = 0
@@ -310,3 +336,4 @@ class ThreeBlindMice(Module):
         self.__manage_state__(call_type=1)
         return True
 
+    def forward(self, *inputs):

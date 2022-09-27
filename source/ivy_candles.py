@@ -144,7 +144,7 @@ class Candelabrum:
         self._IVI_PATH = './indicators'
         self._PREFIX = 'Candelabrum:'
         self._TIMER = icy.TimeKeeper()
-        self._exceptions_ = dict()
+        self._exceptions_ = list()
         self._max_price_ = 0
         self._min_price_ = 1e30
         self._max_volume_ = 0
@@ -187,6 +187,11 @@ class Candelabrum:
         candle_keys = ('utc_ts','open','high','low','close',
                        'volume','num_trades','vol_wma_price')
         ohlc = ('open','high','low','close')
+        candle_max = 0
+        candle_min = 1e30
+        volume_max = 0
+        volume_min = 1e30
+        exceptions = dict()
         while True:
             job = self._QUEUE.get()
             if job == 'exit':
@@ -214,20 +219,20 @@ class Candelabrum:
                         match = all([k in features for k in candle_keys])
                         if not match:
                             raise Exception(f'{candle_path} missing features.')
-                        candle_max = max([max(candle[k]) for k in ohlc])
-                        candle_min = min([min(candle[k]) for k in ohlc])
-                        volume_max = float(max(candle['volume']))
-                        volume_min = float(min(candle['volume']))
-                        if candle_max > self._max_price_:
-                            self._max_price_ = float(candle_max)
-                        if candle_min < self._min_price_:
-                            self._min_price_ = float(candle_min)
-                        if volume_max > self._max_volume_:
-                            self._max_volume_ = float(volume_max)
-                        if volume_min < self._min_volume_:
-                            self._min_volume_ = float(volume_min)
+                        _candle_max_ = max([max(candle[k]) for k in ohlc])
+                        _candle_min_ = min([min(candle[k]) for k in ohlc])
+                        _volume_max_ = float(max(candle['volume']))
+                        _volume_min_ = float(min(candle['volume']))
+                        if _candle_max_ > candle_max:
+                            candle_max = float(_candle_max_)
+                        if _candle_min_ < candle_min:
+                            candle_min = float(_candle_min_)
+                        if _volume_max_ > volume_max:
+                            volume_max = float(_volume_max_)
+                        if _volume_min_ < volume_min:
+                            volume_min = float(_volume_min_)
                     except Exception as details:
-                        self._exceptions_[candle_path] = details.args
+                        exceptions[candle_path] = details.args
                         print(details.args)
                         print('Removing:', candle_path)
                         remove(candle_path)
@@ -267,6 +272,15 @@ class Candelabrum:
                 with open(path.abspath(err_path), 'w+') as err_file:
                     err_file.write(err_msg)
                 print(self._PREFIX, f'Worker Thread: {err_msg}')
+        if candle_max > self._max_price_:
+            self._max_price_ = float(candle_max)
+        if candle_min < self._min_price_:
+            self._min_price_ = float(candle_min)
+        if volume_max > self._max_volume_:
+            self._max_volume_ = float(volume_max)
+        if volume_min < self._min_volume_:
+            self._min_volume_ = float(volume_min)
+        self._exceptions_.append(exceptions)
 
     def join_workers(self):
         """Block until all jobs are finished."""
@@ -419,7 +433,7 @@ class Candelabrum:
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        moirai = ThreeBlindMice(34, verbosity=1)
+        moirai = ThreeBlindMice(34, verbosity=2)
         print(self._PREFIX, 'Starting research loop...')
         symbols = [s for s, e in composite_index()]
         symbols_researched = 0
