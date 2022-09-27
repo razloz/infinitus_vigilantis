@@ -5,50 +5,105 @@ import traceback
 import source.ivy_commons as icy
 from math import sqrt, log
 from os.path import abspath
-from torch.nn import BatchNorm1d, Conv3d, GLU, GRU, HuberLoss
-from torch.nn import Module, PairwiseDistance, ParameterDict, Sequential
-from torch.optim import Rprop
+from torch.nn import AdaptiveMaxPool1d, AdaptiveMaxPool2d, AdaptiveMaxPool3d
+from torch.nn import BCEWithLogitsLoss, CosineSimilarity, GLU, GRU, HuberLoss
+from torch.nn import LazyBatchNorm1d, LazyBatchNorm2d, LazyBatchNorm3d
+from torch.nn import LazyConv1d, LazyConv2d, LazyConv3d,
+from torch.nn import Module, PairwiseDistance, ParameterDict
+from torch.nn import ReLU, Sequential, Tanh, Threshold
+from torch.optim import Rprop, SGD
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__split_gru__ = GLU()
 
 
-class GatedSequence(Sequential):
-    """Gated Recurrent Unit output size reduction with abs(tanh) activation."""
+class MouseGate(Sequential):
+    """Inside the mind of a mouse."""
     def forward(self, *inputs):
-        """For each GRU, splits it, applies activations, and sends to next."""
+        """Applies activation and normalization layers."""
         for module in self._modules.values():
             if type(inputs) == tuple:
                 inputs = module(inputs[0])
             else:
                 inputs = module(inputs)
-            inputs = __split_gru__(inputs[0].tanh().abs())
         return inputs
+
+
+class Cauldron(Module):
+    """A wax encrusted cauldron for coating candle wicks."""
+    def __init__(self, n_input, n_hidden, batch_size, device, *args, **kwargs):
+        """Register modules for evaluating incoming predictions."""
+        super(Cauldron, self).__init__(*args, **kwargs)
+        self._device_ = device
+        self.input_gate = GRU(
+            input_size=n_input,
+            hidden_size=n_hidden,
+            num_layers=batch_size,
+            bias=True,
+            batch_first=True,
+            dropout=0.34,
+            bidirectional=False,
+            )
+        self.batch_1d = LazyBatchNorm1d()
+        self.batch_2d = LazyBatchNorm2d()
+        self.batch_3d = LazyBatchNorm3d()
+        self.conv_1d = LazyConv1d(output_size, cauldron_size)
+        self.conv_2d = LazyConv2d(output_size, cauldron_size)
+        self.conv_3d = LazyConv3d(output_size, cauldron_size)
+        self.pool_1d = AdaptiveMaxPool1d(output_size)
+        self.pool_2d = AdaptiveMaxPool2d(output_size)
+        self.pool_3d = AdaptiveMaxPool3d(output_size)
+        self.cos_sim = CosineSimilarity()
+        self.to(self._device_)
+
+    def forward(atropos, clotho, lachesis):
+        """*bubble**bubble* *bubble*"""
+        cos_sim = self.cos_sim
+        candle_pairs = [
+            torch.hstack(cos_sim((clotho, lachesis).tanh().abs())),
+            torch.hstack(cos_sim((atropos, lachesis).tanh().abs())),
+            torch.hstack(cos_sim((atropos, clotho).tanh().abs())),
+            ]
+        for i in range(3):
+            candle_pairs[i] = self.batch_2d(candle_pairs[i])
+            candle_pairs[i] = self.conv_2d(candle_pairs[i])
+            candle_pairs[i] = self.pool_2d(candle_pairs[i])
+        candles = torch.hstack([*candle_pairs])
+        candles = self.batch_3d(candles)
+        candles = self.conv_3d(candles)
+        candles = self.pool_3d(candles)
+        coated_candles = self.batch_1d(coated_candles)
+        coated_candles = self.conv_1d(coated_candles)
+        coated_candles = self.pool_1d(coated_candles)
+        return coated_candles
 
 
 class ThreeBlindMice(Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, n_features, verbosity=0, min_size=90):
+    def __init__(self, n_features, verbosity=0, min_size=90, *args, **kwargs):
         """Inputs: n_features and n_targets must be of type int()"""
-        super(ThreeBlindMice, self).__init__()
+        super(ThreeBlindMice, self).__init__(*args, **kwargs)
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self._device_ = torch.device(self._device_type_)
         self._min_size_ = min_size
         self._prefix_ = 'Moirai:'
         self._state_path_ = abspath('./rnn/moirai.state')
+        self._price_range_ = range(1e6)
+        self._volume_range_ = range(1e9)
+        self.verbosity = int(verbosity)
         batch_size = self._batch_size_ = 8
         n_features = self._n_features_ = int(n_features)
         n_gates = 7
         n_hidden = self._batch_size_
         for i in range(n_gates):
             n_hidden *= 2
-        print(self._prefix_, 'set batch_size to', batch_size)
-        print(self._prefix_, 'set n_features to', n_features)
-        print(self._prefix_, 'set n_hidden to', n_hidden)
-        print(self._prefix_, 'set n_gates to', n_gates)
-        t_args = self._tensor_args_ = dict(
+        if self.verbosity > 0:
+            print(self._prefix_, 'set batch_size to', batch_size)
+            print(self._prefix_, 'set n_features to', n_features)
+            print(self._prefix_, 'set n_hidden to', n_hidden)
+            print(self._prefix_, 'set n_gates to', n_gates)
+        self._tensor_args_ = dict(
             device=self._device_,
             dtype=torch.float,
             )
@@ -61,34 +116,50 @@ class ThreeBlindMice(Module):
             dropout=0.34,
             bidirectional=False,
             )
-        opt_params = dict(
+        huber_params = dict(
             lr=0.01,
             etas=(0.5, 1.2),
             step_sizes=(1e-06, 50),
             foreach=True,
             )
-        loss_params = dict(
-            reduction='sum',
-            delta=0.97,
+        sgd_params = dict(
+             momentum=0.9,
+             dampening=0,
+             weight_decay=0,
+             nesterov=True,
+             maximize=False,
+             foreach=True
             )
         # Setup a cauldron for our candles
         cauldron = self._cauldron_ = ParameterDict()
-        cauldron['size'] = int(batch_size * 3)
-        cauldron['candles'] = None
-        cauldron['loss_fn'] = HuberLoss(**loss_params)
-        cauldron['loss_targets'] = torch.zeros(batch_size, 1, **t_args)
+        cauldron['item'] = Cauldron(
+            int(batch_size * 3),
+            n_hidden,
+            batch_size,
+            self._device_,
+            )
+        cauldron['loss_fn'] = HuberLoss(reduction='sum', delta=0.97)
+        cauldron['targets'] = torch.zeros(batch_size, 1, **self._tensor_args_)
         cauldron['metrics'] = {}
-        gates = list()
-        for gate in range(n_gates):
-            gates.append(GRU(**gru_params))
-            gru_params['hidden_size'] = int(gru_params['hidden_size'] / 2)
-            gru_params['input_size'] = int(gru_params['hidden_size'])
-        gru_params['hidden_size'] = n_hidden
+        output_size = int(gru_params['hidden_size'])
+        gru_params['input_size'] = cauldron_size
+        cauldron['nn_gates'] = MouseGate(
+            GRU(**gru_params),
+            Tanh(),
+            LazyBatchNorm3d(),
+            AdaptiveMaxPool3d(output_size),
+            LazyConv3d(output_size, cauldron_size)
+            )
         gru_params['input_size'] = n_features
-        cauldron['nn_gates'] = GatedSequence(*gates)
-        cauldron['optim'] = Rprop(cauldron['nn_gates'].parameters(), **opt_params)
-        cauldron['warm_lr'] = WarmRestarts(cauldron['optim'], n_hidden)
-        print(self._cauldron_)
+        cauldron['optim'] = Rprop(
+            cauldron['nn_gates'].parameters(),
+            **huber_params
+            )
+        cauldron['warm_lr'] = WarmRestarts(mouse['optim'], cauldron['size'])
+        self._tensor_args_['requires_grad'] = True
+        if self.verbosity > 0:
+            print(self._prefix_, 'cauldron size is', cauldron['size'])
+            print(self._prefix_, self._cauldron_)
         # Atropos the mouse, sister of Clotho and Lachesis.
         Atropos = self._Atropos_ = ParameterDict()
         Atropos['name'] = 'Atropos'
@@ -101,22 +172,28 @@ class ThreeBlindMice(Module):
         for mouse in [Atropos, Clotho, Lachesis]:
             mouse['candles'] = None
             mouse['loss_fn'] = HuberLoss(**loss_params)
-            mouse['loss_targets'] = torch.zeros(batch_size, 1, **t_args)
             mouse['metrics'] = {}
             gates = list()
             for gate in range(n_gates):
+                output_size = int(gru_params['hidden_size'])
                 gates.append(GRU(**gru_params))
-                gru_params['hidden_size'] = int(gru_params['hidden_size'] / 2)
-                gru_params['input_size'] = int(gru_params['hidden_size'])
+                gates.append(Tanh())
+                gates.append(LazyBatchNorm1d())
+                gates.append(AdaptiveMaxPool1d(output_size))
+                output_size = output_size / 2
+                gates.append(LazyConv1d(output_size, batch_size))
+                gru_params['hidden_size'] = output_size
+                gru_params['input_size'] = output_size
             gru_params['hidden_size'] = n_hidden
             gru_params['input_size'] = n_features
             mouse['nn_gates'] = GatedSequence(*gates)
-            mouse['optim'] = Rprop(mouse['nn_gates'].parameters(), **opt_params)
-            mouse['warm_lr'] = WarmRestarts(mouse['optim'], n_hidden)
-        self._tensor_args_['requires_grad'] = True
+            mouse['optim'] = Rprop(
+                mouse['nn_gates'].parameters(),
+                **sgd_params
+                )
+            mouse['warm_lr'] = WarmRestarts(mouse['optim'], cauldron['size'])
         self.predictions = ParameterDict()
         self.to(self._device_)
-        self.verbosity = verbosity
         if self.verbosity > 0:
             print(self._prefix_, f'Set device to {self._device_type_.upper()}.')
 
@@ -335,5 +412,3 @@ class ThreeBlindMice(Module):
             Atropos[label] = None
         self.__manage_state__(call_type=1)
         return True
-
-    def forward(self, *inputs):
