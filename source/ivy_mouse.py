@@ -1,85 +1,86 @@
 """Three blind mice to predict the future."""
 import time
 import torch
+import torch.nn as nn
+import torch.optim as optim
 import traceback
 import source.ivy_commons as icy
 from math import sqrt, log
 from os.path import abspath
-from torch.nn import AdaptiveMaxPool1d, AdaptiveMaxPool2d, AdaptiveMaxPool3d
-from torch.nn import BCEWithLogitsLoss, CosineSimilarity, GLU, GRU, HuberLoss
-from torch.nn import LazyBatchNorm1d, LazyBatchNorm2d, LazyBatchNorm3d
-from torch.nn import LazyConv1d, LazyConv2d, LazyConv3d,
-from torch.nn import Module, PairwiseDistance, ParameterDict
-from torch.nn import ReLU, Sequential, Tanh, Threshold
-from torch.optim import Rprop, SGD
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
 
 
-class MouseGate(Sequential):
+class MouseGate(nn.Sequential):
     """Inside the mind of a mouse."""
+    def __init__(self, n_features=0, n_hidden=0, batch_size=0, n_gates=0):
+        """Register gate modules in sequence."""
+        super(MouseGate, self).__init__()
+        gru_params = dict(
+            num_layers=batch_size,
+            bias=True,
+            batch_first=True,
+            dropout=0.34,
+            )
+        input_size = n_features
+        output_size = n_hidden
+        for gate_num in range(n_gates):
+            self.register_module(
+                f'GRU_{gate_num}',
+                nn.GRU(input_size, output_size, **gru_params)
+                )
+            self.register_module(f'GLU_{gate_num}', nn.GLU())
+            output_size = int(output_size / 2)
+            input_size = int(output_size)
+
     def forward(self, *inputs):
-        """Applies activation and normalization layers."""
+        """Walk through the gates until the desired candle shape is reached."""
         for module in self._modules.values():
             if type(inputs) == tuple:
                 inputs = module(inputs[0])
             else:
                 inputs = module(inputs)
-        return inputs
+        return torch.vstack(inputs.max(dim=1).values.split(1))
 
 
-class Cauldron(Module):
-    """A wax encrusted cauldron for coating candle wicks."""
-    def __init__(self, n_input, n_hidden, batch_size, device, *args, **kwargs):
-        """Register modules for evaluating incoming predictions."""
+class Cauldron(nn.Module):
+    """A wax encrusted cauldron sits before you, bubbling occasionally."""
+    def __init__(self, cauldron_size, batch_size, device, *args, **kwargs):
+        """Assists in the creation of candles."""
         super(Cauldron, self).__init__(*args, **kwargs)
         self._device_ = device
-        self.input_gate = GRU(
-            input_size=n_input,
-            hidden_size=n_hidden,
-            num_layers=batch_size,
+        self._n_hidden_ = int(cauldron_size ** 2)
+        self._n_layers_ = int(batch_size)
+        self._n_size_ = 3
+        self._name_ = 'Awen'
+        self._wax_ = nn.GRU(
+            input_size=self._n_size_,
+            hidden_size=self._n_hidden_,
+            num_layers=self._n_layers_,
             bias=True,
-            batch_first=True,
             dropout=0.34,
-            bidirectional=False,
+            device=self._device_,
             )
-        self.batch_1d = LazyBatchNorm1d()
-        self.batch_2d = LazyBatchNorm2d()
-        self.batch_3d = LazyBatchNorm3d()
-        self.conv_1d = LazyConv1d(output_size, cauldron_size)
-        self.conv_2d = LazyConv2d(output_size, cauldron_size)
-        self.conv_3d = LazyConv3d(output_size, cauldron_size)
-        self.pool_1d = AdaptiveMaxPool1d(output_size)
-        self.pool_2d = AdaptiveMaxPool2d(output_size)
-        self.pool_3d = AdaptiveMaxPool3d(output_size)
-        self.cos_sim = CosineSimilarity()
+        self.__batch_fn__ = nn.BatchNorm1d(self._n_hidden_)
+        self.__pool_fn__ = nn.AdaptiveMaxPool1d(self._n_size_)
         self.to(self._device_)
 
-    def forward(atropos, clotho, lachesis):
+    def forward(self, wicks):
         """*bubble**bubble* *bubble*"""
-        cos_sim = self.cos_sim
-        candle_pairs = [
-            torch.hstack(cos_sim((clotho, lachesis).tanh().abs())),
-            torch.hstack(cos_sim((atropos, lachesis).tanh().abs())),
-            torch.hstack(cos_sim((atropos, clotho).tanh().abs())),
+        wicks = torch.hstack([*wicks])
+        wicks = self._wax_(wicks)[0]
+        wicks = self.__batch_fn__(wicks)
+        wicks = self.__pool_fn__(wicks).H
+        wicks = [
+            torch.vstack([t for t in wicks[0].split(1)]).clone(),
+            torch.vstack([t for t in wicks[1].split(1)]).clone(),
+            torch.vstack([t for t in wicks[2].split(1)]).clone(),
             ]
-        for i in range(3):
-            candle_pairs[i] = self.batch_2d(candle_pairs[i])
-            candle_pairs[i] = self.conv_2d(candle_pairs[i])
-            candle_pairs[i] = self.pool_2d(candle_pairs[i])
-        candles = torch.hstack([*candle_pairs])
-        candles = self.batch_3d(candles)
-        candles = self.conv_3d(candles)
-        candles = self.pool_3d(candles)
-        coated_candles = self.batch_1d(coated_candles)
-        coated_candles = self.conv_1d(coated_candles)
-        coated_candles = self.pool_1d(coated_candles)
-        return coated_candles
+        return wicks
 
 
-class ThreeBlindMice(Module):
+class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
     def __init__(self, n_features, verbosity=0, min_size=90, *args, **kwargs):
         """Inputs: n_features and n_targets must be of type int()"""
@@ -89,8 +90,8 @@ class ThreeBlindMice(Module):
         self._min_size_ = min_size
         self._prefix_ = 'Moirai:'
         self._state_path_ = abspath('./rnn/moirai.state')
-        self._price_range_ = range(1e6)
-        self._volume_range_ = range(1e9)
+        self._price_range_ = range(int(3e3))
+        self._volume_range_ = range(int(1e9))
         self.verbosity = int(verbosity)
         batch_size = self._batch_size_ = 8
         n_features = self._n_features_ = int(n_features)
@@ -98,6 +99,12 @@ class ThreeBlindMice(Module):
         n_hidden = self._batch_size_
         for i in range(n_gates):
             n_hidden *= 2
+        gate_args = dict(
+            n_features=int(n_features),
+            n_hidden=int(n_hidden),
+            batch_size=int(batch_size),
+            n_gates=int(n_gates),
+            )
         if self.verbosity > 0:
             print(self._prefix_, 'set batch_size to', batch_size)
             print(self._prefix_, 'set n_features to', n_features)
@@ -107,92 +114,57 @@ class ThreeBlindMice(Module):
             device=self._device_,
             dtype=torch.float,
             )
-        gru_params = dict(
-            input_size=n_features,
-            hidden_size=n_hidden,
-            num_layers=batch_size,
-            bias=True,
-            batch_first=True,
-            dropout=0.34,
-            bidirectional=False,
-            )
-        huber_params = dict(
+        rprop_params = dict(
             lr=0.01,
             etas=(0.5, 1.2),
             step_sizes=(1e-06, 50),
             foreach=True,
             )
         sgd_params = dict(
-             momentum=0.9,
-             dampening=0,
-             weight_decay=0,
-             nesterov=True,
-             maximize=False,
-             foreach=True
+            lr=0.1,
+            momentum=0.9,
+            dampening=0,
+            weight_decay=0,
+            nesterov=True,
+            maximize=False,
+            foreach=True
             )
         # Setup a cauldron for our candles
-        cauldron = self._cauldron_ = ParameterDict()
-        cauldron['item'] = Cauldron(
-            int(batch_size * 3),
-            n_hidden,
-            batch_size,
-            self._device_,
-            )
-        cauldron['loss_fn'] = HuberLoss(reduction='sum', delta=0.97)
+        cauldron = self._cauldron_ = nn.ParameterDict()
+        cauldron['coated_candles'] = None
+        cauldron['size'] = int(batch_size * 3)
+        cauldron['wax'] = Cauldron(cauldron['size'], batch_size, self._device_)
+        cauldron['loss_fn'] = nn.HuberLoss(reduction='sum', delta=0.97)
         cauldron['targets'] = torch.zeros(batch_size, 1, **self._tensor_args_)
         cauldron['metrics'] = {}
-        output_size = int(gru_params['hidden_size'])
-        gru_params['input_size'] = cauldron_size
-        cauldron['nn_gates'] = MouseGate(
-            GRU(**gru_params),
-            Tanh(),
-            LazyBatchNorm3d(),
-            AdaptiveMaxPool3d(output_size),
-            LazyConv3d(output_size, cauldron_size)
+        cauldron['optim'] = optim.Rprop(
+            cauldron['wax'].parameters(),
+            **rprop_params
             )
-        gru_params['input_size'] = n_features
-        cauldron['optim'] = Rprop(
-            cauldron['nn_gates'].parameters(),
-            **huber_params
+        cauldron['warm_lr'] = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            cauldron['optim'],
+            cauldron['size'],
             )
-        cauldron['warm_lr'] = WarmRestarts(mouse['optim'], cauldron['size'])
         self._tensor_args_['requires_grad'] = True
-        if self.verbosity > 0:
-            print(self._prefix_, 'cauldron size is', cauldron['size'])
-            print(self._prefix_, self._cauldron_)
         # Atropos the mouse, sister of Clotho and Lachesis.
-        Atropos = self._Atropos_ = ParameterDict()
+        Atropos = self._Atropos_ = nn.ParameterDict()
         Atropos['name'] = 'Atropos'
         # Clotho the mouse, sister of Lachesis and Atropos.
-        Clotho = self._Clotho_ = ParameterDict()
+        Clotho = self._Clotho_ = nn.ParameterDict()
         Clotho['name'] = 'Clotho'
         # Lachesis the mouse, sister of Atropos and Clotho.
-        Lachesis = self._Lachesis_ = ParameterDict()
+        Lachesis = self._Lachesis_ = nn.ParameterDict()
         Lachesis['name'] = 'Lachesis'
         for mouse in [Atropos, Clotho, Lachesis]:
             mouse['candles'] = None
-            mouse['loss_fn'] = HuberLoss(**loss_params)
+            mouse['loss_fn'] = nn.HuberLoss(reduction='sum')
             mouse['metrics'] = {}
-            gates = list()
-            for gate in range(n_gates):
-                output_size = int(gru_params['hidden_size'])
-                gates.append(GRU(**gru_params))
-                gates.append(Tanh())
-                gates.append(LazyBatchNorm1d())
-                gates.append(AdaptiveMaxPool1d(output_size))
-                output_size = output_size / 2
-                gates.append(LazyConv1d(output_size, batch_size))
-                gru_params['hidden_size'] = output_size
-                gru_params['input_size'] = output_size
-            gru_params['hidden_size'] = n_hidden
-            gru_params['input_size'] = n_features
-            mouse['nn_gates'] = GatedSequence(*gates)
-            mouse['optim'] = Rprop(
+            mouse['nn_gates'] = MouseGate(**gate_args)
+            mouse['optim'] = optim.SGD(
                 mouse['nn_gates'].parameters(),
                 **sgd_params
                 )
-            mouse['warm_lr'] = WarmRestarts(mouse['optim'], cauldron['size'])
-        self.predictions = ParameterDict()
+        self.predictions = nn.ParameterDict()
         self.to(self._device_)
         if self.verbosity > 0:
             print(self._prefix_, f'Set device to {self._device_type_.upper()}.')
@@ -215,171 +187,221 @@ class ThreeBlindMice(Module):
                 print(self._prefix_, 'Encountered an exception.')
                 traceback.print_exception(details)
 
-    def __time_step__(self, mouse, inputs, targets, epochs=0, study=False):
+    def __time_step__(self, mouse, cheese, epochs=0, study=False):
         """Let Clotho mold the candles
            Let Lachesis measure the candles
            Let Atropos seal the candles"""
         vstack = torch.vstack
         if study is True:
-            inputs = vstack(inputs)
-            targets = vstack(targets)
-            percent_change = icy.percent_change
-            batch_size = inputs.shape[0]
+            fresh = vstack(cheese[0])
+            aged = vstack(cheese[1])
+            batch_size = fresh.shape[0]
             mouse['optim'].zero_grad()
-            mouse['candles'] = mouse['nn_gates'](inputs)[0]
-            mouse['candles'] = vstack(mouse['candles'].split(1))
-            difference = (mouse['candles'] * 3e3 - targets).abs()
-            difference = difference.tanh().abs()
-            loss = mouse['loss_fn'](difference, mouse['loss_targets'])
+            mouse['candles'] = mouse['nn_gates'](fresh)
+            loss = mouse['loss_fn'](mouse['candles'], aged)
             loss.backward()
+            mouse['metrics']['loss'] = int(loss.item())
             mouse['optim'].step()
-            mouse['warm_lr'].step()
+            difference = (mouse['candles'] - aged)
+            correct = difference[difference == 0].shape[0]
+            mouse['metrics']['acc'][0] += int(correct)
+            mouse['metrics']['acc'][1] += int(batch_size)
             mouse['metrics']['mae'] += difference.abs().sum()
             mouse['metrics']['mse'] += (difference ** 2).sum()
-            correct = difference[difference == 0].shape[0]
-            wrong = batch_size - correct
-            confidence = float(1 - loss.item() * 100)
-            mouse['metrics']['acc'] = 100 - percent_change(correct, wrong) * -1
-            mouse['metrics']['acc'] = round(mouse['metrics']['acc'], 2)
-            mouse['metrics']['confidence'] = round(confidence, 2)
         else:
             with torch.no_grad():
                 try:
-                    for key in ['acc', 'mae', 'mse']:
-                        batch_average = mouse['metrics'][key] / epochs
-                        if key == 'mse':
-                            batch_average = sqrt(batch_average)
-                        mouse['metrics'][key] = batch_average
+                    n_correct = mouse['metrics']['acc'][0]
+                    n_total = mouse['metrics']['acc'][1]
+                    n_mae = mouse['metrics']['mae']
+                    n_mse = mouse['metrics']['mse']
+                    mouse['metrics']['mae'] = n_mae / epochs
+                    mouse['metrics']['mse'] = sqrt(n_mse / epochs)
                 except Exception as details:
                     if self.verbosity > 0:
                         msg = '{} Encountered an exception.'
                         print(self._prefix_, msg.format(mouse['name']))
                         traceback.print_exception(details)
                 finally:
-                    mouse['candles'] = mouse['nn_gates'](inputs)[0]
-                    mouse['candles'] = vstack(mouse['candles'].split(1))
-                    mouse['candles'] = (mouse['candles'] * 3e3).clone()
+                    mouse['candles'] = mouse['nn_gates'](cheese)
         verbosity_check = [
             self.verbosity > 2,
             self.verbosity == 2 and study is False
             ]
         if any(verbosity_check):
-            lr = mouse['warm_lr'].get_last_lr()[0]
-            confidence = mouse['metrics']['confidence']
+            lr = self._cauldron_['warm_lr'].get_last_lr()[0]
             acc = mouse['metrics']['acc']
             mae = mouse['metrics']['mae']
             mse = mouse['metrics']['mse']
             msg = f'{self._prefix_} {mouse["name"]} ' + '{}: {}'
             print(msg.format('Learning Rate', lr))
-            print(msg.format('Confidence', confidence))
             print(msg.format('Accuracy', acc))
             print(msg.format('Mean Absolute Error', mae))
             print(msg.format('Mean Squared Error', mse))
-            print(msg.format('Target', round(mouse['candles'][-1].item(), 2)))
 
-    def research(self, symbol, candles, timeout=1):
+    def research(self, symbol, candles, timeout=13):
         """Moirai research session, fully stocked with cheese and drinks."""
         if not all((
             len(candles.keys()) == self._n_features_,
             len(candles.index) >= self._min_size_
             )): return False
         self.__manage_state__(call_type=0)
+        Atropos = self._Atropos_
         Clotho = self._Clotho_
         Lachesis = self._Lachesis_
-        Atropos = self._Atropos_
         time_step = self.__time_step__
         batch = self._batch_size_
         prefix = self._prefix_
         t_args = self._tensor_args_
-        percent_change = icy.percent_change
+        hstack = torch.hstack
+        vstack = torch.vstack
         tensor = torch.tensor
-        c_targets = candles['open'].to_numpy()
-        l_targets = candles['volume'].to_numpy()
-        a_targets = candles['close'].to_numpy()
+        a_targets = candles['chg_close'].to_numpy()
+        c_targets = candles['chg_open'].to_numpy()
+        l_targets = candles['chg_volume'].to_numpy()
         timestamps = len(candles.index)
         candles_index = range(timestamps - batch)
         candles = candles.to_numpy()
         t_args['requires_grad'] = True
-        Clotho['data_inputs'] = tensor(candles[:-batch], **t_args)
-        Lachesis['data_inputs'] = tensor(candles[:-batch], **t_args)
-        Atropos['data_inputs'] = tensor(candles[:-batch], **t_args)
+        Atropos['fresh_cheese'] = tensor(candles[:-batch], **t_args)
+        Clotho['fresh_cheese'] = tensor(candles[:-batch], **t_args)
+        Lachesis['fresh_cheese'] = tensor(candles[:-batch], **t_args)
         t_args['requires_grad'] = False
-        Clotho['data_final'] = tensor(candles[-batch:], **t_args)
-        Lachesis['data_final'] = tensor(candles[-batch:], **t_args)
-        Atropos['data_final'] = tensor(candles[-batch:], **t_args)
-        Clotho['data_targets'] = tensor(c_targets[batch:], **t_args)
-        Lachesis['data_targets'] = tensor(l_targets[batch:], **t_args)
-        Atropos['data_targets'] = tensor(a_targets[batch:], **t_args)
+        Atropos['final_cheese'] = tensor(candles[-batch:], **t_args)
+        Clotho['final_cheese'] = tensor(candles[-batch:], **t_args)
+        Lachesis['final_cheese'] = tensor(candles[-batch:], **t_args)
+        Atropos['aged_cheese'] = tensor(a_targets[batch:], **t_args)
+        Clotho['aged_cheese'] = tensor(c_targets[batch:], **t_args)
+        Lachesis['aged_cheese'] = tensor(l_targets[batch:], **t_args)
         moirai = [Atropos, Clotho, Lachesis]
         target_accuracy = 97.0
         epochs = 0
         final_accuracy = 0
         volume_accuracy = 0
+        cauldron = self._cauldron_
         while final_accuracy < target_accuracy:
             if epochs == timeout: break
-            inputs = [[],[],[]]
-            targets = [[],[],[]]
+            fresh = [[],[],[]]
+            aged = [[],[],[]]
+            batch_close = list()
+            batch_open = list()
+            batch_volume = list()
             batch_count = 0
             final_accuracy = 0
             volume_accuracy = 0
+            cauldron['coated_candles'] = None
+            cauldron['metrics']['acc'] = [0, 0]
+            cauldron['metrics']['loss'] = 0
+            cauldron['metrics']['mae'] = 0
+            cauldron['metrics']['mse'] = 0
             for mouse in moirai:
-                mouse['metrics']['confidence'] = 0
-                mouse['metrics']['acc'] = 0
+                mouse['metrics']['acc'] = [0, 0]
+                mouse['metrics']['loss'] = 0
                 mouse['metrics']['mae'] = 0
                 mouse['metrics']['mse'] = 0
             for i in candles_index:
                 if batch_count == batch:
                     for m_i, mouse in enumerate(moirai):
-                        time_step(mouse, inputs[m_i], targets[m_i], study=True)
+                        cheese = (fresh[m_i], aged[m_i])
+                        time_step(mouse, cheese, study=True)
+                    cauldron['optim'].zero_grad()
+                    wicks = [m['candles'] for m in moirai]
+                    batch_cheese = hstack([
+                        vstack(batch_close),
+                        vstack(batch_open),
+                        vstack(batch_volume),
+                        ])
+                    aged_cheese = hstack([
+                        vstack(aged[0]),
+                        vstack(aged[1]),
+                        vstack(aged[2]),
+                        ])
+                    targets = batch_cheese + (batch_cheese * aged_cheese)
+                    coated_wicks = hstack(cauldron['wax'](wicks))
+                    coated = batch_cheese + (batch_cheese * coated_wicks)
+                    loss = cauldron['loss_fn'](coated, targets)
+                    loss.backward()
+                    cauldron['optim'].step()
+                    cauldron['warm_lr'].step()
+                    difference = (coated - targets)
+                    correct = difference[difference == 0].shape[0]
+                    cauldron['metrics']['acc'][0] += int(correct)
+                    cauldron['metrics']['acc'][1] += int(targets.shape[0])
+                    cauldron['metrics']['loss'] += loss.item()
+                    cauldron['metrics']['mae'] += difference.abs().sum()
+                    cauldron['metrics']['mse'] += (difference ** 2).sum()
+                    cauldron['coated_candles'] = coated.clone()
                     if self.verbosity > 2:
-                        print('\n')
-                    inputs = [[],[],[]]
-                    targets = [[],[],[]]
+                        print('batch_cheese\n', batch_cheese)
+                        print('aged_cheese\n', aged_cheese)
+                        print('targets\n', targets)
+                        print('coated_wicks\n', coated_wicks)
+                        print('wax_candles\n', wax_candles)
+                        print('')
+                    fresh = [[],[],[]]
+                    aged = [[],[],[]]
+                    batch_close = list()
+                    batch_open = list()
+                    batch_volume = list()
                     batch_count = 0
                 else:
                     for m_i, mouse in enumerate(moirai):
-                        inputs[m_i].append(mouse['data_inputs'][i].clone())
-                        targets[m_i].append(mouse['data_targets'][i].clone())
+                        fresh[m_i].append(mouse['fresh_cheese'][i].clone())
+                        aged[m_i].append(mouse['aged_cheese'][i].clone())
+                    batch_close.append(mouse['fresh_cheese'][i][3].clone())
+                    batch_open.append(mouse['fresh_cheese'][i][0].clone())
+                    batch_volume.append(mouse['fresh_cheese'][i][4].clone())
                     batch_count += 1
-            for mouse in moirai:
-                time_step(
-                    mouse,
-                    mouse['data_final'].clone(),
-                    None,
-                    epochs=timestamps
-                    )
-                name = mouse['name']
-                accuracy = mouse['metrics']['acc']
-                if name == 'Lachesis':
-                    volume_accuracy += accuracy
-                else:
-                    final_accuracy += accuracy
-                if self.verbosity > 1:
-                    print(prefix, 'Target:', mouse['data_targets'][-1], '\n')
-            if epochs != 0:
-                final_accuracy = float(final_accuracy)
-                if final_accuracy != 0:
-                    final_accuracy = final_accuracy / epochs
-                volume_accuracy = float(volume_accuracy)
-                if volume_accuracy != 0 != epochs:
-                    volume_accuracy = volume_accuracy / epochs
             epochs += 1
+            cov = (3, 0, 4)
+            batch_cov = [[],[],[]]
+            for m_i, mouse in enumerate(moirai):
+                time_step(mouse, mouse['final_cheese'], epochs=timestamps)
+                batch_cov[m_i] = mouse['final_cheese'][:, cov[m_i]]
+            wicks = [m['candles'] for m in moirai]
+            coated_candles = hstack(cauldron['wax'](wicks))
+            batch_cov = vstack(batch_cov).H
+            batch_final = batch_cov + (batch_cov * coated_candles)
+            cauldron['coated_candles'] = batch_final.clone()
+            cauldron['metrics']['loss'] = cauldron['metrics']['loss'] / epochs
+            cauldron['metrics']['mae'] = cauldron['metrics']['mae'] / epochs
+            cauldron['metrics']['mse'] = cauldron['metrics']['mse'] / epochs
+            n_correct = cauldron['metrics']['acc'][0]
+            n_total = cauldron['metrics']['acc'][1]
+            n_wrong = n_total - n_correct
+            cauldron_accuracy = 100 * abs(((n_wrong - n_total) / n_total))
+            accuracy_atropos = moirai[0]['metrics']['acc']
+            accuracy_clotho = moirai[1]['metrics']['acc']
+            accuracy_lachesis = moirai[2]['metrics']['acc']
+            n_correct = accuracy_atropos[0] + accuracy_clotho[0]
+            n_total = accuracy_atropos[1] + accuracy_clotho[1]
+            n_wrong = n_total - n_correct
+            final_accuracy = 100 * abs(((n_wrong - n_total) / n_total))
+            n_correct = accuracy_lachesis[0]
+            n_total = accuracy_lachesis[1]
+            n_wrong = n_total - n_correct
+            volume_accuracy = 100 * abs(((n_wrong - n_total) / n_total))
             if self.verbosity > 0:
                 msg = f'{prefix} ({epochs}) A moment of research '
                 msg += 'yielded a price / volume accuracy of {}% / {}%'
                 if self.verbosity > 1:
-                    print('\n')
+                    print('coated_candles:\n', coated_candles)
+                    print('batch_cov:\n', batch_cov)
+                    print('batch_final:\n', batch_final)
+                    print('')
                 print(msg.format(final_accuracy, volume_accuracy))
-        sealed = [mouse['candles'].detach().cpu().numpy() for mouse in moirai]
-        last_pred = float(sealed[0][-1].item())
-        last_price = float(Atropos['data_final'][-1:, 3:4].item())
-        proj_gain = percent_change(last_pred, last_price)
+        sealed = cauldron['coated_candles'].detach().cpu().numpy()
+        last_pred = float(cauldron['coated_candles'][-1][0].item())
+        last_price = float(batch_cov[-1][0].item())
+        proj_gain = float(((last_pred - last_price) / last_price) * 100)
         self.predictions[symbol] = {
+            'cauldron loss': float(cauldron['metrics']['loss']),
+            'cauldron_accuracy': round(cauldron_accuracy, 2),
             'final_accuracy': round(final_accuracy, 2),
             'volume_accuracy': round(volume_accuracy, 2),
             'sealed_candles': sealed,
             'last_price': round(last_price, 2),
-            'batch_pred': round(sealed[0][-1].item(), 5),
+            'batch_pred': round(last_pred, 5),
             'num_epochs': epochs,
             'metrics': dict(mouse['metrics']),
             'proj_gain': proj_gain,
@@ -396,12 +418,6 @@ class ThreeBlindMice(Module):
                 elif k == 'sealed_candles':
                     if self.verbosity > 1:
                         print(f'{prefix}     {k}: {v}')
-                elif k == 'metrics':
-                    for m_k, m_v in v.items():
-                        if m_k in ['acc', 'confidence']:
-                            print(f'{prefix}     {m_k}: {m_v}%')
-                        else:
-                            print(f'{prefix}     {m_k}: {m_v}')
                 else:
                     print(f'{prefix}     {k}: {v}')
             print('')

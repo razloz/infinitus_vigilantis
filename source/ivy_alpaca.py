@@ -1,11 +1,9 @@
 """Alpaca Markets Manager for the Infinitus Vigilantis application."""
-
 import requests
 import json
 import os
 import time
 from requests.exceptions import RequestException
-
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'

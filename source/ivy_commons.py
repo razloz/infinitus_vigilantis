@@ -1,5 +1,4 @@
 """Common functions used by the Infinitus Vigilantis application"""
-
 import traceback
 from time import time
 from time import strptime
@@ -21,7 +20,6 @@ from pandas import DataFrame
 from dateutil import parser as date_parser
 from collections import Counter
 from math import isclose
-
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -225,6 +223,7 @@ def get_indicators(df, index_key='time'):
     l = df['low'].tolist()
     c = df['close'].tolist()
     v = df['volume'].tolist()
+    # start loop
     for i in df_range:
         # trend detection and tracking
         if i >= 2:
@@ -290,6 +289,12 @@ def get_indicators(df, index_key='time'):
     for dataframe in dfs:
         for c, s in dataframe.iteritems():
             indicators[c] = s.tolist()
+    # percent change
+    rolling_diff = lambda s: ((s[1:].values - s[:-1]).values / s[:-1].values)
+    indicators['chg_cdl'] = ((df['close'] - df['open']) / df['open']).tolist()
+    indicators['chg_open'] = [0] + rolling_diff(df['open']).tolist()
+    indicators['chg_close'] = [0] + rolling_diff(df['close']).tolist()
+    indicators['chg_volume'] = [0] + rolling_diff(df['volume']).tolist()
     return indicators.copy()
 
 

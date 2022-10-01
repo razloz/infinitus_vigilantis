@@ -1,5 +1,4 @@
 """Graphical User Interface for the Infinitus Vigilantis application."""
-
 import gi
 import source.ivy_cartography as charting
 gi.require_version('Gtk', '3.0')
@@ -11,12 +10,9 @@ from source.ivy_candles import composite_index
 from os.path import abspath
 from os.path import exists
 from os.path import getmtime
-
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2020, Daniel Ward'
+__copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2020.04'
-__codename__ = 'compass'
 
 
 class MainWindow(Gtk.Window):

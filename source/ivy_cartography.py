@@ -1,5 +1,4 @@
 """Charting routines for the Infinitus Vigilantis application."""
-
 import pickle
 import pandas
 import matplotlib.pyplot as plt
@@ -14,7 +13,6 @@ from source.ivy_candles import Candelabrum
 from os import path
 from time import sleep
 from time import time
-
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
