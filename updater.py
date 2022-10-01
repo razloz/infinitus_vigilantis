@@ -1,10 +1,9 @@
 #!./.env/bin/python3
 """Launcher for the IVy Updater."""
-
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2022.09'
+__version__ = '2022.10'
 __codename__ = 'moirai'
 
 
