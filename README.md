@@ -16,6 +16,7 @@ Dependencies:
 Usage:
   - with IVY as an absolute path to infinitus vigilantis folder
   - $IVY/updater.py --build
+  - $IVY/updater.py --clean
   - $IVY/updater.py --research
   - $IVY/cartographer.py --all --size 160 --start_date 2020-01-01
 
