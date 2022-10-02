@@ -87,11 +87,10 @@ class ThreeBlindMice(nn.Module):
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self._device_ = torch.device(self._device_type_)
-        self._min_size_ = min_size
+        self._min_size_ = int(min_size)
         self._prefix_ = 'Moirai:'
         self._state_path_ = abspath('./rnn/moirai.state')
-        self._price_range_ = range(int(3e3))
-        self._volume_range_ = range(int(1e9))
+        self._tolerance_ = 1.618033988749894e-3
         self.verbosity = int(verbosity)
         batch_size = self._batch_size_ = 8
         n_features = self._n_features_ = int(n_features)
@@ -145,7 +144,6 @@ class ThreeBlindMice(nn.Module):
             cauldron['optim'],
             cauldron['size'],
             )
-        self._tensor_args_['requires_grad'] = True
         # Atropos the mouse, sister of Clotho and Lachesis.
         Atropos = self._Atropos_ = nn.ParameterDict()
         Atropos['name'] = 'Atropos'
@@ -193,6 +191,7 @@ class ThreeBlindMice(nn.Module):
            Let Atropos seal the candles"""
         vstack = torch.vstack
         if study is True:
+            threshold = self._tolerance_
             fresh = vstack(cheese[0])
             aged = vstack(cheese[1])
             batch_size = fresh.shape[0]
@@ -203,7 +202,8 @@ class ThreeBlindMice(nn.Module):
             mouse['metrics']['loss'] = int(loss.item())
             mouse['optim'].step()
             difference = (mouse['candles'] - aged)
-            correct = difference[difference == 0].shape[0]
+            correct = difference[difference >= -threshold]
+            correct = correct[correct <= threshold].shape[0]
             mouse['metrics']['acc'][0] += int(correct)
             mouse['metrics']['acc'][1] += int(batch_size)
             mouse['metrics']['mae'] += difference.abs().sum()
@@ -239,7 +239,7 @@ class ThreeBlindMice(nn.Module):
             print(msg.format('Mean Absolute Error', mae))
             print(msg.format('Mean Squared Error', mse))
 
-    def research(self, symbol, candles, timeout=13):
+    def research(self, symbol, candles, timeout=8):
         """Moirai research session, fully stocked with cheese and drinks."""
         if not all((
             len(candles.keys()) == self._n_features_,
@@ -253,36 +253,46 @@ class ThreeBlindMice(nn.Module):
         batch = self._batch_size_
         prefix = self._prefix_
         t_args = self._tensor_args_
+        tolerance = self._tolerance_
         hstack = torch.hstack
         vstack = torch.vstack
         tensor = torch.tensor
+        candles = candles[self._min_size_:]
         a_targets = candles['chg_close'].to_numpy()
+        a_values = candles['close'].to_numpy()
         c_targets = candles['chg_open'].to_numpy()
-        l_targets = candles['chg_volume'].to_numpy()
+        c_values = candles['open'].to_numpy()
+        l_targets = candles['chg_wema'].to_numpy()
+        l_values = candles['price_wema'].to_numpy()
         timestamps = len(candles.index)
         candles_index = range(timestamps - batch)
         candles = candles.to_numpy()
-        t_args['requires_grad'] = True
-        Atropos['fresh_cheese'] = tensor(candles[:-batch], **t_args)
-        Clotho['fresh_cheese'] = tensor(candles[:-batch], **t_args)
-        Lachesis['fresh_cheese'] = tensor(candles[:-batch], **t_args)
-        t_args['requires_grad'] = False
-        Atropos['final_cheese'] = tensor(candles[-batch:], **t_args)
-        Clotho['final_cheese'] = tensor(candles[-batch:], **t_args)
-        Lachesis['final_cheese'] = tensor(candles[-batch:], **t_args)
-        Atropos['aged_cheese'] = tensor(a_targets[batch:], **t_args)
-        Clotho['aged_cheese'] = tensor(c_targets[batch:], **t_args)
-        Lachesis['aged_cheese'] = tensor(l_targets[batch:], **t_args)
         moirai = [Atropos, Clotho, Lachesis]
-        target_accuracy = 97.0
+        for mouse in moirai:
+            if mouse['name'] == 'Atropos':
+                m_values = a_values
+                m_targets = a_targets
+            elif mouse['name'] == 'Clotho':
+                m_values = c_values
+                m_targets = c_targets
+            elif mouse['name'] == 'Lachesis':
+                m_values = l_values
+                m_targets = l_targets
+            mouse['aged_cheese'] = tensor(m_targets[batch:], **t_args)
+            mouse['raw_cheese'] = tensor(m_values[:-batch], **t_args)
+            mouse['raw_final'] = tensor(m_values[-batch:], **t_args)
+            mouse['final_cheese'] = tensor(candles[-batch:], **t_args)
+            mouse['fresh_cheese'] = tensor(candles[:-batch], **t_args)
+            mouse['fresh_cheese'].requires_grad_(True)
+        target_accuracy = 90.0
         epochs = 0
         final_accuracy = 0
-        volume_accuracy = 0
         cauldron = self._cauldron_
         while final_accuracy < target_accuracy:
             if epochs == timeout: break
             fresh = [[],[],[]]
             aged = [[],[],[]]
+            raw = [[],[],[]]
             batch_close = list()
             batch_open = list()
             batch_volume = list()
@@ -306,25 +316,19 @@ class ThreeBlindMice(nn.Module):
                         time_step(mouse, cheese, study=True)
                     cauldron['optim'].zero_grad()
                     wicks = [m['candles'] for m in moirai]
-                    batch_cheese = hstack([
-                        vstack(batch_close),
-                        vstack(batch_open),
-                        vstack(batch_volume),
-                        ])
-                    aged_cheese = hstack([
-                        vstack(aged[0]),
-                        vstack(aged[1]),
-                        vstack(aged[2]),
-                        ])
-                    targets = batch_cheese + (batch_cheese * aged_cheese)
+                    raw_cheese = hstack([vstack(raw[bi]) for bi in range(3)])
+                    aged_cheese = hstack([vstack(aged[bi]) for bi in range(3)])
                     coated_wicks = hstack(cauldron['wax'](wicks))
-                    coated = batch_cheese + (batch_cheese * coated_wicks)
-                    loss = cauldron['loss_fn'](coated, targets)
+                    loss = cauldron['loss_fn'](coated_wicks, aged_cheese)
                     loss.backward()
                     cauldron['optim'].step()
                     cauldron['warm_lr'].step()
+                    coated = raw_cheese + (raw_cheese * coated_wicks)
+                    targets = raw_cheese + (raw_cheese * aged_cheese)
                     difference = (coated - targets)
-                    correct = difference[difference == 0].shape[0]
+                    threshold = raw_cheese.max().item() * tolerance
+                    correct = difference[difference >= -threshold]
+                    correct = correct[correct <= threshold].shape[0]
                     cauldron['metrics']['acc'][0] += int(correct)
                     cauldron['metrics']['acc'][1] += int(targets.shape[0])
                     cauldron['metrics']['loss'] += loss.item()
@@ -332,78 +336,76 @@ class ThreeBlindMice(nn.Module):
                     cauldron['metrics']['mse'] += (difference ** 2).sum()
                     cauldron['coated_candles'] = coated.clone()
                     if self.verbosity > 2:
-                        print('batch_cheese\n', batch_cheese)
+                        print('raw_cheese\n', raw_cheese)
                         print('aged_cheese\n', aged_cheese)
-                        print('targets\n', targets)
                         print('coated_wicks\n', coated_wicks)
-                        print('wax_candles\n', wax_candles)
-                        print('')
+                        print('coated\n', coated)
+                        print('targets\n', targets)
+                        print('threshold', threshold)
+                        print('correct\n', correct)
+                        print('batch total\n', targets.shape[0])
                     fresh = [[],[],[]]
                     aged = [[],[],[]]
-                    batch_close = list()
-                    batch_open = list()
-                    batch_volume = list()
+                    raw = [[],[],[]]
                     batch_count = 0
                 else:
                     for m_i, mouse in enumerate(moirai):
                         fresh[m_i].append(mouse['fresh_cheese'][i].clone())
                         aged[m_i].append(mouse['aged_cheese'][i].clone())
-                    batch_close.append(mouse['fresh_cheese'][i][3].clone())
-                    batch_open.append(mouse['fresh_cheese'][i][0].clone())
-                    batch_volume.append(mouse['fresh_cheese'][i][4].clone())
+                        raw[m_i].append(mouse['raw_cheese'][i].clone())
                     batch_count += 1
             epochs += 1
-            cov = (3, 0, 4)
-            batch_cov = [[],[],[]]
+            raw_final = list()
             for m_i, mouse in enumerate(moirai):
                 time_step(mouse, mouse['final_cheese'], epochs=timestamps)
-                batch_cov[m_i] = mouse['final_cheese'][:, cov[m_i]]
+                raw_final.append(mouse['raw_final'])
             wicks = [m['candles'] for m in moirai]
             coated_candles = hstack(cauldron['wax'](wicks))
-            batch_cov = vstack(batch_cov).H
-            batch_final = batch_cov + (batch_cov * coated_candles)
-            cauldron['coated_candles'] = batch_final.clone()
+            raw_final = vstack([*raw_final]).H
+            coated_candles = raw_final + (raw_final * coated_candles)
+            cauldron['coated_candles'] = coated_candles.clone()
             cauldron['metrics']['loss'] = cauldron['metrics']['loss'] / epochs
             cauldron['metrics']['mae'] = cauldron['metrics']['mae'] / epochs
+            cauldron['metrics']['mae'] = cauldron['metrics']['mae'].item()
             cauldron['metrics']['mse'] = cauldron['metrics']['mse'] / epochs
+            cauldron['metrics']['mse'] = cauldron['metrics']['mse'].item()
             n_correct = cauldron['metrics']['acc'][0]
             n_total = cauldron['metrics']['acc'][1]
             n_wrong = n_total - n_correct
-            cauldron_accuracy = 100 * abs(((n_wrong - n_total) / n_total))
-            accuracy_atropos = moirai[0]['metrics']['acc']
-            accuracy_clotho = moirai[1]['metrics']['acc']
-            accuracy_lachesis = moirai[2]['metrics']['acc']
-            n_correct = accuracy_atropos[0] + accuracy_clotho[0]
-            n_total = accuracy_atropos[1] + accuracy_clotho[1]
+            cauldron_accuracy = 100 * abs((n_wrong - n_total) / n_total)
+            cauldron_accuracy = round(cauldron_accuracy, 3)
+            n_correct = 0
+            n_total = 0
+            for mouse in moirai:
+                n_correct += mouse['metrics']['acc'][0]
+                n_total += mouse['metrics']['acc'][1]
             n_wrong = n_total - n_correct
-            final_accuracy = 100 * abs(((n_wrong - n_total) / n_total))
-            n_correct = accuracy_lachesis[0]
-            n_total = accuracy_lachesis[1]
-            n_wrong = n_total - n_correct
-            volume_accuracy = 100 * abs(((n_wrong - n_total) / n_total))
+            final_accuracy = 100 * abs((n_wrong - n_total) / n_total)
+            final_accuracy = round(final_accuracy, 3)
             if self.verbosity > 0:
-                msg = f'{prefix} ({epochs}) A moment of research '
-                msg += 'yielded a price / volume accuracy of {}% / {}%'
+                print(f'{prefix} ({epochs}) A moment of research yielded;')
+                print(f'    a cauldron accuracy of {cauldron_accuracy}%')
+                print(f'    a mouse accuracy of {final_accuracy}%')
                 if self.verbosity > 1:
                     print('coated_candles:\n', coated_candles)
-                    print('batch_cov:\n', batch_cov)
-                    print('batch_final:\n', batch_final)
+                    print('raw_final:\n', raw_final)
+                    print('metrics:')
+                    for metric_k, metric_v in cauldron['metrics'].items():
+                        print(f'    {metric_k}:', metric_v)
                     print('')
-                print(msg.format(final_accuracy, volume_accuracy))
         sealed = cauldron['coated_candles'].detach().cpu().numpy()
         last_pred = float(cauldron['coated_candles'][-1][0].item())
-        last_price = float(batch_cov[-1][0].item())
+        last_price = float(Atropos['raw_final'][-1].item())
         proj_gain = float(((last_pred - last_price) / last_price) * 100)
         self.predictions[symbol] = {
             'cauldron loss': float(cauldron['metrics']['loss']),
-            'cauldron_accuracy': round(cauldron_accuracy, 2),
-            'final_accuracy': round(final_accuracy, 2),
-            'volume_accuracy': round(volume_accuracy, 2),
+            'cauldron_accuracy': cauldron_accuracy,
+            'mouse_accuracy': final_accuracy,
             'sealed_candles': sealed,
             'last_price': round(last_price, 2),
-            'batch_pred': round(last_pred, 5),
+            'batch_pred': round(last_pred, 2),
             'num_epochs': epochs,
-            'metrics': dict(mouse['metrics']),
+            'metrics': dict(cauldron['metrics']),
             'proj_gain': proj_gain,
             'proj_time': time.time()
             }
@@ -413,7 +415,7 @@ class ThreeBlindMice(nn.Module):
             print(prefix, msg.format(epochs, epoch_str, final_accuracy))
             print(f'{prefix} {symbol} Metrics;')
             for k, v in self.predictions[symbol].items():
-                if k in ['final_accuracy', 'volume_accuracy']:
+                if k in ['cauldron_accuracy', 'final_accuracy']:
                     print(f'{prefix}     {k}: {v}%')
                 elif k == 'sealed_candles':
                     if self.verbosity > 1:
@@ -421,10 +423,5 @@ class ThreeBlindMice(nn.Module):
                 else:
                     print(f'{prefix}     {k}: {v}')
             print('')
-        data_labels = ['data_inputs', 'data_targets', 'data_final']
-        for label in data_labels:
-            Clotho[label] = None
-            Lachesis[label] = None
-            Atropos[label] = None
         self.__manage_state__(call_type=1)
         return True

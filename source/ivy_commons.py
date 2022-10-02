@@ -9,7 +9,7 @@ from time import gmtime
 from statistics import stdev
 from statistics import mean
 from datetime import datetime
-from numpy import busday_count
+from numpy import busday_count, errstate
 from datetime import datetime
 from threading import Thread, Lock
 from queue import Queue
@@ -59,11 +59,11 @@ def ivy_dispatcher(func, ftype='thread', args=None,
 
 def safe_div(a, b):
     """Will it divide?"""
-    try:
-        c = a / b
-    except ZeroDivisionError:
-        c = 0
-    finally:
+    with errstate(divide='ignore', invalid='ignore'):
+        try:
+            c = a / b
+        except Exception as _:
+            return b
         return c
 
 
@@ -290,11 +290,15 @@ def get_indicators(df, index_key='time'):
         for c, s in dataframe.iteritems():
             indicators[c] = s.tolist()
     # percent change
-    rolling_diff = lambda s: ((s[1:].values - s[:-1]).values / s[:-1].values)
-    indicators['chg_cdl'] = ((df['close'] - df['open']) / df['open']).tolist()
-    indicators['chg_open'] = [0] + rolling_diff(df['open']).tolist()
-    indicators['chg_close'] = [0] + rolling_diff(df['close']).tolist()
-    indicators['chg_volume'] = [0] + rolling_diff(df['volume']).tolist()
+    rolling_diff = lambda s: safe_div((s[1:] - s[:-1]), s[:-1])
+    dfc = df['close'].values
+    dfo = df['open'].values
+    dfw = indicators['price_wema'].values
+    indicators['chg_cdl'] = safe_div((dfc - dfo), dfo).tolist()
+    indicators['chg_close'] = [0] + rolling_diff(dfc).tolist()
+    indicators['chg_open'] = [0] + rolling_diff(dfo).tolist()
+    indicators['chg_wema'] = [0] + rolling_diff(dfw).tolist()
+    indicators.fillna(0, inplace=True)
     return indicators.copy()
 
 
