@@ -131,6 +131,7 @@ class ThreeBlindMice(nn.Module):
         # Setup a cauldron for our candles
         cauldron = self._cauldron_ = nn.ParameterDict()
         cauldron['coated_candles'] = None
+        cauldron['sealed_candles'] = list()
         cauldron['size'] = int(batch_size * 3)
         cauldron['wax'] = Cauldron(cauldron['size'], batch_size, self._device_)
         cauldron['loss_fn'] = nn.HuberLoss(reduction='sum', delta=0.97)
@@ -211,8 +212,6 @@ class ThreeBlindMice(nn.Module):
         else:
             with torch.no_grad():
                 try:
-                    n_correct = mouse['metrics']['acc'][0]
-                    n_total = mouse['metrics']['acc'][1]
                     n_mae = mouse['metrics']['mae']
                     n_mse = mouse['metrics']['mse']
                     mouse['metrics']['mae'] = n_mae / epochs
@@ -287,23 +286,22 @@ class ThreeBlindMice(nn.Module):
         target_accuracy = 90.0
         epochs = 0
         final_accuracy = 0
+        mouse_accuracy = 0
         cauldron = self._cauldron_
+        cauldron['metrics']['acc'] = [0, 0]
+        cauldron['metrics']['loss'] = 0
+        cauldron['metrics']['mae'] = 0
+        cauldron['metrics']['mse'] = 0
         while final_accuracy < target_accuracy:
             if epochs == timeout: break
             fresh = [[],[],[]]
             aged = [[],[],[]]
             raw = [[],[],[]]
-            batch_close = list()
-            batch_open = list()
-            batch_volume = list()
             batch_count = 0
             final_accuracy = 0
-            volume_accuracy = 0
+            mouse_accuracy = 0
             cauldron['coated_candles'] = None
-            cauldron['metrics']['acc'] = [0, 0]
-            cauldron['metrics']['loss'] = 0
-            cauldron['metrics']['mae'] = 0
-            cauldron['metrics']['mse'] = 0
+            cauldron['sealed_candles'] = list()
             for mouse in moirai:
                 mouse['metrics']['acc'] = [0, 0]
                 mouse['metrics']['loss'] = 0
@@ -326,15 +324,17 @@ class ThreeBlindMice(nn.Module):
                     coated = raw_cheese + (raw_cheese * coated_wicks)
                     targets = raw_cheese + (raw_cheese * aged_cheese)
                     difference = (coated - targets)
-                    threshold = raw_cheese.max().item() * tolerance
+                    threshold = float(raw_cheese.max().item() * tolerance)
                     correct = difference[difference >= -threshold]
                     correct = correct[correct <= threshold].shape[0]
+                    cauldron_size = difference.shape[0] * difference.shape[1]
                     cauldron['metrics']['acc'][0] += int(correct)
-                    cauldron['metrics']['acc'][1] += int(targets.shape[0])
+                    cauldron['metrics']['acc'][1] += int(cauldron_size)
                     cauldron['metrics']['loss'] += loss.item()
                     cauldron['metrics']['mae'] += difference.abs().sum()
                     cauldron['metrics']['mse'] += (difference ** 2).sum()
                     cauldron['coated_candles'] = coated.clone()
+                    cauldron['sealed_candles'].append(coated.clone())
                     if self.verbosity > 2:
                         print('raw_cheese\n', raw_cheese)
                         print('aged_cheese\n', aged_cheese)
@@ -364,6 +364,7 @@ class ThreeBlindMice(nn.Module):
             raw_final = vstack([*raw_final]).H
             coated_candles = raw_final + (raw_final * coated_candles)
             cauldron['coated_candles'] = coated_candles.clone()
+            cauldron['sealed_candles'].append(coated_candles.clone())
             cauldron['metrics']['loss'] = cauldron['metrics']['loss'] / epochs
             cauldron['metrics']['mae'] = cauldron['metrics']['mae'] / epochs
             cauldron['metrics']['mae'] = cauldron['metrics']['mae'].item()
@@ -372,20 +373,20 @@ class ThreeBlindMice(nn.Module):
             n_correct = cauldron['metrics']['acc'][0]
             n_total = cauldron['metrics']['acc'][1]
             n_wrong = n_total - n_correct
-            cauldron_accuracy = 100 * abs((n_wrong - n_total) / n_total)
-            cauldron_accuracy = round(cauldron_accuracy, 3)
+            final_accuracy = 100 * abs((n_wrong - n_total) / n_total)
+            final_accuracy = round(final_accuracy, 3)
             n_correct = 0
             n_total = 0
             for mouse in moirai:
                 n_correct += mouse['metrics']['acc'][0]
                 n_total += mouse['metrics']['acc'][1]
             n_wrong = n_total - n_correct
-            final_accuracy = 100 * abs((n_wrong - n_total) / n_total)
-            final_accuracy = round(final_accuracy, 3)
+            mouse_accuracy = 100 * abs((n_wrong - n_total) / n_total)
+            mouse_accuracy = round(mouse_accuracy, 3)
             if self.verbosity > 0:
                 print(f'{prefix} ({epochs}) A moment of research yielded;')
-                print(f'    a cauldron accuracy of {cauldron_accuracy}%')
-                print(f'    a mouse accuracy of {final_accuracy}%')
+                print(f'    a cauldron accuracy of {final_accuracy}%')
+                print(f'    a mouse accuracy of {mouse_accuracy}%')
                 if self.verbosity > 1:
                     print('coated_candles:\n', coated_candles)
                     print('raw_final:\n', raw_final)
@@ -393,14 +394,16 @@ class ThreeBlindMice(nn.Module):
                     for metric_k, metric_v in cauldron['metrics'].items():
                         print(f'    {metric_k}:', metric_v)
                     print('')
-        sealed = cauldron['coated_candles'].detach().cpu().numpy()
+        coated = cauldron['coated_candles'].detach().cpu().numpy()
+        sealed = vstack(cauldron['sealed_candles']).detach().cpu().numpy()
         last_pred = float(cauldron['coated_candles'][-1][0].item())
         last_price = float(Atropos['raw_final'][-1].item())
         proj_gain = float(((last_pred - last_price) / last_price) * 100)
         self.predictions[symbol] = {
             'cauldron loss': float(cauldron['metrics']['loss']),
-            'cauldron_accuracy': cauldron_accuracy,
-            'mouse_accuracy': final_accuracy,
+            'cauldron_accuracy': final_accuracy,
+            'mouse_accuracy': mouse_accuracy,
+            'coated_candles': coated,
             'sealed_candles': sealed,
             'last_price': round(last_price, 2),
             'batch_pred': round(last_pred, 2),
@@ -417,9 +420,10 @@ class ThreeBlindMice(nn.Module):
             for k, v in self.predictions[symbol].items():
                 if k in ['cauldron_accuracy', 'final_accuracy']:
                     print(f'{prefix}     {k}: {v}%')
-                elif k == 'sealed_candles':
+                elif k in ['sealed_candles', 'coated_candles']:
                     if self.verbosity > 1:
                         print(f'{prefix}     {k}: {v}')
+                        print(f'{prefix}     {k} shape: {v.shape}')
                 else:
                     print(f'{prefix}     {k}: {v}')
             print('')
