@@ -8,7 +8,6 @@ from time import localtime
 from time import gmtime
 from statistics import stdev
 from statistics import mean
-from datetime import datetime
 from numpy import busday_count, errstate
 from datetime import datetime
 from threading import Thread, Lock

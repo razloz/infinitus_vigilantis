@@ -6,13 +6,8 @@ import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as patches
-from source.ivy_commons import ivy_dispatcher
-from source.ivy_commons import get_pivot_points as PivotPoints
-from source.ivy_candles import composite_index
-from source.ivy_candles import Candelabrum
 from os import path
-from time import sleep
-from time import time
+from time import sleep, time
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -20,27 +15,67 @@ plt.style.use('dark_background')
 verbose = False
 
 
-def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
-                chart_path='./charts/active.png', *ignore):
+def cartography(symbol, dataframe, chart_path=None, cheese=None,
+                chart_size=0, adj='1D', padding=90):
     """Charting for IVy candles."""
     global plt
     plt.close('all')
+    if not chart_path: chart_path = './charts/active.png'
     if verbose: print(f'Cartography: creating chart for {symbol}...')
-    ts_lbls = [x.strftime('%Y-%m-%d %H:%M') for x in dataframe.index.tolist()]
-    data_len = len(ts_lbls)
-    data_range = range(data_len)
     cdl_open = dataframe['open'].tolist()
     cdl_high = dataframe['high'].tolist()
     cdl_low = dataframe['low'].tolist()
     cdl_close = dataframe['close'].tolist()
     cdl_vol = dataframe['volume'].tolist()
-    cdl_wema = dataframe['money_wema'].tolist()
-    cdl_mid = dataframe['money_mid'].tolist()
-    cdl_dh = dataframe['money_dh'].tolist()
-    cdl_dl = dataframe['money_dl'].tolist()
+    cdl_wema = dataframe['price_wema'].tolist()
+    cdl_mid = dataframe['price_mid'].tolist()
+    cdl_dh = dataframe['price_dh'].tolist()
+    cdl_dl = dataframe['price_dl'].tolist()
     vol_wema = dataframe['volume_wema'].tolist()
     vol_mid = dataframe['volume_mid'].tolist()
     vol_dh = dataframe['volume_dh'].tolist()
+    cheese_close = None
+    cheese_open = None
+    cheese_wema = None
+    moirai_metrics = 'Moirai Metrics;\n'
+    if cheese:
+        coated_len = cheese['coated_candles'].shape[0]
+        padding = [0 for _ in range(padding)]
+        cheese_close = padding + cheese['sealed_candles'][:, 0].tolist()
+        cheese_open = padding + cheese['sealed_candles'][:, 1].tolist()
+        cheese_wema = padding + cheese['sealed_candles'][:, 2].tolist()
+        for c_k, c_v in cheese.items():
+            if c_k in ['coated_candles', 'sealed_candles']:
+                continue
+            elif c_k in ['cauldron_accuracy', 'mouse_accuracy']:
+                moirai_metrics += f'{c_k}: {c_v}%\n'
+            else:
+                moirai_metrics += f'{c_k}: {c_v}\n'
+    moirai_metrics = moirai_metrics[:-2]
+    ts_lbls = [x_ts for x_ts in dataframe.index.tolist()]
+    if chart_size > 0:
+        ts_lbls = ts_lbls[-chart_size:]
+        cdl_open = cdl_open[-chart_size:]
+        cdl_high = cdl_high[-chart_size:]
+        cdl_low = cdl_low[-chart_size:]
+        cdl_close = cdl_close[-chart_size:]
+        cdl_vol = cdl_vol[-chart_size:]
+        cdl_wema = cdl_wema[-chart_size:]
+        cdl_mid = cdl_mid[-chart_size:]
+        cdl_dh = cdl_dh[-chart_size:]
+        cdl_dl = cdl_dl[-chart_size:]
+        vol_wema = vol_wema[-chart_size:]
+        vol_mid = vol_mid[-chart_size:]
+        vol_dh = vol_dh[-chart_size:]
+        if cheese:
+            chart_size += coated_len
+            cheese_close = cheese_close[-chart_size:]
+            cheese_open = cheese_open[-chart_size:]
+            cheese_wema = cheese_wema[-chart_size:]
+            cheese_range = range(len(cheese_close))
+            ts_lbls += [f'pred_{n_pred + 1}' for n_pred in range(coated_len)]
+    data_len = len(cdl_close)
+    data_range = range(data_len)
     fs = (19.20, 10.80)
     dpi = 100
     fig = plt.figure(figsize=fs, dpi=dpi, constrained_layout=False)
@@ -48,12 +83,20 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
     ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
-    plt.xticks(ticks=data_range, labels=ts_lbls, rotation=21, fontweight='bold')
-    plt.subplots_adjust(left=0.08, bottom=0.20, right=0.92,
-                        top=0.95, wspace=0, hspace=0.08)
+    if cheese:
+        plt.xticks(ticks=cheese_range, labels=ts_lbls,
+                   rotation=21, fontweight='bold')
+    else:
+        plt.xticks(ticks=data_range, labels=ts_lbls,
+                   rotation=21, fontweight='bold')
+    plt.subplots_adjust(left=0.08, bottom=0.3, right=0.92,
+                        top=0.95, wspace=0, hspace=0.02)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
     ax1.set_ylabel('Price', fontweight='bold')
-    ax1.set_xlim(((data_range[0] - 2), (data_range[-1] + 2)))
+    if cheese:
+        ax1.set_xlim(((cheese_range[0] - 2), (cheese_range[-1] + 2)))
+    else:
+        ax1.set_xlim(((data_range[0] - 2), (data_range[-1] + 2)))
     ylim_low = min(cdl_low)
     ylim_high = max(cdl_high)
     ax1.set_ylim((ylim_low * 0.98, ylim_high * 1.02))
@@ -76,45 +119,58 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
     wid_cdls = wid_base * 0.89
     wid_line = wid_base * 0.34
     # Pivot Points plots
-    pivots = list(pivot_points.keys())
-    if len(pivots) > 0:
-        freqs = list(pivot_points.values())
-        f_min = min(freqs)
-        f_max = max(freqs)
-        shades = dict()
-        for i in range(f_max - f_min):
-            shades[i + f_min] = round(((f_max - i) / f_max), 2)
-        pkws = {'linestyle': 'solid', 'linewidth': wid_line}
-        for price in pivots:
-            shade = 0
-            freq = pivot_points[price]
-            for f in shades:
-                if f <= freq:
-                    shade = 1 - shades[f]
-                else:
-                    break
-            pkws['color'] = (0.25, 0, 0.25, shade)
-            ax1.plot((0, data_len), (price, price), **pkws)
+    # pivots = list(pivot_points.keys())
+    # if len(pivots) > 0:
+        # freqs = list(pivot_points.values())
+        # f_min = min(freqs)
+        # f_max = max(freqs)
+        # shades = dict()
+        # for i in range(f_max - f_min):
+            # shades[i + f_min] = round(((f_max - i) / f_max), 2)
+        # pkws = {'linestyle': 'solid', 'linewidth': wid_line}
+        # for price in pivots:
+            # shade = 0
+            # freq = pivot_points[price]
+            # for f in shades:
+                # if f <= freq:
+                    # shade = 1 - shades[f]
+                # else:
+                    # break
+            # pkws['color'] = (0.25, 0, 0.25, shade)
+            # ax1.plot((0, data_len), (price, price), **pkws)
     # Per candle plots
-    signal_y = [min(cdl_dl), max(cdl_dh)]
+    #signal_y = [min(cdl_dl), max(cdl_dh)]
+    # Cheese Candles
+    if cheese:
+        for i in cheese_range:
+            x_loc = [i, i]
+            cheese_data = [cheese_close[i], cheese_open[i]]
+            if cheese_data[0] == 0 or cheese_data[1] == 0:
+                continue
+            if cheese_close[i] > cheese_open[i]:
+                cdl_color = '#f9d800'
+            else:
+                cdl_color = '#f9aa00'
+            ax1.plot(x_loc, cheese_data, color=cdl_color,
+                     linestyle='solid', linewidth=wid_cdls, alpha=0.8)
     for i in data_range:
         x_loc = [i, i]
         # Signals
-        if cheese:
-            cdl_date = timestamps[i].strftime('%Y-%m-%d %H:%M')
-            lw = 1 + data_range[-1]
-            sig_args = dict(linestyle='solid', linewidth=wid_base)
-            if cdl_date in cheese:
-                buy_sig = cheese[cdl_date]['buy']
-                sell_sig = cheese[cdl_date]['sell']
-                for sig in buy_sig:
-                    if sig[0] == symbol:
-                        sig_args['color'] = (0, 1, 0, 0.5)
-                        ax1.plot(x_loc, signal_y, **sig_args)
-                for sig in sell_sig:
-                    if sig[0] == symbol:
-                        sig_args['color'] = (1, 0, 0, 0.5)
-                        ax1.plot(x_loc, signal_y, **sig_args)
+        # if cheese:
+            # cdl_date = timestamps[i].strftime('%Y-%m-%d %H:%M')
+            # lw = 1 + data_range[-1]
+            # sig_args = dict(linestyle='solid', linewidth=wid_base)
+            # if cdl_date in cheese:
+                # buy_sig = cheese[cdl_date]['buy']
+                # sell_sig = cheese[cdl_date]['sell']
+                # for sig in buy_sig:
+                    # if sig[0] == symbol:
+                        # sig_args['color'] = (0, 1, 0, 0.5)
+                        # ax1.plot(x_loc, signal_y, **sig_args)
+                # for sig in sell_sig:
+                    # if sig[0] == symbol:
+                        # sig_args['color'] = (1, 0, 0, 0.5)
+                        # ax1.plot(x_loc, signal_y, **sig_args)
         # Candles
         wick_data = [cdl_low[i], cdl_high[i]]
         candle_data = [cdl_close[i], cdl_open[i]]
@@ -132,6 +188,10 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
                  linestyle='solid', linewidth=wid_cdls)
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
+    if cheese:
+        pkws['label'] = f'Cheese: {round(cheese_wema[-1], 2)}'
+        pkws['color'] = '#ff9b28'
+        ax1.plot(cheese_range, cheese_wema, alpha=0.8, **pkws)
     pkws['label'] = f'Money: {round(cdl_wema[-1], 2)}'
     pkws['color'] = (0.4, 0.7, 0.4, 0.8)
     ax1.plot(data_range, cdl_wema, **pkws)
@@ -151,12 +211,14 @@ def cartography(symbol, dataframe, cheese=None, adj=None, pivot_points=dict(),
     pkws['label'] = f'DevLow: {round(cdl_dl[-1], 2)}'
     ax1.plot(data_range, cdl_dl, **pkws)
     # Finalize
-    ts = ts_lbls[-1]
+    props = dict(boxstyle='round', facecolor='0.03', alpha=0.97)
+    plt.gcf().text(0.02, 0.02, moirai_metrics, fontsize=14, bbox=props)
+    ts = ts_lbls[-9]
     res = adj if adj else 'None'
     rnc = round(cdl_close[-1], 3)
     t = f'[ {rnc} ]   {symbol}  @  {ts} (resample: {res})'
     fig.suptitle(t, fontsize=18)
-    fig.legend(ncol=4, loc='lower center', fontsize='xx-large', fancybox=True)
+    fig.legend(ncol=1, loc='lower right', fontsize='xx-large', fancybox=True)
     plt.savefig(str(chart_path), dpi=dpi)
     plt.close(fig)
     if verbose: print("Cartography: chart's done!")
@@ -197,6 +259,9 @@ def cartographer(symbol=None, chart_size=100, adj_time=None,
                  daemon=False, no_signals=False,
                  start_date=None, end_date=None):
     """Charting daemon."""
+    from source.ivy_commons import ivy_dispatcher
+    from source.ivy_candles import composite_index
+    from source.ivy_candles import Candelabrum
     do_once = isinstance(symbol, str)
     valid_times = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
     if adj_time:

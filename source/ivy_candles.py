@@ -5,8 +5,10 @@ import pandas as pd
 import pickle
 import random
 import time
+import traceback
 import source.ivy_commons as icy
 import source.ivy_alpaca as api
+from source.ivy_cartography import cartography
 from source.ivy_mouse import ThreeBlindMice
 from datetime import datetime
 from os import path, listdir, cpu_count, remove
@@ -142,6 +144,7 @@ class Candelabrum:
         self._DATA_PATH = './candelabrum'
         self._ERROR_PATH = './errors'
         self._IVI_PATH = './indicators'
+        self._CHART_PATH = './charts'
         self._PREFIX = 'Candelabrum:'
         self._TIMER = icy.TimeKeeper()
         self._exceptions_ = list()
@@ -184,6 +187,7 @@ class Candelabrum:
         """Get jobs and do work."""
         csv_params = dict(self._CSV_PARAMS)
         candelabrum_path = path.abspath(self._DATA_PATH)
+        chart_path = path.abspath(self._CHART_PATH)
         candle_keys = ('utc_ts','open','high','low','close',
                        'volume','num_trades','vol_wma_price')
         ohlc = ('open','high','low','close')
@@ -203,6 +207,17 @@ class Candelabrum:
                             candles = pd.read_csv(f, **csv_params)
                         ivi = icy.get_indicators(candles)
                         ivi.to_csv(job[1])
+                elif job[0] == 'cartography':
+                    chart_symbol = job[1]
+                    candelabrum_candles = job[2]
+                    sealed_package = job[3]
+                    cartography(
+                        str(chart_symbol),
+                        candelabrum_candles,
+                        cheese=sealed_package,
+                        chart_path=f'{chart_path}/{chart_symbol}.png',
+                        chart_size=200,
+                        )
                 elif job[0] == 'clean':
                     try:
                         candle_name = str(job[1])
@@ -272,6 +287,7 @@ class Candelabrum:
                 with open(path.abspath(err_path), 'w+') as err_file:
                     err_file.write(err_msg)
                 print(self._PREFIX, f'Worker Thread: {err_msg}')
+                traceback.print_exc()
         if candle_max > self._max_price_:
             self._max_price_ = float(candle_max)
         if candle_min < self._min_price_:
@@ -451,8 +467,16 @@ class Candelabrum:
             candles = bars.merge(indicators, left_index=True, right_index=True)
             print(msg.format(symbol, symbols_researched, symbols_total))
             moirai.research(symbol, candles)
-            pred = moirai.predictions[symbol]
+            self._QUEUE.put((
+                'cartography',
+                symbol,
+                candles,
+                dict(moirai.predictions[symbol])
+                ))
+            moirai.predictions[symbol]['coated_candles'] = None
+            moirai.predictions[symbol]['sealed_candles'] = None
             symbols_remaining = len(symbols)
+        self.join_workers()
         elapsed = time.time() - loop_start
         message = 'Research of {} complete after {}.'
         message = format_time(elapsed, message=message)

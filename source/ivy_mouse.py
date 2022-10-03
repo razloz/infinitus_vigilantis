@@ -238,7 +238,7 @@ class ThreeBlindMice(nn.Module):
             print(msg.format('Mean Absolute Error', mae))
             print(msg.format('Mean Squared Error', mse))
 
-    def research(self, symbol, candles, timeout=8):
+    def research(self, symbol, candles, timeout=3):
         """Moirai research session, fully stocked with cheese and drinks."""
         if not all((
             len(candles.keys()) == self._n_features_,
@@ -283,7 +283,7 @@ class ThreeBlindMice(nn.Module):
             mouse['final_cheese'] = tensor(candles[-batch:], **t_args)
             mouse['fresh_cheese'] = tensor(candles[:-batch], **t_args)
             mouse['fresh_cheese'].requires_grad_(True)
-        target_accuracy = 90.0
+        target_accuracy = 97.0
         epochs = 0
         final_accuracy = 0
         mouse_accuracy = 0
@@ -418,7 +418,7 @@ class ThreeBlindMice(nn.Module):
             print(prefix, msg.format(epochs, epoch_str, final_accuracy))
             print(f'{prefix} {symbol} Metrics;')
             for k, v in self.predictions[symbol].items():
-                if k in ['cauldron_accuracy', 'final_accuracy']:
+                if k in ['cauldron_accuracy', 'mouse_accuracy']:
                     print(f'{prefix}     {k}: {v}%')
                 elif k in ['sealed_candles', 'coated_candles']:
                     if self.verbosity > 1:
