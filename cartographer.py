@@ -21,7 +21,7 @@ if __name__ == '__main__':
     vt = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
     p = argparse.ArgumentParser()
     p.add_argument('--symbol', help='Symbol for historical data.')
-    p.add_argument('--size', help='Chart size after resampling. Defaults to 200.')
+    p.add_argument('--size', help='Chart size after resampling. Default 200.')
     p.add_argument('--timing', help=f'Valid times are {vt}. Defaults to 1H.')
     p.add_argument('--daemonize', action='store_true',
                    help='Enable daemonized loop.')
