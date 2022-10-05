@@ -2,171 +2,140 @@
 import time
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import traceback
 import source.ivy_commons as icy
-from math import sqrt, log
+from torch.optim import Rprop
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
+from math import sqrt
 from os.path import abspath
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
 
 
-class MouseGate(nn.Sequential):
-    """Inside the mind of a mouse."""
-    def __init__(self, n_features=0, n_hidden=0, batch_size=0, n_gates=0):
-        """Register gate modules in sequence."""
-        super(MouseGate, self).__init__()
-        gru_params = dict(
-            num_layers=batch_size,
-            bias=True,
-            batch_first=True,
-            dropout=0.34,
-            )
-        input_size = n_features
-        output_size = n_hidden
-        for gate_num in range(n_gates):
-            self.register_module(
-                f'GRU_{gate_num}',
-                nn.GRU(input_size, output_size, **gru_params)
-                )
-            self.register_module(f'GLU_{gate_num}', nn.GLU())
-            output_size = int(output_size / 2)
-            input_size = int(output_size)
-
-    def forward(self, *inputs):
-        """Walk through the gates until the desired candle shape is reached."""
-        for module in self._modules.values():
-            if type(inputs) == tuple:
-                inputs = module(inputs[0])
-            else:
-                inputs = module(inputs)
-        return torch.vstack(inputs.max(dim=1).values.split(1))
-
-
-class Cauldron(nn.Module):
-    """A wax encrusted cauldron sits before you, bubbling occasionally."""
-    def __init__(self, cauldron_size, batch_size, device, *args, **kwargs):
-        """Assists in the creation of candles."""
-        super(Cauldron, self).__init__(*args, **kwargs)
-        self._device_ = device
-        self._n_hidden_ = int(cauldron_size ** 2)
-        self._n_layers_ = int(batch_size)
-        self._n_size_ = 3
-        self._name_ = 'Awen'
-        self._wax_ = nn.GRU(
-            input_size=self._n_size_,
-            hidden_size=self._n_hidden_,
-            num_layers=self._n_layers_,
-            bias=True,
-            dropout=0.34,
-            device=self._device_,
-            )
-        self.__batch_fn__ = nn.BatchNorm1d(self._n_hidden_)
-        self.__pool_fn__ = nn.AdaptiveMaxPool1d(self._n_size_)
+class GRNN(nn.Module):
+    """Gated Recurrent Neural Network"""
+    def __init__(self, name, n_output, **kwargs):
+        """Register modules and candles parameter."""
+        super(GRNN, self).__init__()
+        self._device_ = kwargs['device']
+        self._n_output_ = int(n_output)
+        self.__gru__ = nn.GRU(**kwargs)
+        self.__batch_fn__ = nn.BatchNorm1d(int(kwargs['hidden_size']))
+        self.__pool_fn__ = nn.AdaptiveMaxPool1d(self._n_output_)
+        self.candles = nn.ParameterDict()
+        self.loss_fn = nn.HuberLoss(reduction='sum', delta=0.97)
+        self.metrics = nn.ParameterDict()
+        self.name = str(name)
+        self.optimizer = Rprop(self.__gru__.parameters(), lr=0.1, foreach=True)
+        self.scheduler = WarmRestarts(self.optimizer, int(kwargs['num_layers']))
         self.to(self._device_)
 
-    def forward(self, wicks):
+    def forward(self, inputs):
+        """Batch pooling after GRU activation."""
+        inputs = self.__gru__(inputs)
+        if type(inputs) is tuple: inputs = inputs[0]
+        inputs = self.__batch_fn__(inputs)
+        inputs = self.__pool_fn__(inputs).H
+        outputs = list()
+        for i in range(self._n_output_):
+            stacked_output = torch.vstack([t for t in inputs[i].split(1)])
+            outputs.append(stacked_output.clone())
+        outputs = torch.hstack(outputs)
+        return outputs
+
+    def give(self, cheese):
+        """Sample cheese, create candles."""
+        if type(cheese) is list:
+            cheese = torch.hstack([*cheese])
+        candles = self(cheese)
+        return candles
+
+    def release_tensors(self):
+        """Remove batch and target tensors from memory."""
+        self.candles = nn.ParameterDict()
+        self.candles['batch_inputs'] = None
+        self.candles['targets_base'] = None
+        self.candles['targets_loss'] = None
+        self.candles['targets_pred'] = None
+
+    def reset_candles(self):
+        """Clear previous candles."""
+        self.candles['coated'] = None
+        self.candles['sealed'] = list()
+
+    def reset_metrics(self):
+        """Clear previous metrics."""
+        self.metrics['acc'] = [0, 0]
+        self.metrics['loss'] = 0
+        self.metrics['mae'] = 0
+        self.metrics['mse'] = 0
+
+
+class Cauldron(GRNN):
+    """A wax encrusted cauldron sits before you, bubbling occasionally."""
+    def __init__(self, *args, **kwargs):
+        """Assists in the creation of candles."""
+        super(Cauldron, self).__init__(*args, **kwargs)
+
+    def forward(self, *args, **kwargs):
         """*bubble**bubble* *bubble*"""
-        wicks = torch.hstack([*wicks])
-        wicks = self._wax_(wicks)[0]
-        wicks = self.__batch_fn__(wicks)
-        wicks = self.__pool_fn__(wicks).H
-        wicks = [
-            torch.vstack([t for t in wicks[0].split(1)]).clone(),
-            torch.vstack([t for t in wicks[1].split(1)]).clone(),
-            torch.vstack([t for t in wicks[2].split(1)]).clone(),
-            ]
-        return wicks
+        return super(Cauldron, self).forward(*args, **kwargs)
+
+
+class Moira(GRNN):
+    """A clever, cheese candle constructing, future predicting mouse."""
+    def __init__(self, *args, **kwargs):
+        """The number of the counting shall be three."""
+        super(Moira, self).__init__(*args, **kwargs)
 
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
     def __init__(self, n_features, verbosity=0, min_size=90, *args, **kwargs):
-        """Inputs: n_features and n_targets must be of type int()"""
+        """Beckon the Moirai and Cauldron."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self._device_ = torch.device(self._device_type_)
-        self._min_size_ = int(min_size)
         self._prefix_ = 'Moirai:'
+        self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._state_path_ = abspath('./rnn/moirai.state')
-        self._tolerance_ = 1.618033988749894e-3
         self.verbosity = int(verbosity)
-        batch_size = self._batch_size_ = 8
-        n_features = self._n_features_ = int(n_features)
-        n_gates = 7
-        n_hidden = self._batch_size_
-        for i in range(n_gates):
-            n_hidden *= 2
-        gate_args = dict(
-            n_features=int(n_features),
-            n_hidden=int(n_hidden),
-            batch_size=int(batch_size),
-            n_gates=int(n_gates),
-            )
-        if self.verbosity > 0:
-            print(self._prefix_, 'set batch_size to', batch_size)
-            print(self._prefix_, 'set n_features to', n_features)
-            print(self._prefix_, 'set n_hidden to', n_hidden)
-            print(self._prefix_, 'set n_gates to', n_gates)
-        self._tensor_args_ = dict(
-            device=self._device_,
-            dtype=torch.float,
-            )
-        rprop_params = dict(
-            lr=0.01,
-            etas=(0.5, 1.2),
-            step_sizes=(1e-06, 50),
-            foreach=True,
-            )
-        sgd_params = dict(
-            lr=0.1,
-            momentum=0.9,
-            dampening=0,
-            weight_decay=0,
-            nesterov=True,
-            maximize=False,
-            foreach=True
-            )
-        # Setup a cauldron for our candles
-        cauldron = self._cauldron_ = nn.ParameterDict()
-        cauldron['coated_candles'] = None
-        cauldron['sealed_candles'] = list()
-        cauldron['size'] = int(batch_size * 3)
-        cauldron['wax'] = Cauldron(cauldron['size'], batch_size, self._device_)
-        cauldron['loss_fn'] = nn.HuberLoss(reduction='sum', delta=0.97)
-        cauldron['targets'] = torch.zeros(batch_size, 1, **self._tensor_args_)
-        cauldron['metrics'] = {}
-        cauldron['optim'] = optim.Rprop(
-            cauldron['wax'].parameters(),
-            **rprop_params
-            )
-        cauldron['warm_lr'] = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            cauldron['optim'],
-            cauldron['size'],
-            )
+        self._batch_size_ = 8
+        self._min_size_ = int(min_size)
+        self._n_features_ = int(n_features)
+        self._n_hidden_ = int(self._n_features_ * self._batch_size_)
+        self._tolerance_ = 1.618033988749894e-3
+        if self.verbosity > 1:
+            print(self._prefix_, 'set device_type to', self._device_type_)
+            print(self._prefix_, 'set batch_size to', self._batch_size_)
+            print(self._prefix_, 'set min_size to', self._min_size_)
+            print(self._prefix_, 'set n_features to', self._n_features_)
+            print(self._prefix_, 'set n_hidden to', self._n_hidden_)
+            print(self._prefix_, 'set tolerance to', self._tolerance_)
+        p_gru = dict()
+        p_gru['num_layers'] = int(self._min_size_ / 3)
+        p_gru['bias'] = True
+        p_gru['batch_first'] = True
+        p_gru['dropout'] = self._tolerance_
+        p_gru['device'] = self._device_
+        p_cauldron = dict(p_gru)
+        p_cauldron['input_size'] = 3
+        p_cauldron['hidden_size'] = int(self._batch_size_ * 3)
+        p_moira = dict(p_gru)
+        p_moira['input_size'] = self._n_features_
+        p_moira['hidden_size'] = self._n_hidden_
+        # Awen the sentient cauldron.
+        self.Awen = Cauldron('Awen', 3, **p_cauldron)
         # Atropos the mouse, sister of Clotho and Lachesis.
-        Atropos = self._Atropos_ = nn.ParameterDict()
-        Atropos['name'] = 'Atropos'
+        self.Atropos = Moira('Atropos', 1, **p_moira)
         # Clotho the mouse, sister of Lachesis and Atropos.
-        Clotho = self._Clotho_ = nn.ParameterDict()
-        Clotho['name'] = 'Clotho'
+        self.Clotho = Moira('Clotho', 1, **p_moira)
         # Lachesis the mouse, sister of Atropos and Clotho.
-        Lachesis = self._Lachesis_ = nn.ParameterDict()
-        Lachesis['name'] = 'Lachesis'
-        for mouse in [Atropos, Clotho, Lachesis]:
-            mouse['candles'] = None
-            mouse['loss_fn'] = nn.HuberLoss(reduction='sum')
-            mouse['metrics'] = {}
-            mouse['nn_gates'] = MouseGate(**gate_args)
-            mouse['optim'] = optim.SGD(
-                mouse['nn_gates'].parameters(),
-                **sgd_params
-                )
+        self.Lachesis = Moira('Lachesis', 1, **p_moira)
+        # Store predictions for sorting top picks
         self.predictions = nn.ParameterDict()
         self.to(self._device_)
-        if self.verbosity > 0:
-            print(self._prefix_, f'Set device to {self._device_type_.upper()}.')
 
     def __manage_state__(self, call_type=0):
         """Handles loading and saving of the RNN state."""
@@ -186,221 +155,220 @@ class ThreeBlindMice(nn.Module):
                 print(self._prefix_, 'Encountered an exception.')
                 traceback.print_exception(details)
 
-    def __time_step__(self, mouse, cheese, epochs=0, study=False):
+    def __time_step__(self, mouse, indices, epochs=0, study=False):
         """Let Clotho mold the candles
            Let Lachesis measure the candles
            Let Atropos seal the candles"""
         vstack = torch.vstack
         if study is True:
             threshold = self._tolerance_
-            fresh = vstack(cheese[0])
-            aged = vstack(cheese[1])
-            batch_size = fresh.shape[0]
-            mouse['optim'].zero_grad()
-            mouse['candles'] = mouse['nn_gates'](fresh)
-            loss = mouse['loss_fn'](mouse['candles'], aged)
+            cheese = mouse.candles['batch_inputs'][indices[0]:indices[1]]
+            t_base = mouse.candles['targets_base'][indices[0]:indices[1]]
+            t_loss = mouse.candles['targets_loss'][indices[0]:indices[1]]
+            t_pred = mouse.candles['targets_pred'][indices[0]:indices[1]]
+            t_base = vstack([t for t in t_base.split(1)])
+            t_loss = vstack([t for t in t_loss.split(1)])
+            t_pred = vstack([t for t in t_pred.split(1)])
+            batch_size = cheese.shape[0]
+            mouse.optimizer.zero_grad()
+            candles = mouse.give(cheese)
+            loss = mouse.loss_fn(candles, t_loss)
             loss.backward()
-            mouse['metrics']['loss'] = int(loss.item())
-            mouse['optim'].step()
-            difference = (mouse['candles'] - aged)
+            mouse.metrics['loss'] = int(loss.item())
+            mouse.optimizer.step()
+            mouse.scheduler.step()
+            candles = (t_base + (t_base * candles))
+            mouse.candles['coated'] = candles.clone()
+            difference = (candles - t_pred)
             correct = difference[difference >= -threshold]
             correct = correct[correct <= threshold].shape[0]
-            mouse['metrics']['acc'][0] += int(correct)
-            mouse['metrics']['acc'][1] += int(batch_size)
-            mouse['metrics']['mae'] += difference.abs().sum()
-            mouse['metrics']['mse'] += (difference ** 2).sum()
+            mouse.metrics['acc'][0] += int(correct)
+            mouse.metrics['acc'][1] += int(batch_size)
+            mouse.metrics['mae'] += difference.abs().sum().item()
+            mouse.metrics['mse'] += (difference ** 2).sum().item()
         else:
             with torch.no_grad():
                 try:
-                    n_mae = mouse['metrics']['mae']
-                    n_mse = mouse['metrics']['mse']
-                    mouse['metrics']['mae'] = n_mae / epochs
-                    mouse['metrics']['mse'] = sqrt(n_mse / epochs)
+                    mouse.metrics['mae'] = mouse.metrics['mae'] / epochs
+                    mouse.metrics['mse'] = sqrt(mouse.metrics['mse'] / epochs)
                 except Exception as details:
                     if self.verbosity > 0:
                         msg = '{} Encountered an exception.'
-                        print(self._prefix_, msg.format(mouse['name']))
+                        print(self._prefix_, msg.format(mouse.name))
                         traceback.print_exception(details)
                 finally:
-                    mouse['candles'] = mouse['nn_gates'](cheese)
-        verbosity_check = [
-            self.verbosity > 2,
-            self.verbosity == 2 and study is False
-            ]
-        if any(verbosity_check):
-            lr = self._cauldron_['warm_lr'].get_last_lr()[0]
-            acc = mouse['metrics']['acc']
-            mae = mouse['metrics']['mae']
-            mse = mouse['metrics']['mse']
-            msg = f'{self._prefix_} {mouse["name"]} ' + '{}: {}'
+                    cheese = mouse.candles['batch_inputs'][indices[0]:]
+                    t_base = mouse.candles['targets_base'][indices[0]:]
+                    t_base = vstack([t for t in t_base.split(1)])
+                    candles = mouse.give(cheese)
+                    candles = (t_base + (t_base * candles))
+                    mouse.candles['coated'] = candles.clone()
+        if self.verbosity == 2 and study is False:
+            lr = mouse.scheduler.get_last_lr()[0]
+            acc = mouse.metrics['acc']
+            mae = mouse.metrics['mae']
+            mse = mouse.metrics['mse']
+            msg = f'{self._prefix_} {mouse.name} ' + '{}: {}'
             print(msg.format('Learning Rate', lr))
             print(msg.format('Accuracy', acc))
             print(msg.format('Mean Absolute Error', mae))
             print(msg.format('Mean Squared Error', mse))
+        elif self.verbosity > 2:
+            print('candles:\n', candles)
+            print('candles shape:\n', candles.shape)
+            print('t_base:\n', t_base)
+            print('t_base shape:\n', t_base.shape)
+            print('t_loss:\n', t_loss)
+            print('t_loss shape:\n', t_loss.shape)
+            print('t_pred:\n', t_pred)
+            print('t_pred shape:\n', t_pred.shape)
+            print('coated:\n', len(mouse.candles['coated']))
 
-    def research(self, symbol, candles, timeout=3):
+    def research(self, symbol, candles, timeout=1):
         """Moirai research session, fully stocked with cheese and drinks."""
         if not all((
             len(candles.keys()) == self._n_features_,
             len(candles.index) >= self._min_size_
             )): return False
         self.__manage_state__(call_type=0)
-        Atropos = self._Atropos_
-        Clotho = self._Clotho_
-        Lachesis = self._Lachesis_
+        Awen = self.Awen
+        Atropos = self.Atropos
+        Clotho = self.Clotho
+        Lachesis = self.Lachesis
         time_step = self.__time_step__
-        batch = self._batch_size_
+        batch_size = self._batch_size_
         prefix = self._prefix_
-        t_args = self._tensor_args_
+        p_tensor = self._p_tensor_
         tolerance = self._tolerance_
         hstack = torch.hstack
         vstack = torch.vstack
         tensor = torch.tensor
         candles = candles[self._min_size_:]
-        a_targets = candles['chg_close'].to_numpy()
-        a_values = candles['close'].to_numpy()
-        c_targets = candles['chg_open'].to_numpy()
-        c_values = candles['open'].to_numpy()
-        l_targets = candles['chg_wema'].to_numpy()
-        l_values = candles['price_wema'].to_numpy()
         timestamps = len(candles.index)
-        candles_index = range(timestamps - batch)
-        candles = candles.to_numpy()
+        batch_range = range(timestamps - batch_size)
+        base_targets = ('price_wema', 'price_wema', 'cdl_median')
+        loss_targets = ('wdist_close', 'wdist_open', 'wdist_median')
+        pred_targets = ('close', 'open', 'price_wema')
         moirai = [Atropos, Clotho, Lachesis]
-        for mouse in moirai:
-            if mouse['name'] == 'Atropos':
-                m_values = a_values
-                m_targets = a_targets
-            elif mouse['name'] == 'Clotho':
-                m_values = c_values
-                m_targets = c_targets
-            elif mouse['name'] == 'Lachesis':
-                m_values = l_values
-                m_targets = l_targets
-            mouse['aged_cheese'] = tensor(m_targets[batch:], **t_args)
-            mouse['raw_cheese'] = tensor(m_values[:-batch], **t_args)
-            mouse['raw_final'] = tensor(m_values[-batch:], **t_args)
-            mouse['final_cheese'] = tensor(candles[-batch:], **t_args)
-            mouse['fresh_cheese'] = tensor(candles[:-batch], **t_args)
-            mouse['fresh_cheese'].requires_grad_(True)
+        _cdls = candles.to_numpy()
+        for m_i, mouse in enumerate(moirai):
+            _mc = mouse.candles
+            _base = candles[base_targets[m_i]].to_numpy()
+            _loss = candles[loss_targets[m_i]].to_numpy()
+            _pred = candles[pred_targets[m_i]].to_numpy()
+            _mc['batch_inputs'] = tensor(_cdls, **p_tensor)
+            _mc['batch_inputs'].requires_grad_(True)
+            _mc['targets_base'] = tensor(_base, **p_tensor)
+            _mc['targets_loss'] = tensor(_loss[batch_size:], **p_tensor)
+            _mc['targets_pred'] = tensor(_pred[batch_size:], **p_tensor)
+            if self.verbosity > 1:
+                _mn = mouse.name
+                print(_mn, 'batch_inputs shape:', _mc['batch_inputs'].shape)
+                print(_mn, 'targets_base shape:', _mc['targets_base'].shape)
+                print(_mn, 'targets_loss shape:', _mc['targets_loss'].shape)
+                print(_mn, 'targets_pred shape:', _mc['targets_pred'].shape)
         target_accuracy = 97.0
         epochs = 0
         final_accuracy = 0
         mouse_accuracy = 0
-        cauldron = self._cauldron_
-        cauldron['metrics']['acc'] = [0, 0]
-        cauldron['metrics']['loss'] = 0
-        cauldron['metrics']['mae'] = 0
-        cauldron['metrics']['mse'] = 0
+        Awen.reset_metrics()
+        wicks, t_base, t_loss, t_pred = [[], [], [], []]
         while final_accuracy < target_accuracy:
-            if epochs == timeout: break
-            fresh = [[],[],[]]
-            aged = [[],[],[]]
-            raw = [[],[],[]]
-            batch_count = 0
+            if epochs == timeout:
+                break
+            else:
+                epochs += 1
             final_accuracy = 0
             mouse_accuracy = 0
-            cauldron['coated_candles'] = None
-            cauldron['sealed_candles'] = list()
+            Awen.reset_candles()
             for mouse in moirai:
-                mouse['metrics']['acc'] = [0, 0]
-                mouse['metrics']['loss'] = 0
-                mouse['metrics']['mae'] = 0
-                mouse['metrics']['mse'] = 0
-            for i in candles_index:
-                if batch_count == batch:
-                    for m_i, mouse in enumerate(moirai):
-                        cheese = (fresh[m_i], aged[m_i])
-                        time_step(mouse, cheese, study=True)
-                    cauldron['optim'].zero_grad()
-                    wicks = [m['candles'] for m in moirai]
-                    raw_cheese = hstack([vstack(raw[bi]) for bi in range(3)])
-                    aged_cheese = hstack([vstack(aged[bi]) for bi in range(3)])
-                    coated_wicks = hstack(cauldron['wax'](wicks))
-                    loss = cauldron['loss_fn'](coated_wicks, aged_cheese)
+                mouse.reset_candles()
+                mouse.reset_metrics()
+            for i in batch_range:
+                indices = (i, i + batch_size)
+                if indices[1] <= batch_range[-1]:
+                    for mouse in moirai:
+                        time_step(mouse, indices, study=True)
+                    Awen.optimizer.zero_grad()
+                    wicks, t_base, t_loss, t_pred = [[], [], [], []]
+                    ii, iii = indices
+                    for mouse in moirai:
+                        wicks.append(mouse.candles['coated'])
+                        t_base.append(mouse.candles['targets_base'][ii:iii])
+                        t_loss.append(mouse.candles['targets_loss'][ii:iii])
+                        t_pred.append(mouse.candles['targets_pred'][ii:iii])
+                    wicks = hstack(wicks)
+                    t_base = vstack(t_base).H
+                    t_loss = vstack(t_loss).H
+                    t_pred = vstack(t_pred).H
+                    coated_wicks = Awen.give(wicks)
+                    loss = Awen.loss_fn(coated_wicks, t_loss)
                     loss.backward()
-                    cauldron['optim'].step()
-                    cauldron['warm_lr'].step()
-                    coated = raw_cheese + (raw_cheese * coated_wicks)
-                    targets = raw_cheese + (raw_cheese * aged_cheese)
-                    difference = (coated - targets)
-                    threshold = float(raw_cheese.max().item() * tolerance)
+                    Awen.optimizer.step()
+                    Awen.scheduler.step()
+                    threshold = float(t_pred.max().item() * tolerance)
+                    coated_candles = (t_base + (t_base * coated_wicks))
+                    Awen.candles['coated'] = coated_candles.clone()
+                    Awen.candles['sealed'].append(coated_candles[0].clone())
+                    difference = (coated_candles - t_pred)
                     correct = difference[difference >= -threshold]
                     correct = correct[correct <= threshold].shape[0]
                     cauldron_size = difference.shape[0] * difference.shape[1]
-                    cauldron['metrics']['acc'][0] += int(correct)
-                    cauldron['metrics']['acc'][1] += int(cauldron_size)
-                    cauldron['metrics']['loss'] += loss.item()
-                    cauldron['metrics']['mae'] += difference.abs().sum()
-                    cauldron['metrics']['mse'] += (difference ** 2).sum()
-                    cauldron['coated_candles'] = coated.clone()
-                    cauldron['sealed_candles'].append(coated.clone())
+                    Awen.metrics['acc'][0] += int(correct)
+                    Awen.metrics['acc'][1] += int(cauldron_size)
+                    Awen.metrics['loss'] += loss.item()
+                    Awen.metrics['mae'] += difference.abs().sum().item()
+                    Awen.metrics['mse'] += (difference ** 2).sum().item()
                     if self.verbosity > 2:
-                        print('raw_cheese\n', raw_cheese)
-                        print('aged_cheese\n', aged_cheese)
-                        print('coated_wicks\n', coated_wicks)
-                        print('coated\n', coated)
-                        print('targets\n', targets)
-                        print('threshold', threshold)
-                        print('correct\n', correct)
-                        print('batch total\n', targets.shape[0])
-                    fresh = [[],[],[]]
-                    aged = [[],[],[]]
-                    raw = [[],[],[]]
-                    batch_count = 0
+                        for m_k, m_v in Awen.metrics.items():
+                            print(f'Awen {m_k}: {m_v}')
                 else:
-                    for m_i, mouse in enumerate(moirai):
-                        fresh[m_i].append(mouse['fresh_cheese'][i].clone())
-                        aged[m_i].append(mouse['aged_cheese'][i].clone())
-                        raw[m_i].append(mouse['raw_cheese'][i].clone())
-                    batch_count += 1
-            epochs += 1
-            raw_final = list()
-            for m_i, mouse in enumerate(moirai):
-                time_step(mouse, mouse['final_cheese'], epochs=timestamps)
-                raw_final.append(mouse['raw_final'])
-            wicks = [m['candles'] for m in moirai]
-            coated_candles = hstack(cauldron['wax'](wicks))
-            raw_final = vstack([*raw_final]).H
-            coated_candles = raw_final + (raw_final * coated_candles)
-            cauldron['coated_candles'] = coated_candles.clone()
-            cauldron['sealed_candles'].append(coated_candles.clone())
-            cauldron['metrics']['loss'] = cauldron['metrics']['loss'] / epochs
-            cauldron['metrics']['mae'] = cauldron['metrics']['mae'] / epochs
-            cauldron['metrics']['mae'] = cauldron['metrics']['mae'].item()
-            cauldron['metrics']['mse'] = cauldron['metrics']['mse'] / epochs
-            cauldron['metrics']['mse'] = cauldron['metrics']['mse'].item()
-            n_correct = cauldron['metrics']['acc'][0]
-            n_total = cauldron['metrics']['acc'][1]
-            n_wrong = n_total - n_correct
-            final_accuracy = 100 * abs((n_wrong - n_total) / n_total)
-            final_accuracy = round(final_accuracy, 3)
-            n_correct = 0
-            n_total = 0
-            for mouse in moirai:
-                n_correct += mouse['metrics']['acc'][0]
-                n_total += mouse['metrics']['acc'][1]
-            n_wrong = n_total - n_correct
-            mouse_accuracy = 100 * abs((n_wrong - n_total) / n_total)
-            mouse_accuracy = round(mouse_accuracy, 3)
+                    for mouse in moirai:
+                        time_step(mouse, (-batch_size, None), epochs=timestamps)
+                    wicks = [m.candles['coated'] for m in moirai]
+                    t_key = 'targets_base'
+                    t_base = [m.candles[t_key][-batch_size:] for m in moirai]
+                    t_base = vstack(t_base).H
+                    coated_wicks = Awen.give(wicks)
+                    coated_candles = t_base + (t_base * coated_wicks)
+                    Awen.candles['coated'] = coated_candles.clone()
+                    seal = vstack(Awen.candles['sealed'])
+                    Awen.candles['sealed'] = vstack([seal, coated_candles])
+                    Awen.metrics['loss'] = Awen.metrics['loss'] / epochs
+                    Awen.metrics['mae'] = Awen.metrics['mae'] / epochs
+                    Awen.metrics['mse'] = Awen.metrics['mse'] / epochs
+                    n_correct = Awen.metrics['acc'][0]
+                    n_total = Awen.metrics['acc'][1]
+                    n_wrong = n_total - n_correct
+                    final_accuracy = 100 * abs((n_wrong - n_total) / n_total)
+                    final_accuracy = round(final_accuracy, 3)
+                    n_correct = 0
+                    n_total = 0
+                    for mouse in moirai:
+                        n_correct += mouse.metrics['acc'][0]
+                        n_total += mouse.metrics['acc'][1]
+                    n_wrong = n_total - n_correct
+                    mouse_accuracy = 100 * abs((n_wrong - n_total) / n_total)
+                    mouse_accuracy = round(mouse_accuracy, 3)
+                    break
             if self.verbosity > 0:
                 print(f'{prefix} ({epochs}) A moment of research yielded;')
                 print(f'    a cauldron accuracy of {final_accuracy}%')
                 print(f'    a mouse accuracy of {mouse_accuracy}%')
                 if self.verbosity > 1:
                     print('coated_candles:\n', coated_candles)
-                    print('raw_final:\n', raw_final)
                     print('metrics:')
-                    for metric_k, metric_v in cauldron['metrics'].items():
+                    for metric_k, metric_v in Awen.metrics.items():
                         print(f'    {metric_k}:', metric_v)
                     print('')
-        coated = cauldron['coated_candles'].detach().cpu().numpy()
-        sealed = vstack(cauldron['sealed_candles']).detach().cpu().numpy()
-        last_pred = float(cauldron['coated_candles'][-1][0].item())
-        last_price = float(Atropos['raw_final'][-1].item())
+        coated = Awen.candles['coated'].detach().cpu().numpy()
+        sealed = Awen.candles['sealed'].detach().cpu().numpy()
+        print(f'sealed: {sealed.shape}\n', sealed)
+        last_pred = float(Awen.candles['coated'][-1][0].item())
+        last_price = float(candles['close'][-1])
         proj_gain = float(((last_pred - last_price) / last_price) * 100)
         self.predictions[symbol] = {
-            'cauldron loss': float(cauldron['metrics']['loss']),
+            'cauldron loss': float(Awen.metrics['loss']),
             'cauldron_accuracy': final_accuracy,
             'mouse_accuracy': mouse_accuracy,
             'coated_candles': coated,
@@ -408,7 +376,7 @@ class ThreeBlindMice(nn.Module):
             'last_price': round(last_price, 2),
             'batch_pred': round(last_pred, 2),
             'num_epochs': epochs,
-            'metrics': dict(cauldron['metrics']),
+            'metrics': dict(Awen.metrics),
             'proj_gain': proj_gain,
             'proj_time': time.time()
             }
@@ -427,5 +395,8 @@ class ThreeBlindMice(nn.Module):
                 else:
                     print(f'{prefix}     {k}: {v}')
             print('')
+        Awen.release_tensors()
+        for mouse in moirai:
+            mouse.release_tensors()
         self.__manage_state__(call_type=1)
         return True

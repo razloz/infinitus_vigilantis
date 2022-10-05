@@ -349,10 +349,10 @@ class Candelabrum:
             ivy_files = listdir(data_path)
             total_files = len(ivy_files)
             i = 0
-            for file_name in ivy_files:
+            for ivy_name in ivy_files:
                 i += 1
-                ivi_path = path.abspath(f'{self._IVI_PATH}/{file_name[:-4]}.ivi')
-                ivy_path = path.abspath(f'{data_path}/{file_name}')
+                ivi_path = path.abspath(f'{self._IVI_PATH}/{ivy_name[:-4]}.ivi')
+                ivy_path = path.abspath(f'{data_path}/{ivy_name}')
                 self._QUEUE.put(('indicators', ivi_path, ivy_path))
             self.join_workers()
         else:
@@ -449,7 +449,7 @@ class Candelabrum:
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        moirai = ThreeBlindMice(38, verbosity=1)
+        moirai = ThreeBlindMice(39, verbosity=2)
         print(self._PREFIX, 'Starting research loop...')
         symbols = [s for s, e in composite_index()]
         symbols_researched = 0

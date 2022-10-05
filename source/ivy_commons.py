@@ -288,15 +288,16 @@ def get_indicators(df, index_key='time'):
     for dataframe in dfs:
         for c, s in dataframe.iteritems():
             indicators[c] = s.tolist()
-    # percent change
-    rolling_diff = lambda s: safe_div((s[1:] - s[:-1]), s[:-1])
+    # mice stuff
     dfc = df['close'].values
     dfo = df['open'].values
     dfw = indicators['price_wema'].values
-    indicators['chg_cdl'] = safe_div((dfc - dfo), dfo).tolist()
-    indicators['chg_close'] = [0] + rolling_diff(dfc).tolist()
-    indicators['chg_open'] = [0] + rolling_diff(dfo).tolist()
-    indicators['chg_wema'] = [0] + rolling_diff(dfw).tolist()
+    dfm = (dfo + ((dfc - dfo) * 0.5))
+    indicators['cdl_change'] = safe_div((dfc - dfo), dfo).tolist()
+    indicators['cdl_median'] = dfm.tolist()
+    indicators['wdist_close'] = safe_div((dfc - dfw), dfw).tolist()
+    indicators['wdist_median'] = safe_div((dfw - dfm), dfm).tolist()
+    indicators['wdist_open'] = safe_div((dfo - dfw), dfw).tolist()
     indicators.fillna(0, inplace=True)
     return indicators.copy()
 
