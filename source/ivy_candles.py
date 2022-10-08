@@ -449,7 +449,7 @@ class Candelabrum:
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        moirai = ThreeBlindMice(39, verbosity=2)
+        moirai = ThreeBlindMice(verbosity=1)
         print(self._PREFIX, 'Starting research loop...')
         symbols = [s for s, e in composite_index()]
         symbols_researched = 0
@@ -467,14 +467,15 @@ class Candelabrum:
             candles = bars.merge(indicators, left_index=True, right_index=True)
             print(msg.format(symbol, symbols_researched, symbols_total))
             moirai.research(symbol, candles)
-            self._QUEUE.put((
-                'cartography',
-                symbol,
-                candles,
-                dict(moirai.predictions[symbol])
-                ))
-            moirai.predictions[symbol]['coated_candles'] = None
-            moirai.predictions[symbol]['sealed_candles'] = None
+            if symbol in moirai.predictions.keys():
+                self._QUEUE.put((
+                    'cartography',
+                    symbol,
+                    candles,
+                    dict(moirai.predictions[symbol])
+                    ))
+                moirai.predictions[symbol]['coated_candles'] = None
+                moirai.predictions[symbol]['sealed_candles'] = None
             symbols_remaining = len(symbols)
         self.join_workers()
         elapsed = time.time() - loop_start

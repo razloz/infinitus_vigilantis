@@ -152,51 +152,6 @@ def gartley(five_point_wave, tolerance = 0.001):
     return g
 
 
-def logic_block(candle, exchange):
-    """Generate buy and sell signals."""
-    cdl_zscore = float(candle.money_zscore)
-    cdl_dh = float(candle.money_dh)
-    cdl_dl = float(candle.money_dl)
-    cdl_median = float(candle.money_mid)
-    cdl_money = float(candle.money_wema)
-    cdl_price = float(candle.close)
-    cdl_open = float(candle.open)
-    cdl_volume = float(candle.volume)
-    cdl_vwema = float(candle.volume_wema)
-    cdl_trend = float(candle.trend[0])
-    cdl_signal = str(candle.trend[1])
-    exc_zscore = float(exchange.money_zscore)
-    exc_median = float(exchange.money_mid)
-    exc_money = float(exchange.money_wema)
-    exc_price = float(exchange.close)
-    exc_dh = float(exchange.money_dh)
-    exc_dl = float(exchange.money_dl)
-    exc_trend = float(exchange.trend[0])
-    exc_signal = str(exchange.trend[1])
-    bull_candle = cdl_open < cdl_price
-    cdl_bullish = 0 != cdl_price > cdl_money > cdl_median != 0
-    cdl_bearish = 0 != cdl_price < cdl_money < cdl_median != 0
-    exc_bullish = 0 != exc_price > exc_money > exc_median != 0
-    exc_bearish = 0 != exc_price < exc_money < exc_median != 0
-    dbl_bull = cdl_signal == 'buy' == exc_signal
-    dbl_bear = cdl_signal == 'sell' == exc_signal
-    quad_bull = all((dbl_bull, cdl_bullish, exc_bullish))
-    quad_bear = all((dbl_bear, cdl_bearish, exc_bearish))
-    strong_bull = 0 != cdl_dl >= cdl_median != 0
-    strong_bear = 0 != cdl_dh <= cdl_median != 0
-    near_money = -0.3 <= cdl_zscore <= 0.3
-    far_bull = cdl_zscore >= 3
-    far_bear = cdl_zscore <= -3
-    buy_logic = all((dbl_bull, strong_bull, near_money))
-    sell_logic = all((strong_bear, far_bear, bull_candle))
-    if buy_logic:
-        return 1
-    elif sell_logic:
-        return -1
-    else:
-        return 0
-
-
 __next_wave__ = lambda i, l: i + 1 if i + 1 < l else 0
 def get_indicators(df, index_key='time'):
     """Collects indicators and adds them to the dataframe."""
@@ -292,14 +247,25 @@ def get_indicators(df, index_key='time'):
     dfc = df['close'].values
     dfo = df['open'].values
     dfw = indicators['price_wema'].values
-    dfm = (dfo + ((dfc - dfo) * 0.5))
+    dfm = indicators['price_mid'].values
     indicators['cdl_change'] = safe_div((dfc - dfo), dfo).tolist()
-    indicators['cdl_median'] = dfm.tolist()
-    indicators['wdist_close'] = safe_div((dfc - dfw), dfw).tolist()
-    indicators['wdist_median'] = safe_div((dfw - dfm), dfm).tolist()
-    indicators['wdist_open'] = safe_div((dfo - dfw), dfw).tolist()
+    indicators['dist_close'] = safe_div((dfc - dfm), dfm).tolist()
+    indicators['dist_wema'] = safe_div((dfw - dfm), dfm).tolist()
+    indicators['dist_open'] = safe_div((dfo - dfm), dfm).tolist()
     indicators.fillna(0, inplace=True)
     return indicators.copy()
+
+
+def format_time(elapsed, message=''):
+    if elapsed > 86400:
+        message += '{} days'.format(round(elapsed / 86400, 5))
+    elif elapsed > 3600:
+        message += '{} hours'.format(round(elapsed / 3600, 5))
+    elif elapsed > 60:
+        message += '{} minutes'.format(round(elapsed / 60, 5))
+    else:
+        message += '{} seconds'.format(round(elapsed, 5))
+    return message
 
 
 class TimeKeeper:
@@ -311,7 +277,9 @@ class TimeKeeper:
     @property
     def final(self):
         """Final elapsed time."""
-        return time() - self._start_time
+        elapsed = time() - self._start_time
+        elapsed_str = format_time(elapsed)
+        return (elapsed_str, elapsed)
 
     @property
     def reset(self):
@@ -324,16 +292,9 @@ class TimeKeeper:
     def update(self):
         """Get elapsed time since update was last called."""
         elapsed = time() - self._timer
-        if elapsed > 86400:
-            since = '{} days'.format(round(elapsed / 86400, 5))
-        elif elapsed > 3600:
-            since = '{} hours'.format(round(elapsed / 3600, 5))
-        elif elapsed > 60:
-            since = '{} minutes'.format(round(elapsed / 60, 5))
-        else:
-            since = '{} seconds'.format(round(elapsed, 5))
+        elapsed_str = format_time(elapsed)
         self._timer = time()
-        return (since, elapsed)
+        return (elapsed_str, elapsed)
 
 
 def posix_from_time(t, f='%Y-%m-%d %H:%M'):

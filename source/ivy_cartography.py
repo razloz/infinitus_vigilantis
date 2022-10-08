@@ -8,6 +8,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.patches as patches
 from os import path
 from time import sleep, time
+from numpy import arange
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -41,16 +42,21 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     if cheese:
         coated_len = cheese['coated_candles'].shape[0]
         padding = [0 for _ in range(padding)]
-        cheese_close = padding + cheese['sealed_candles'][:, 0].tolist()
-        cheese_open = padding + cheese['sealed_candles'][:, 1].tolist()
+        cheese_close = cheese['sealed_candles'][:, 0]
+        cheese_open = cheese['sealed_candles'][:, 1]
+        cheese_price = padding + ((cheese_close + cheese_open) / 2).tolist()
         cheese_wema = padding + cheese['sealed_candles'][:, 2].tolist()
+        s_k = ['coated_candles', 'sealed_candles', 'metrics', 'proj_timestamp']
+        p_k = ['cauldron_accuracy', 'mouse_accuracy']
         for c_k, c_v in cheese.items():
-            if c_k in ['coated_candles', 'sealed_candles']:
-                continue
-            elif c_k in ['cauldron_accuracy', 'mouse_accuracy']:
-                moirai_metrics += f'{c_k}: {c_v}%\n'
-            else:
-                moirai_metrics += f'{c_k}: {c_v}\n'
+            if c_k in s_k: continue
+            addendum = f'{c_k}: {c_v}'
+            if c_k in p_k: addendum += '%'
+            add_len = len(addendum)
+            if add_len < 80:
+                for _ in range(80 - add_len - 1):
+                    addendum += ' '
+            moirai_metrics += f'{addendum}\n'
     moirai_metrics = moirai_metrics[:-2]
     ts_lbls = [x_ts for x_ts in dataframe.index.tolist()]
     if chart_size > 0:
@@ -69,11 +75,10 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         vol_dh = vol_dh[-chart_size:]
         if cheese:
             chart_size += coated_len
-            cheese_close = cheese_close[-chart_size:]
-            cheese_open = cheese_open[-chart_size:]
+            cheese_price = cheese_price[-chart_size:]
             cheese_wema = cheese_wema[-chart_size:]
-            cheese_range = range(len(cheese_close))
-            ts_lbls += [f'pred_{n_pred + 1}' for n_pred in range(coated_len)]
+            cheese_range = range(len(cheese_price))
+            ts_lbls += [f'cheese_{n_pred + 1}' for n_pred in range(coated_len)]
     data_len = len(cdl_close)
     data_range = range(data_len)
     fs = (19.20, 10.80)
@@ -89,19 +94,23 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     else:
         plt.xticks(ticks=data_range, labels=ts_lbls,
                    rotation=21, fontweight='bold')
-    plt.subplots_adjust(left=0.08, bottom=0.3, right=0.92,
+    plt.subplots_adjust(left=0.08, bottom=0.28, right=0.92,
                         top=0.95, wspace=0, hspace=0.02)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
     ax1.set_ylabel('Price', fontweight='bold')
     if cheese:
         ax1.set_xlim(((cheese_range[0] - 2), (cheese_range[-1] + 2)))
+        price_points = [cheese_price, cheese_wema, cdl_high, cdl_low]
+        ylim_low = min(min(price_points))
+        ylim_high = max(max(price_points))
     else:
         ax1.set_xlim(((data_range[0] - 2), (data_range[-1] + 2)))
-    ylim_low = min(cdl_low)
-    ylim_high = max(cdl_high)
-    ax1.set_ylim((ylim_low * 0.98, ylim_high * 1.02))
-    ax1.set_yticks(cdl_close)
-    ax1.set_yticklabels(cdl_close)
+        ylim_low = min(cdl_low)
+        ylim_high = max(cdl_high)
+    ax1.set_ylim((ylim_low * 0.97, ylim_high * 1.03))
+    yticks_range = [round(i, 2) for i in arange(ylim_low, ylim_high, 0.01)]
+    ax1.set_yticks(yticks_range)
+    ax1.set_yticklabels(yticks_range)
     ax1.yaxis.set_major_locator(mticker.AutoLocator())
     ax1.yaxis.set_major_formatter(mticker.EngFormatter())
     ax1.xaxis.set_major_locator(mticker.AutoLocator())
@@ -118,59 +127,8 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     wid_wick = wid_base * 0.21
     wid_cdls = wid_base * 0.89
     wid_line = wid_base * 0.34
-    # Pivot Points plots
-    # pivots = list(pivot_points.keys())
-    # if len(pivots) > 0:
-        # freqs = list(pivot_points.values())
-        # f_min = min(freqs)
-        # f_max = max(freqs)
-        # shades = dict()
-        # for i in range(f_max - f_min):
-            # shades[i + f_min] = round(((f_max - i) / f_max), 2)
-        # pkws = {'linestyle': 'solid', 'linewidth': wid_line}
-        # for price in pivots:
-            # shade = 0
-            # freq = pivot_points[price]
-            # for f in shades:
-                # if f <= freq:
-                    # shade = 1 - shades[f]
-                # else:
-                    # break
-            # pkws['color'] = (0.25, 0, 0.25, shade)
-            # ax1.plot((0, data_len), (price, price), **pkws)
-    # Per candle plots
-    #signal_y = [min(cdl_dl), max(cdl_dh)]
-    # Cheese Candles
-    if cheese:
-        for i in cheese_range:
-            x_loc = [i, i]
-            cheese_data = [cheese_close[i], cheese_open[i]]
-            if cheese_data[0] == 0 or cheese_data[1] == 0:
-                continue
-            if cheese_close[i] > cheese_open[i]:
-                cdl_color = '#f9d800'
-            else:
-                cdl_color = '#f9aa00'
-            ax1.plot(x_loc, cheese_data, color=cdl_color,
-                     linestyle='solid', linewidth=wid_cdls, alpha=0.8)
     for i in data_range:
         x_loc = [i, i]
-        # Signals
-        # if cheese:
-            # cdl_date = timestamps[i].strftime('%Y-%m-%d %H:%M')
-            # lw = 1 + data_range[-1]
-            # sig_args = dict(linestyle='solid', linewidth=wid_base)
-            # if cdl_date in cheese:
-                # buy_sig = cheese[cdl_date]['buy']
-                # sell_sig = cheese[cdl_date]['sell']
-                # for sig in buy_sig:
-                    # if sig[0] == symbol:
-                        # sig_args['color'] = (0, 1, 0, 0.5)
-                        # ax1.plot(x_loc, signal_y, **sig_args)
-                # for sig in sell_sig:
-                    # if sig[0] == symbol:
-                        # sig_args['color'] = (1, 0, 0, 0.5)
-                        # ax1.plot(x_loc, signal_y, **sig_args)
         # Candles
         wick_data = [cdl_low[i], cdl_high[i]]
         candle_data = [cdl_close[i], cdl_open[i]]
@@ -189,8 +147,11 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     if cheese:
-        pkws['label'] = f'Cheese: {round(cheese_wema[-1], 2)}'
-        pkws['color'] = '#ff9b28'
+        pkws['label'] = f'Cheese Price: {round(cheese_price[-1], 2)}'
+        pkws['color'] = '#FFCD51'
+        ax1.plot(cheese_range, cheese_price, alpha=0.8, **pkws)
+        pkws['label'] = f'Cheese WEMA: {round(cheese_wema[-1], 2)}'
+        pkws['color'] = '#FF840A'
         ax1.plot(cheese_range, cheese_wema, alpha=0.8, **pkws)
     pkws['label'] = f'Money: {round(cdl_wema[-1], 2)}'
     pkws['color'] = (0.4, 0.7, 0.4, 0.8)
@@ -213,7 +174,8 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     # Finalize
     props = dict(boxstyle='round', facecolor='0.03', alpha=0.97)
     plt.gcf().text(0.02, 0.02, moirai_metrics, fontsize=14, bbox=props)
-    ts = ts_lbls[-9]
+    last_ts = coated_len + 1
+    ts = ts_lbls[-last_ts]
     res = adj if adj else 'None'
     rnc = round(cdl_close[-1], 3)
     t = f'[ {rnc} ]   {symbol}  @  {ts} (resample: {res})'
