@@ -244,14 +244,17 @@ def get_indicators(df, index_key='time'):
         for c, s in dataframe.iteritems():
             indicators[c] = s.tolist()
     # mice stuff
-    dfc = df['close'].values
-    dfo = df['open'].values
-    dfw = indicators['price_wema'].values
-    dfm = indicators['price_mid'].values
-    indicators['cdl_change'] = safe_div((dfc - dfo), dfo).tolist()
-    indicators['dist_close'] = safe_div((dfc - dfm), dfm).tolist()
-    indicators['dist_wema'] = safe_div((dfw - dfm), dfm).tolist()
-    indicators['dist_open'] = safe_div((dfo - dfm), dfm).tolist()
+    df_o = df['open'].values
+    df_h = df['high'].values
+    df_l = df['low'].values
+    df_c = df['close'].values
+    df_w = indicators['price_wema'].values
+    df_m = indicators['price_mid'].values
+    indicators['cdl_change'] = safe_div((df_c - df_o), df_o).tolist()
+    indicators['cdl_median'] = (df_h - ((df_h - df_l) * 0.5)).tolist()
+    indicators['dist_close'] = safe_div((df_c - df_m), df_m).tolist()
+    indicators['dist_wema'] = safe_div((df_w - df_m), df_m).tolist()
+    indicators['dist_open'] = safe_div((df_o - df_m), df_m).tolist()
     indicators.fillna(0, inplace=True)
     return indicators.copy()
 

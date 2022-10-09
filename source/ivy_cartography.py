@@ -17,7 +17,7 @@ verbose = False
 
 
 def cartography(symbol, dataframe, chart_path=None, cheese=None,
-                chart_size=0, adj='1D', padding=90):
+                chart_size=0, adj='1D'):
     """Charting for IVy candles."""
     global plt
     plt.close('all')
@@ -41,7 +41,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     moirai_metrics = 'Moirai Metrics;\n'
     if cheese:
         coated_len = cheese['coated_candles'].shape[0]
-        padding = [0 for _ in range(padding)]
+        padding = [0 for _ in range(coated_len)]
         cheese_close = cheese['sealed_candles'][:, 0]
         cheese_open = cheese['sealed_candles'][:, 1]
         cheese_price = padding + ((cheese_close + cheese_open) / 2).tolist()

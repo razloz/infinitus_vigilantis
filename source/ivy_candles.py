@@ -449,7 +449,7 @@ class Candelabrum:
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        moirai = ThreeBlindMice(verbosity=1)
+        moirai = ThreeBlindMice(verbosity=2)
         print(self._PREFIX, 'Starting research loop...')
         symbols = [s for s, e in composite_index()]
         symbols_researched = 0
