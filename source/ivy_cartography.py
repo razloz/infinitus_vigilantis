@@ -35,17 +35,15 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     vol_wema = dataframe['volume_wema'].tolist()
     vol_mid = dataframe['volume_mid'].tolist()
     vol_dh = dataframe['volume_dh'].tolist()
-    cheese_close = None
-    cheese_open = None
-    cheese_wema = None
+    cheese_slices = dict()
     moirai_metrics = 'Moirai Metrics;\n'
     if cheese:
         coated_len = cheese['coated_candles'].shape[0]
-        padding = [0 for _ in range(coated_len)]
-        cheese_close = cheese['sealed_candles'][:, 0]
-        cheese_open = cheese['sealed_candles'][:, 1]
-        cheese_price = padding + ((cheese_close + cheese_open) / 2).tolist()
-        cheese_wema = padding + cheese['sealed_candles'][:, 2].tolist()
+        norn_labels = ['open', 'close', 'price_wema', 'cdl_median',
+                       'high', 'low', 'price_dh', 'price_dl']
+        pad = [0 for _ in range(coated_len)]
+        for t_i, lbl in enumerate(norn_labels):
+            cheese_slices[lbl] = pad + cheese['sealed_candles'][:, t_i].tolist()
         s_k = ['coated_candles', 'sealed_candles', 'metrics', 'proj_timestamp']
         p_k = ['cauldron_accuracy', 'mouse_accuracy']
         for c_k, c_v in cheese.items():
@@ -75,9 +73,9 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         vol_dh = vol_dh[-chart_size:]
         if cheese:
             chart_size += coated_len
-            cheese_price = cheese_price[-chart_size:]
-            cheese_wema = cheese_wema[-chart_size:]
-            cheese_range = range(len(cheese_price))
+            cheese_range = range(chart_size)
+            for cheese_label, cheese_slice in cheese_slices.items():
+                cheese_slices[cheese_label] = cheese_slice[-chart_size:]
             ts_lbls += [f'cheese_{n_pred + 1}' for n_pred in range(coated_len)]
     data_len = len(cdl_close)
     data_range = range(data_len)
@@ -100,7 +98,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ax1.set_ylabel('Price', fontweight='bold')
     if cheese:
         ax1.set_xlim(((cheese_range[0] - 2), (cheese_range[-1] + 2)))
-        price_points = [cheese_price, cheese_wema, cdl_high, cdl_low]
+        price_points = [cs for cs in cheese_slices.values()]
         ylim_low = min(min(price_points))
         ylim_high = max(max(price_points))
     else:
@@ -147,12 +145,15 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     if cheese:
-        pkws['label'] = f'Cheese Price: {round(cheese_price[-1], 2)}'
-        pkws['color'] = '#FFCD51'
-        ax1.plot(cheese_range, cheese_price, alpha=0.8, **pkws)
-        pkws['label'] = f'Cheese WEMA: {round(cheese_wema[-1], 2)}'
-        pkws['color'] = '#FF840A'
-        ax1.plot(cheese_range, cheese_wema, alpha=0.8, **pkws)
+        cheese_color = [0.95, 0.65, 0.05]
+        for cheese_label, cheese_slice in cheese_slices.items():
+            cheese_color = [cheese_color[0] * 0.92,
+                            cheese_color[1] * 0.92,
+                            cheese_color[2]]
+            pkws['color'] = tuple(cheese_color)
+            pkws['label'] = f'Cheese {cheese_label.capitalize()}:'
+            pkws['label'] += f' {round(cheese_slice[-1], 2)}'
+            ax1.plot(cheese_range, cheese_slice, alpha=0.9, **pkws)
     pkws['label'] = f'Money: {round(cdl_wema[-1], 2)}'
     pkws['color'] = (0.4, 0.7, 0.4, 0.8)
     ax1.plot(data_range, cdl_wema, **pkws)
@@ -180,7 +181,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     rnc = round(cdl_close[-1], 3)
     t = f'[ {rnc} ]   {symbol}  @  {ts} (resample: {res})'
     fig.suptitle(t, fontsize=18)
-    fig.legend(ncol=1, loc='lower right', fontsize='xx-large', fancybox=True)
+    fig.legend(ncol=2, loc='lower right', fontsize='xx-large', fancybox=True)
     plt.savefig(str(chart_path), dpi=dpi)
     plt.close(fig)
     if verbose: print("Cartography: chart's done!")

@@ -211,11 +211,12 @@ class Candelabrum:
                     chart_symbol = job[1]
                     candelabrum_candles = job[2]
                     sealed_package = job[3]
+                    ts = sealed_package['proj_timestamp']
                     cartography(
                         str(chart_symbol),
                         candelabrum_candles,
                         cheese=sealed_package,
-                        chart_path=f'{chart_path}/{chart_symbol}.png',
+                        chart_path=f'{chart_path}/{ts}-{chart_symbol}.png',
                         chart_size=200,
                         )
                 elif job[0] == 'clean':
@@ -472,7 +473,7 @@ class Candelabrum:
                     'cartography',
                     symbol,
                     candles,
-                    dict(moirai.predictions[symbol])
+                    dict(moirai.predictions[symbol]),
                     ))
                 moirai.predictions[symbol]['coated_candles'] = None
                 moirai.predictions[symbol]['sealed_candles'] = None
