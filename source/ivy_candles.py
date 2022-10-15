@@ -11,7 +11,7 @@ import source.ivy_alpaca as api
 from source.ivy_cartography import cartography
 from source.ivy_mouse import ThreeBlindMice
 from datetime import datetime
-from os import path, listdir, cpu_count, remove
+from os import path, listdir, cpu_count, remove, mkdir
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -212,11 +212,15 @@ class Candelabrum:
                     candelabrum_candles = job[2]
                     sealed_package = job[3]
                     ts = sealed_package['proj_timestamp']
+                    c_path = f'{chart_path}/{chart_symbol}'
+                    if not path.exists(c_path):
+                        mkdir(c_path)
+                    c_path = f'{c_path}/{ts}-{chart_symbol}.png'
                     cartography(
                         str(chart_symbol),
                         candelabrum_candles,
                         cheese=sealed_package,
-                        chart_path=f'{chart_path}/{ts}-{chart_symbol}.png',
+                        chart_path=c_path,
                         chart_size=200,
                         )
                 elif job[0] == 'clean':
@@ -450,39 +454,32 @@ class Candelabrum:
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        moirai = ThreeBlindMice(verbosity=2)
         print(self._PREFIX, 'Starting research loop...')
-        symbols = [s for s, e in composite_index()]
+        #symbols = [s for s, e in composite_index()]
+        symbols = ['QQQ', 'SPY', 'GME', 'AMD', 'NVDA', 'INTC', 'CARA', 'CGC',
+                   'QCOM', 'PALL', 'SPPP', 'JPM', 'DIS', 'SYK']
         symbols_researched = 0
         symbols_total = len(symbols)
-        symbols_remaining = symbols_total
         msg = self._PREFIX + ' Sent {} to The Moirai. ( {} / {} ) '
         loop_start = time.time()
-        while symbols_remaining > 0:
+        for symbol in symbols:
             symbols_researched += 1
-            index = random.randint(0, symbols_remaining)
-            symbol = symbols[index]
-            symbols.pop(index)
             bars = get_daily(symbol)
             indicators = omenize(bars)
             candles = bars.merge(indicators, left_index=True, right_index=True)
             print(msg.format(symbol, symbols_researched, symbols_total))
-            moirai.research(symbol, candles)
-            if symbol in moirai.predictions.keys():
-                self._QUEUE.put((
-                    'cartography',
-                    symbol,
-                    candles,
-                    dict(moirai.predictions[symbol]),
-                    ))
-                moirai.predictions[symbol]['coated_candles'] = None
-                moirai.predictions[symbol]['sealed_candles'] = None
-            symbols_remaining = len(symbols)
+            # fib_seq = icy.FibonacciSequencer()
+            # fib_seq.skip(1)
+            # self.fib_seq = fib_seq.next(n=5)
+            moirai = ThreeBlindMice(55, verbosity=1)
+            if moirai.research(symbol, candles):
+                predictions = dict(moirai.predictions)
+                self._QUEUE.put(('cartography', symbol, candles, predictions))
         self.join_workers()
         elapsed = time.time() - loop_start
-        message = 'Research of {} complete after {}.'
+        message = 'Research of {} symbols complete after'
         message = format_time(elapsed, message=message)
-        print(self._PREFIX, message.format(symbols_total, elapsed))
+        print(self._PREFIX, message.format(symbols_total))
 
     def candle_maker(self, candles):
         """Makes a candle."""

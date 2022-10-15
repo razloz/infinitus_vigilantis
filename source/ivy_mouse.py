@@ -15,26 +15,19 @@ __license__ = 'GPL v3'
 
 class GRNN(nn.Module):
     """Gated Recurrent Neural Network"""
-    def __init__(self, name, **kwargs):
+    def __init__(self, name, batch_size, *args, **kwargs):
         """Register modules and candles parameter."""
         super(GRNN, self).__init__()
         self._device_ = kwargs['device']
-        self._n_hidden_ = int(kwargs['hidden_size'])
-        self._n_output_ = 2
         self.__gru__ = nn.GRU(**kwargs)
-        self.__batch_fn__ = nn.BatchNorm1d(self._n_hidden_)
-        self.__linear_fn__ = nn.Linear(self._n_hidden_, self._n_output_)
+        self.__batch_fn__ = nn.BatchNorm1d(int(kwargs['hidden_size']))
+        self.__linear_fn__ = nn.Linear(int(kwargs['hidden_size']), 1)
         self.candles = dict()
         self.loss_fn = nn.HuberLoss(reduction='mean', delta=0.97)
         self.metrics = nn.ParameterDict()
         self.name = str(name)
-        self.optimizer = RMSprop(
-            self.__gru__.parameters(),
-            lr=0.03,
-            alpha=0.97,
-            momentum=0.97,
-            )
-        self.scheduler = WarmRestarts(self.optimizer, 17)
+        self.optimizer = RMSprop(self.__gru__.parameters(), lr=3e-3)
+        self.scheduler = WarmRestarts(self.optimizer, int(batch_size * 0.5))
         self.to(self._device_)
 
     def forward(self, inputs):
@@ -49,19 +42,13 @@ class GRNN(nn.Module):
         """Sample cheese, create candles."""
         if type(cheese) is list:
             cheese = torch.hstack([*cheese])
-        _max = cheese.max()
-        _min = cheese.min()
-        wicks = (_max - ((_max - _min) * 0.5))
-        wax = (1 + self(cheese))
-        candles = (wicks * wax).relu()
-        return candles.clone()
+        return self(cheese).relu().clone()
 
     def release_tensors(self):
         """Remove batch and target tensors from memory."""
-        self.candles['batch_inputs'] = None
-        self.candles['targets_base'] = None
-        self.candles['targets_loss'] = None
-        self.candles['targets_pred'] = None
+        self.candles['inputs'] = None
+        self.candles['targets'] = None
+        self.candles['wax'] = None
 
     def reset_candles(self):
         """Clear previous candles."""
@@ -96,38 +83,29 @@ class Moira(GRNN):
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, verbosity=0, min_size=90, *args, **kwargs):
+    def __init__(self, batch_size, verbosity=0, min_size=90, *args, **kwargs):
         """Beckon the Norns."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
-        self._labels_ = {
-            'Cheese': [
-                'open', 'high', 'low', 'close',
-                'price_dh', 'price_dl', 'price_mid',
-                'cdl_median', 'price_wema'
-                ],
-            'Clotho': [
-                'price_wema', 'cdl_median'
-                ],
-            'Lachesis': [
-                'high', 'low'
-                ],
-            'Atropos': [
-                'open', 'close'
-                ],
-            'Awen': [
-                'price_dh', 'price_dl'
-                ],
-            }
+        self._features_ = [
+            'open', 'high', 'low', 'close', 'volume', 'num_trades',
+            'vol_wma_price', 'trend', 'fib_retrace_0.236', 'fib_retrace_0.382',
+            'fib_retrace_0.5', 'fib_retrace_0.618', 'fib_retrace_0.786',
+            'fib_retrace_0.886', 'price_zs', 'price_sdev', 'price_wema',
+            'price_dh', 'price_dl', 'price_mid', 'volume_zs', 'volume_sdev',
+            'volume_wema', 'volume_dh', 'volume_dl', 'volume_mid', 'median_oc',
+            'median_hl', 'wema_dist_hl', 'wema_dist_vp', 'wema_dist_oc',
+            'wema_dist_v', 'cdl_change'
+            ]
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self._device_ = torch.device(self._device_type_)
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
-        self._state_path_ = abspath('./rnn/moirai.state')
+        self._state_path_ = abspath('./rnn')
         self.verbosity = int(verbosity)
         self._min_size_ = int(min_size)
-        self._batch_size_ = self._min_size_
-        self._n_features_ = int(len(self._labels_['Cheese']) - 2)
-        self._n_hidden_ = int(self._n_features_ ** 2)
+        self._batch_size_ = int(batch_size)
+        self._n_features_ = len(self._features_) - 1
+        self._n_hidden_ = int(self._n_features_ * 3)
         self._tolerance_ = 0.01618033988749894
         p_gru = dict()
         p_gru['input_size'] = self._n_features_
@@ -135,19 +113,29 @@ class ThreeBlindMice(nn.Module):
         p_gru['num_layers'] = self._n_hidden_
         p_gru['bias'] = True
         p_gru['batch_first'] = True
-        p_gru['dropout'] = 0.13
+        p_gru['dropout'] = 0.34
         p_gru['device'] = self._device_
         # Awen the sentient cauldron.
-        self.Awen = Cauldron('Awen', **p_gru)
+        self.Awen = Cauldron('Awen', self._batch_size_, **p_gru)
         # Atropos the mouse, sister of Clotho and Lachesis.
-        self.Atropos = Moira('Atropos', **p_gru)
+        self.Atropos = Moira('Atropos', self._batch_size_, **p_gru)
         # Clotho the mouse, sister of Lachesis and Atropos.
-        self.Clotho = Moira('Clotho', **p_gru)
+        self.Clotho = Moira('Clotho', self._batch_size_, **p_gru)
         # Lachesis the mouse, sister of Atropos and Clotho.
-        self.Lachesis = Moira('Lachesis', **p_gru)
+        self.Lachesis = Moira('Lachesis', self._batch_size_, **p_gru)
         # Store predictions for sorting top picks
-        self.predictions = nn.ParameterDict()
-        self.targets_zero = torch.zeros(self._batch_size_, 2, **self._p_tensor_)
+        self.predictions = nn.ParameterDict(dict(
+            symbol='',
+            num_epochs=0,
+            final_accuracy=0.0,
+            last_price=0.0,
+            batch_pred=0.0,
+            proj_gain=0.0,
+            proj_timestamp=0.0,
+            proj_time_str='',
+            coated_candles=None,
+            sealed_candles=None,
+            ))
         self.to(self._device_)
         if self.verbosity > 1:
             print(self._prefix_, 'set device_type to', self._device_type_)
@@ -160,17 +148,28 @@ class ThreeBlindMice(nn.Module):
             for _k, _v in p_gru.items():
                 print(f'{_k}: {_v}')
 
-    def __manage_state__(self, call_type=0):
+    def __manage_state__(self, symbol, call_type=0):
         """Handles loading and saving of the RNN state."""
         try:
-            p = self._state_path_
+            state_path = f'{self._state_path_}/{symbol.upper()}.state'
             if call_type == 0:
-                d = self._device_type_
-                self.load_state_dict(torch.load(p, map_location=d))
+                state = torch.load(state_path, map_location=self._device_type_)
+                self.load_state_dict(state['moirai'])
+                for key, value in state['predictions'].items():
+                    self.predictions[key] = value
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             elif call_type == 1:
-                torch.save(self.state_dict(), p)
+                moirai = self.state_dict()
+                predictions = dict()
+                for key, value in self.predictions.items():
+                    if key in ['coated_candles', 'sealed_candles']:
+                        continue
+                    predictions[key] = value
+                torch.save(
+                    dict(moirai=moirai, predictions=predictions),
+                    state_path,
+                    )
                 if self.verbosity > 2:
                     print(self._prefix_, 'Saved RNN state.')
         except Exception as details:
@@ -184,19 +183,22 @@ class ThreeBlindMice(nn.Module):
            Let Atropos seal the candles"""
         vstack = torch.vstack
         batch_start, batch_stop = indices
+        name = norn.name
+        wax = norn.candles['wax']
         if study is True:
+            self.train()
             threshold = self._tolerance_
             cheese = norn.candles['inputs'][batch_start:batch_stop]
             targets = norn.candles['targets'][batch_start:batch_stop]
             targets = vstack([t for t in targets.split(1)])
             batch_size = cheese.shape[0]
             norn.optimizer.zero_grad()
-            candles = norn.give(cheese)
-            difference = (candles - targets).tanh()
+            candles = (norn.give(cheese) * wax)
+            loss = norn.loss_fn(candles, targets)
+            loss.backward()
+            difference = (candles - targets)
             correct = difference[difference >= -threshold]
             correct = correct[correct <= threshold].shape[0]
-            loss = norn.loss_fn(difference, self.targets_zero)
-            loss.backward()
             norn.metrics['loss'] = loss.item()
             norn.candles['coated'] = candles.clone()
             norn.candles['sealed'].append(candles.clone())
@@ -209,6 +211,7 @@ class ThreeBlindMice(nn.Module):
             norn.metrics['mae'] += difference.abs().sum().item()
             norn.metrics['mse'] += (difference ** 2).sum().item()
         else:
+            self.eval()
             with torch.no_grad():
                 try:
                     norn.metrics['mae'] = norn.metrics['mae'] / epochs
@@ -220,7 +223,7 @@ class ThreeBlindMice(nn.Module):
                         traceback.print_exception(details)
                 finally:
                     cheese = norn.candles['inputs'][batch_start:]
-                    candles = norn.give(cheese)
+                    candles = (norn.give(cheese) * wax)
                     norn.candles['coated'] = candles.clone()
                     norn.candles['sealed'].append(candles.clone())
         if self.verbosity == 2 and study is False:
@@ -240,18 +243,18 @@ class ThreeBlindMice(nn.Module):
             if study is True:
                 print(msg.format('targets:\n', targets))
                 print(msg.format('targets shape:\n', targets.shape))
-            print('coated:\n', len(norn.candles['coated']))
+            print('coated:\n', len(mouse.candles['coated']))
 
-    def research(self, symbol, candles, timeout=34, epoch_save=True):
+    def research(self, symbol, candles, timeout=3, epoch_save=False):
         """Moirai research session, fully stocked with cheese and drinks."""
         _TK_ = icy.TimeKeeper()
         time_start = _TK_.reset
         candle_keys = candles.keys()
         if not all((
             len(candles.index) >= self._min_size_,
-            *(l in candle_keys for l in self._labels_['Cheese']),
+            *(key in candle_keys for key in self._features_),
             )): return False
-        self.__manage_state__(call_type=0)
+        self.__manage_state__(symbol, call_type=0)
         Awen = self.Awen
         Atropos = self.Atropos
         Clotho = self.Clotho
@@ -275,27 +278,26 @@ class ThreeBlindMice(nn.Module):
         candles = candles[-batch_fit:]
         timestamps = len(candles.index)
         batch_range = range(timestamps - batch_size)
-        norns = [Atropos, Clotho, Lachesis, Awen]
-        for norn in norns:
+        norns = [Awen, Atropos, Clotho, Lachesis]
+        _target_keys = ['volume', 'close', 'open', 'price_wema']
+        for t_index, norn in enumerate(norns):
             norn.reset_candles()
             norn.reset_metrics()
             _candles = norn.candles
-            _targets = self._labels_[norn.name]
-            _labels = self._labels_['Cheese']
-            _labels = [l for l in _labels if not l in _targets]
-            _input = candles[_labels].to_numpy()
-            _target = candles[_targets].to_numpy()
-            _target = _target[batch_size:]
-            _candles['inputs'] = tensor(_input, **p_tensor)
+            _name = norn.name
+            _target = _target_keys[t_index]
+            _features = [l for l in self._features_ if l != _target]
+            _inputs = candles[_features].to_numpy()
+            _targets = candles[_target].to_numpy()[batch_size:]
+            _candles['inputs'] = tensor(_inputs, **p_tensor)
             _candles['inputs'].requires_grad_(True)
-            _candles['targets'] = tensor(_target, **p_tensor)
+            _candles['targets'] = tensor(_targets, **p_tensor)
+            _candles['wax'] = round(_candles['targets'].mean().item(), 3)
             if self.verbosity > 1:
-                _name = norn.name
-                print(_name, 'inputs shape:',
-                      _candles['inputs'].shape)
-                print(_name, 'targets shape:',
-                      _candles['targets'].shape)
-        target_accuracy = 55.0
+                print(norn.name, 'inputs:', _candles['inputs'].shape)
+                print(norn.name, 'targets:', _candles['targets'].shape)
+                print(norn.name, 'wax:', _candles['wax'])
+        target_accuracy = 89.0
         target_loss = 0.1 / batch_size
         target_mae = 1e-3
         target_mse = target_mae ** 2
@@ -306,9 +308,6 @@ class ThreeBlindMice(nn.Module):
             print(prefix, 'target_mse', target_mse)
         epochs = 0
         final_accuracy = 0
-        mouse_accuracy = 0
-        Awen.reset_metrics()
-        wicks, targets = [[], []]
         while final_accuracy < target_accuracy:
             time_update = _TK_.update[0]
             if self.verbosity > 1:
@@ -357,12 +356,12 @@ class ThreeBlindMice(nn.Module):
                 norn.optimizer.step()
                 norn.scheduler.step()
             if epoch_save:
-                self.__manage_state__(call_type=1)
+                self.__manage_state__(symbol, call_type=1)
             if self.verbosity > 0:
                 msg = f'({epochs}) A moment of research yielded '
                 msg += f'a final accuracy of {final_accuracy}%'
                 print(prefix, msg)
-        last_pred = float(Clotho.candles['coated'][-1][1].item())
+        last_pred = float(Atropos.candles['coated'][-1].item())
         last_price = float(candles['close'][-1])
         proj_gain = float(((last_pred - last_price) / last_price) * 100)
         coated = list()
@@ -374,21 +373,19 @@ class ThreeBlindMice(nn.Module):
         sealed = hstack(sealed)
         timestamp = time.time()
         time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
-        self.predictions[symbol] = {
-            'final_accuracy': final_accuracy,
-            'coated_candles': coated.detach().cpu().numpy(),
-            'sealed_candles': sealed.detach().cpu().numpy(),
-            'last_price': round(last_price, 3),
-            'batch_pred': round(last_pred, 3),
-            'num_epochs': epochs,
-            'metrics': {norn.name: dict(norn.metrics) for norn in norns},
-            'proj_gain': proj_gain,
-            'proj_timestamp': timestamp,
-            'proj_time_str': time_str,
-            }
+        self.predictions['symbol'] = symbol.upper()
+        self.predictions['num_epochs'] += epochs
+        self.predictions['final_accuracy'] = final_accuracy
+        self.predictions['last_price'] = round(last_price, 3)
+        self.predictions['batch_pred'] = round(last_pred, 3)
+        self.predictions['proj_gain'] = round(proj_gain, 3)
+        self.predictions['proj_timestamp'] = timestamp
+        self.predictions['proj_time_str'] = time_str
+        self.predictions['coated_candles'] = coated.detach().cpu().numpy()
+        self.predictions['sealed_candles'] = sealed.detach().cpu().numpy()
         for norn in norns:
             norn.release_tensors()
-        self.__manage_state__(call_type=1)
+        self.__manage_state__(symbol, call_type=1)
         if self.verbosity > 0:
             epoch_str = 'epoch' if epochs == 1 else 'epochs'
             msg = 'After {} {}, an accuracy of {}% was realized.'

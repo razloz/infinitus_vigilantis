@@ -244,17 +244,21 @@ def get_indicators(df, index_key='time'):
         for c, s in dataframe.iteritems():
             indicators[c] = s.tolist()
     # mice stuff
-    df_o = df['open'].values
-    df_h = df['high'].values
-    df_l = df['low'].values
-    df_c = df['close'].values
-    df_w = indicators['price_wema'].values
-    df_m = indicators['price_mid'].values
-    indicators['cdl_change'] = safe_div((df_c - df_o), df_o).tolist()
-    indicators['cdl_median'] = (df_h - ((df_h - df_l) * 0.5)).tolist()
-    indicators['dist_close'] = safe_div((df_c - df_m), df_m).tolist()
-    indicators['dist_wema'] = safe_div((df_w - df_m), df_m).tolist()
-    indicators['dist_open'] = safe_div((df_o - df_m), df_m).tolist()
+    o = df['open'].values
+    h = df['high'].values
+    l = df['low'].values
+    c = df['close'].values
+    v = df['volume'].values
+    wp = indicators['price_wema'].values
+    wv = indicators['volume_wema'].values
+    vp = df['vol_wma_price'].values
+    moc = indicators['median_oc'] = (c - ((c - o) * 0.5)).tolist()
+    mhl = indicators['median_hl'] = (h - ((h - l) * 0.5)).tolist()
+    indicators['wema_dist_hl'] = safe_div((mhl - wp), wp)
+    indicators['wema_dist_vp'] = safe_div((vp - wp), wp)
+    indicators['wema_dist_oc'] = safe_div((moc - wp), wp)
+    indicators['wema_dist_v'] = safe_div((v - wv), wv)
+    indicators['cdl_change'] = safe_div((c - o), o).tolist()
     indicators.fillna(0, inplace=True)
     return indicators.copy()
 
