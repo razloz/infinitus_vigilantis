@@ -37,7 +37,8 @@ if __name__ == '__main__':
     elif args.clean:
         updater.Candelabrum().clean_candelabrum()
     elif args.research:
-        updater.Candelabrum().research_candles()
+        while True:
+            updater.Candelabrum().research_candles()
     elif args.indicators:
         print('Applying indicators...')
         updater.Candelabrum().apply_indicators()
