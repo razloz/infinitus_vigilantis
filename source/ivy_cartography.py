@@ -36,10 +36,11 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     vol_mid = dataframe['volume_mid'].tolist()
     vol_dh = dataframe['volume_dh'].tolist()
     cheese_slices = dict()
-    moirai_metrics = 'Moirai Metrics;\n'
+    moirai_metrics = ''
     if cheese:
-        metrics = ['symbol', 'num_epochs', 'final_accuracy', 'last_price',
-                   'batch_pred', 'proj_gain', 'proj_time_str']
+        metrics = ['num_epochs', 'final_accuracy', 'total_mae', 'total_mse',
+                   'total_loss', 'last_price', 'batch_pred', 'proj_gain',
+                   'proj_time_str']
         for metric_label in metrics:
             m_value = cheese[metric_label]
             addendum = f'{metric_label}: {m_value}'

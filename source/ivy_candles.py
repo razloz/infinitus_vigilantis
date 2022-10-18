@@ -450,31 +450,54 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def research_candles(self):
+    def research_candles(self, mode='train', aeternalis=True):
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        print(self._PREFIX, 'Starting research loop...')
-        #symbols = [s for s, e in composite_index()]
-        symbols = ['QQQ', 'SPY', 'GME', 'AMD', 'NVDA', 'INTC', 'CARA', 'CGC',
-                   'QCOM', 'PALL', 'SPPP', 'JPM', 'DIS', 'SYK']
+        if mode == 'train':
+            symbols = ['QQQ', 'SPY']
+        elif mode == 'eval':
+            symbols = [s for s, e in composite_index()]
         symbols_researched = 0
         symbols_total = len(symbols)
         msg = self._PREFIX + ' Sent {} to The Moirai. ( {} / {} ) '
+        fib_seq = icy.FibonacciSequencer()
+        fib_seq.skip(1)
+        fib_seq = fib_seq.next(n=5)
+        small_batch = fib_seq[:3]
+        large_batch = fib_seq[3:]
+        large_batch.reverse()
         loop_start = time.time()
+        paterae = dict()
         for symbol in symbols:
-            symbols_researched += 1
             bars = get_daily(symbol)
             indicators = omenize(bars)
-            candles = bars.merge(indicators, left_index=True, right_index=True)
-            print(msg.format(symbol, symbols_researched, symbols_total))
-            # fib_seq = icy.FibonacciSequencer()
-            # fib_seq.skip(1)
-            # self.fib_seq = fib_seq.next(n=5)
-            moirai = ThreeBlindMice(55, verbosity=1)
-            if moirai.research(symbol, candles):
-                predictions = dict(moirai.predictions)
-                self._QUEUE.put(('cartography', symbol, candles, predictions))
+            paterae[symbol] = bars.merge(
+                indicators,
+                left_index=True,
+                right_index=True,
+                )
+        print(f'Using fibonacci batch sequence {fib_seq}.')
+        print(self._PREFIX, 'Starting research loop...')
+        while aeternalis:
+            for offering, candles in paterae.items():
+                symbols_researched += 1
+                print(msg.format(offering, symbols_researched, symbols_total))
+                for i in range(3):
+                    slice_sizes = (small_batch[i], large_batch[i])
+                    for slice_size in slice_sizes:
+                        print(self._PREFIX, f'{slice_size} slices offered.')
+                        moirai = ThreeBlindMice(slice_size, verbosity=1)
+                        if moirai.research(offering, candles, mode):
+                            predictions = dict(moirai.predictions)
+                            self._QUEUE.put((
+                                'cartography',
+                                offering,
+                                candles,
+                                predictions,
+                                ))
+            if mode == 'eval':
+                aeternalis = False
         self.join_workers()
         elapsed = time.time() - loop_start
         message = 'Research of {} symbols complete after'

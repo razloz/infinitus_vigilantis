@@ -33,16 +33,20 @@ class GRNN(nn.Module):
     def forward(self, inputs):
         """Batch input to gated linear output."""
         inputs = self.__gru__(inputs)
-        if type(inputs) is tuple: inputs = inputs[0]
+        if type(inputs) is tuple:
+            inputs = inputs[0]
+        inputs = inputs.tanh().log_softmax(0)
         inputs = self.__batch_fn__(inputs)
         inputs = self.__linear_fn__(inputs)
         return inputs
 
-    def give(self, cheese):
+    def give(self, cheese, wax):
         """Sample cheese, create candles."""
         if type(cheese) is list:
-            cheese = torch.hstack([*cheese])
-        return self(cheese).relu().clone()
+            cheese = torch.hstack(cheese)
+        wicks = torch.exp(self(cheese))
+        candles = (wax * wicks).relu()
+        return candles.clone()
 
     def release_tensors(self):
         """Remove batch and target tensors from memory."""
@@ -105,12 +109,13 @@ class ThreeBlindMice(nn.Module):
         self._min_size_ = int(min_size)
         self._batch_size_ = int(batch_size)
         self._n_features_ = len(self._features_) - 1
-        self._n_hidden_ = int(self._n_features_ * 3)
+        self._n_hidden_ = int(self._n_features_ * 2)
+        self._n_layers_ = int(self._n_features_ ** 2)
         self._tolerance_ = 0.01618033988749894
         p_gru = dict()
         p_gru['input_size'] = self._n_features_
         p_gru['hidden_size'] = self._n_hidden_
-        p_gru['num_layers'] = self._n_hidden_
+        p_gru['num_layers'] = self._n_layers_
         p_gru['bias'] = True
         p_gru['batch_first'] = True
         p_gru['dropout'] = 0.34
@@ -124,20 +129,9 @@ class ThreeBlindMice(nn.Module):
         # Lachesis the mouse, sister of Atropos and Clotho.
         self.Lachesis = Moira('Lachesis', self._batch_size_, **p_gru)
         # Store predictions for sorting top picks
-        self.predictions = nn.ParameterDict(dict(
-            symbol='',
-            num_epochs=0,
-            final_accuracy=0.0,
-            last_price=0.0,
-            batch_pred=0.0,
-            proj_gain=0.0,
-            proj_timestamp=0.0,
-            proj_time_str='',
-            coated_candles=None,
-            sealed_candles=None,
-            ))
+        self.predictions = nn.ParameterDict({'num_epochs': 0})
         self.to(self._device_)
-        if self.verbosity > 1:
+        if self.verbosity > 0:
             print(self._prefix_, 'set device_type to', self._device_type_)
             print(self._prefix_, 'set batch_size to', self._batch_size_)
             print(self._prefix_, 'set min_size to', self._min_size_)
@@ -146,12 +140,12 @@ class ThreeBlindMice(nn.Module):
             print(self._prefix_, 'set tolerance to', self._tolerance_)
             print(self._prefix_, 'GRU params:')
             for _k, _v in p_gru.items():
-                print(f'{_k}: {_v}')
+                print(f'    {_k}: {_v}')
 
-    def __manage_state__(self, symbol, call_type=0):
+    def __manage_state__(self, call_type=0):
         """Handles loading and saving of the RNN state."""
         try:
-            state_path = f'{self._state_path_}/{symbol.upper()}.state'
+            state_path = f'{self._state_path_}/moirai.state'
             if call_type == 0:
                 state = torch.load(state_path, map_location=self._device_type_)
                 self.load_state_dict(state['moirai'])
@@ -177,7 +171,7 @@ class ThreeBlindMice(nn.Module):
                 print(self._prefix_, 'Encountered an exception.')
                 traceback.print_exception(details)
 
-    def __time_step__(self, norn, indices, epochs=0, study=False):
+    def __time_step__(self, norn, indices, mode, epochs=0, study=False):
         """Let Clotho mold the candles
            Let Lachesis measure the candles
            Let Atropos seal the candles"""
@@ -185,15 +179,18 @@ class ThreeBlindMice(nn.Module):
         batch_start, batch_stop = indices
         name = norn.name
         wax = norn.candles['wax']
-        if study is True:
+        if mode == 'train':
             self.train()
-            threshold = self._tolerance_
+        elif mode == 'eval':
+            self.eval()
+        if study is True:
+            threshold = wax * self._tolerance_
             cheese = norn.candles['inputs'][batch_start:batch_stop]
             targets = norn.candles['targets'][batch_start:batch_stop]
             targets = vstack([t for t in targets.split(1)])
             batch_size = cheese.shape[0]
             norn.optimizer.zero_grad()
-            candles = (norn.give(cheese) * wax)
+            candles = norn.give(cheese, wax)
             loss = norn.loss_fn(candles, targets)
             loss.backward()
             difference = (candles - targets)
@@ -211,7 +208,6 @@ class ThreeBlindMice(nn.Module):
             norn.metrics['mae'] += difference.abs().sum().item()
             norn.metrics['mse'] += (difference ** 2).sum().item()
         else:
-            self.eval()
             with torch.no_grad():
                 try:
                     norn.metrics['mae'] = norn.metrics['mae'] / epochs
@@ -223,7 +219,7 @@ class ThreeBlindMice(nn.Module):
                         traceback.print_exception(details)
                 finally:
                     cheese = norn.candles['inputs'][batch_start:]
-                    candles = (norn.give(cheese) * wax)
+                    candles = norn.give(cheese, wax)
                     norn.candles['coated'] = candles.clone()
                     norn.candles['sealed'].append(candles.clone())
         if self.verbosity == 2 and study is False:
@@ -245,7 +241,7 @@ class ThreeBlindMice(nn.Module):
                 print(msg.format('targets shape:\n', targets.shape))
             print('coated:\n', len(mouse.candles['coated']))
 
-    def research(self, symbol, candles, timeout=3, epoch_save=False):
+    def research(self, symbol, candles, mode, timeout=1, epoch_save=False):
         """Moirai research session, fully stocked with cheese and drinks."""
         _TK_ = icy.TimeKeeper()
         time_start = _TK_.reset
@@ -254,7 +250,7 @@ class ThreeBlindMice(nn.Module):
             len(candles.index) >= self._min_size_,
             *(key in candle_keys for key in self._features_),
             )): return False
-        self.__manage_state__(symbol, call_type=0)
+        self.__manage_state__(call_type=0)
         Awen = self.Awen
         Atropos = self.Atropos
         Clotho = self.Clotho
@@ -340,12 +336,13 @@ class ThreeBlindMice(nn.Module):
                     last_batch = int(indices[1])
                 if last_batch <= batch_range[-1]:
                     for norn in norns:
-                        time_step(norn, indices, study=True)
+                        time_step(norn, indices, mode, study=True)
                 else:
                     n_total = 0
                     n_correct = 0
+                    indices = (-batch_size, None)
                     for norn in norns:
-                        time_step(norn, (-batch_size, None), epochs=timestamps)
+                        time_step(norn, indices, mode, epochs=timestamps)
                         n_correct += norn.metrics['acc'][0]
                         n_total += norn.metrics['acc'][1]
                     n_wrong = n_total - n_correct
@@ -356,7 +353,7 @@ class ThreeBlindMice(nn.Module):
                 norn.optimizer.step()
                 norn.scheduler.step()
             if epoch_save:
-                self.__manage_state__(symbol, call_type=1)
+                self.__manage_state__(call_type=1)
             if self.verbosity > 0:
                 msg = f'({epochs}) A moment of research yielded '
                 msg += f'a final accuracy of {final_accuracy}%'
@@ -364,11 +361,23 @@ class ThreeBlindMice(nn.Module):
         last_pred = float(Atropos.candles['coated'][-1].item())
         last_price = float(candles['close'][-1])
         proj_gain = float(((last_pred - last_price) / last_price) * 100)
-        coated = list()
-        sealed = list()
+        coated, sealed = list(), list()
+        candle_mae, candle_mse, candle_loss = 0, 0, 0
+        volume_mae, volume_mse, volume_loss = 0, 0, 0
         for norn in norns:
             coated.append(norn.candles['coated'])
             sealed.append(vstack(norn.candles['sealed']))
+            if norn.name == 'Awen':
+                volume_mae += norn.metrics['mae']
+                volume_mse += norn.metrics['mse']
+                volume_loss += norn.metrics['loss']
+            else:
+                candle_mae += norn.metrics['mae']
+                candle_mse += norn.metrics['mse']
+                candle_loss += norn.metrics['loss']
+        total_mae = (round(candle_mae, 5), round(volume_mae, 5))
+        total_mse = (round(candle_mse, 5), round(volume_mse, 5))
+        total_loss = (round(candle_loss, 5), round(volume_loss, 5))
         coated = hstack(coated)
         sealed = hstack(sealed)
         timestamp = time.time()
@@ -376,6 +385,9 @@ class ThreeBlindMice(nn.Module):
         self.predictions['symbol'] = symbol.upper()
         self.predictions['num_epochs'] += epochs
         self.predictions['final_accuracy'] = final_accuracy
+        self.predictions['total_mae'] = total_mae
+        self.predictions['total_mse'] = total_mse
+        self.predictions['total_loss'] = total_loss
         self.predictions['last_price'] = round(last_price, 3)
         self.predictions['batch_pred'] = round(last_pred, 3)
         self.predictions['proj_gain'] = round(proj_gain, 3)
@@ -385,8 +397,13 @@ class ThreeBlindMice(nn.Module):
         self.predictions['sealed_candles'] = sealed.detach().cpu().numpy()
         for norn in norns:
             norn.release_tensors()
-        self.__manage_state__(symbol, call_type=1)
+        self.__manage_state__(call_type=1)
         if self.verbosity > 0:
+            if self.verbosity > 1:
+                for k, v in self.predictions.items():
+                    if k in ['coated_candles', 'sealed_candles']:
+                        continue
+                    print(f'{k}: {v}')
             epoch_str = 'epoch' if epochs == 1 else 'epochs'
             msg = 'After {} {}, an accuracy of {}% was realized.'
             print(prefix, msg.format(epochs, epoch_str, final_accuracy))
