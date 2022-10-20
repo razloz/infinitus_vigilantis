@@ -248,16 +248,7 @@ def get_indicators(df, index_key='time'):
     h = df['high'].values
     l = df['low'].values
     c = df['close'].values
-    v = df['volume'].values
-    wp = indicators['price_wema'].values
-    wv = indicators['volume_wema'].values
-    vp = df['vol_wma_price'].values
-    moc = indicators['median_oc'] = (c - ((c - o) * 0.5)).tolist()
-    mhl = indicators['median_hl'] = (h - ((h - l) * 0.5)).tolist()
-    indicators['wema_dist_hl'] = safe_div((mhl - wp), wp)
-    indicators['wema_dist_vp'] = safe_div((vp - wp), wp)
-    indicators['wema_dist_oc'] = safe_div((moc - wp), wp)
-    indicators['wema_dist_v'] = safe_div((v - wv), wv)
+    indicators['price_med'] = ((o + h + l + c) / 4).tolist()
     indicators['cdl_change'] = safe_div((c - o), o).tolist()
     indicators.fillna(0, inplace=True)
     return indicators.copy()

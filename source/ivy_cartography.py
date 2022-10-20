@@ -35,16 +35,15 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     vol_wema = dataframe['volume_wema'].tolist()
     vol_mid = dataframe['volume_mid'].tolist()
     vol_dh = dataframe['volume_dh'].tolist()
-    cheese_slices = dict()
     moirai_metrics = ''
     if cheese:
-        metrics = ['num_epochs', 'final_accuracy', 'total_mae', 'total_mse',
-                   'total_loss', 'last_price', 'batch_pred', 'proj_gain',
+        metrics = ['num_epochs', 'threshold', 'accuracy', 'mae', 'mse',
+                   'loss', 'batch_size', 'batch_pred', 'proj_gain',
                    'proj_time_str']
         for metric_label in metrics:
             m_value = cheese[metric_label]
             addendum = f'{metric_label}: {m_value}'
-            if metric_label in ['final_accuracy', 'proj_gain']:
+            if metric_label in ['accuracy', 'proj_gain']:
                 addendum += '%'
             add_len = len(addendum)
             if add_len < 80:
@@ -52,11 +51,10 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
                     addendum += ' '
             moirai_metrics += f'{addendum}\n'
         moirai_metrics = moirai_metrics[:-2]
-        coated_len = cheese['coated_candles'].shape[0]
-        norn_labels = ['volume', 'close', 'open', 'price_wema']
-        pad = [0 for _ in range(coated_len)]
-        for t_i, lbl in enumerate(norn_labels):
-            cheese_slices[lbl] = pad + cheese['sealed_candles'][:, t_i].tolist()
+        batch_size = cheese['batch_size']
+        pad = [0 for _ in range(batch_size)]
+        predictions = pad + cheese['prediction']
+        targets = dataframe['price_med'].tolist()
     ts_lbls = [x_ts for x_ts in dataframe.index.tolist()]
     if chart_size > 0:
         ts_lbls = ts_lbls[-chart_size:]
@@ -73,11 +71,11 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         vol_mid = vol_mid[-chart_size:]
         vol_dh = vol_dh[-chart_size:]
         if cheese:
-            chart_size += coated_len
+            targets = targets [-chart_size:]
+            chart_size += batch_size
             cheese_range = range(chart_size)
-            for cheese_label, cheese_slice in cheese_slices.items():
-                cheese_slices[cheese_label] = cheese_slice[-chart_size:]
-            ts_lbls += [f'cheese_{n_pred + 1}' for n_pred in range(coated_len)]
+            predictions = predictions[-chart_size:]
+            ts_lbls += [f'cheese_{n_pred + 1}' for n_pred in range(batch_size)]
     data_len = len(cdl_close)
     data_range = range(data_len)
     fs = (19.20, 10.80)
@@ -143,17 +141,14 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     if cheese:
-        for cheese_label, cheese_slice in cheese_slices.items():
-            if cheese_label == 'price_wema':
-                pkws['color'] = '#FFE88E' # gouda
-            else:
-                pkws['color'] = '#FF9600' # cheddar
-            pkws['label'] = f'Cheese ({cheese_label}):'
-            pkws['label'] += f' {round(cheese_slice[-1], 2)}'
-            if cheese_label != 'volume':
-                ax1.plot(cheese_range, cheese_slice, alpha=0.99, **pkws)
-            else:
-                ax2.plot(cheese_range, cheese_slice, alpha=0.99, **pkws)
+        pkws['color'] = '#FFE88E' # gouda
+        pkws['label'] = f'Prediction:'
+        pkws['label'] += f' {round(predictions[-1], 2)}'
+        ax1.plot(cheese_range, predictions, alpha=0.99, **pkws)
+        pkws['color'] = '#FF9600' # cheddar
+        pkws['label'] = f'Target:'
+        pkws['label'] += f' {round(targets[-1], 2)}'
+        ax1.plot(data_range, targets, alpha=0.99, **pkws)
     pkws['label'] = f'Money: {round(cdl_wema[-1], 2)}'
     pkws['color'] = (0.4, 0.7, 0.4, 0.8)
     ax1.plot(data_range, cdl_wema, **pkws)
@@ -174,12 +169,15 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ax1.plot(data_range, cdl_dl, **pkws)
     # Finalize
     props = dict(boxstyle='round', facecolor='0.03', alpha=0.97)
-    plt.gcf().text(0.02, 0.02, moirai_metrics, fontsize=14, bbox=props)
-    last_ts = coated_len + 1
+    plt.gcf().text(0.01, 0.01, moirai_metrics, fontsize=14, bbox=props)
+    last_ts = batch_size + 1
     ts = ts_lbls[-last_ts]
     res = adj if adj else 'None'
     rnc = round(cdl_close[-1], 3)
-    t = f'[ {rnc} ]   {symbol}  @  {ts} (resample: {res})'
+    t = f'[ {rnc} ]   {symbol}  @  {ts} (resample: {res}'
+    if cheese:
+        t += f', batch_size: {batch_size}'
+    t += ')'
     fig.suptitle(t, fontsize=18)
     fig.legend(ncol=2, loc='lower right', fontsize='xx-large', fancybox=True)
     plt.savefig(str(chart_path), dpi=dpi)

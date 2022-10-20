@@ -211,11 +211,15 @@ class Candelabrum:
                     chart_symbol = job[1]
                     candelabrum_candles = job[2]
                     sealed_package = job[3]
+                    slice_size = job[4]
                     ts = sealed_package['proj_timestamp']
                     c_path = f'{chart_path}/{chart_symbol}'
                     if not path.exists(c_path):
                         mkdir(c_path)
-                    c_path = f'{c_path}/{ts}-{chart_symbol}.png'
+                    c_path += f'/{slice_size}'
+                    if not path.exists(c_path):
+                        mkdir(c_path)
+                    c_path += f'/{ts}-{chart_symbol}.png'
                     cartography(
                         str(chart_symbol),
                         candelabrum_candles,
@@ -462,7 +466,7 @@ class Candelabrum:
         symbols_total = len(symbols)
         msg = self._PREFIX + ' Sent {} to The Moirai. ( {} / {} ) '
         fib_seq = icy.FibonacciSequencer()
-        fib_seq.skip(1)
+        fib_seq.skip(3)
         fib_seq = fib_seq.next(n=5)
         small_batch = fib_seq[:3]
         large_batch = fib_seq[3:]
@@ -489,12 +493,15 @@ class Candelabrum:
                         print(self._PREFIX, f'{slice_size} slices offered.')
                         moirai = ThreeBlindMice(slice_size, verbosity=1)
                         if moirai.research(offering, candles, mode):
-                            predictions = dict(moirai.predictions)
+                            cheese = dict(moirai.predictions[offering])
+                            prediction = moirai.tensors['sealed'].tolist()[0]
+                            cheese['prediction'] = prediction
                             self._QUEUE.put((
                                 'cartography',
                                 offering,
                                 candles,
-                                predictions,
+                                cheese,
+                                slice_size,
                                 ))
             if mode == 'eval':
                 aeternalis = False
