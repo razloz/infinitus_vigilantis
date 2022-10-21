@@ -211,12 +211,8 @@ class Candelabrum:
                     chart_symbol = job[1]
                     candelabrum_candles = job[2]
                     sealed_package = job[3]
-                    slice_size = job[4]
                     ts = sealed_package['proj_timestamp']
                     c_path = f'{chart_path}/{chart_symbol}'
-                    if not path.exists(c_path):
-                        mkdir(c_path)
-                    c_path += f'/{slice_size}'
                     if not path.exists(c_path):
                         mkdir(c_path)
                     c_path += f'/{ts}-{chart_symbol}.png'
@@ -225,7 +221,7 @@ class Candelabrum:
                         candelabrum_candles,
                         cheese=sealed_package,
                         chart_path=c_path,
-                        chart_size=200,
+                        chart_size=0,
                         )
                 elif job[0] == 'clean':
                     try:
@@ -454,7 +450,7 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def research_candles(self, mode='train', aeternalis=True):
+    def research_candles(self, mode='train', trim=90, aeternalis=True):
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
@@ -465,44 +461,24 @@ class Candelabrum:
         symbols_researched = 0
         symbols_total = len(symbols)
         msg = self._PREFIX + ' Sent {} to The Moirai. ( {} / {} ) '
-        fib_seq = icy.FibonacciSequencer()
-        fib_seq.skip(3)
-        fib_seq = fib_seq.next(n=5)
-        small_batch = fib_seq[:3]
-        large_batch = fib_seq[3:]
-        large_batch.reverse()
-        loop_start = time.time()
         paterae = dict()
         for symbol in symbols:
             bars = get_daily(symbol)
             indicators = omenize(bars)
-            paterae[symbol] = bars.merge(
-                indicators,
-                left_index=True,
-                right_index=True,
-                )
-        print(f'Using fibonacci batch sequence {fib_seq}.')
+            bars = bars.merge(indicators, left_index=True, right_index=True)
+            paterae[symbol] = bars[trim:]
         print(self._PREFIX, 'Starting research loop...')
+        loop_start = time.time()
+        moirai = ThreeBlindMice(verbosity=1)
         while aeternalis:
             for offering, candles in paterae.items():
                 symbols_researched += 1
                 print(msg.format(offering, symbols_researched, symbols_total))
-                for i in range(3):
-                    slice_sizes = (small_batch[i], large_batch[i])
-                    for slice_size in slice_sizes:
-                        print(self._PREFIX, f'{slice_size} slices offered.')
-                        moirai = ThreeBlindMice(slice_size, verbosity=1)
-                        if moirai.research(offering, candles, mode):
-                            cheese = dict(moirai.predictions[offering])
-                            prediction = moirai.tensors['sealed'].tolist()[0]
-                            cheese['prediction'] = prediction
-                            self._QUEUE.put((
-                                'cartography',
-                                offering,
-                                candles,
-                                cheese,
-                                slice_size,
-                                ))
+                if moirai.research(offering, candles, mode):
+                    cheese = dict(moirai.predictions[offering])
+                    prediction = moirai.tensors['sealed'].tolist()[0]
+                    cheese['prediction'] = prediction
+                    self._QUEUE.put(('cartography', offering, candles, cheese))
             if mode == 'eval':
                 aeternalis = False
         self.join_workers()

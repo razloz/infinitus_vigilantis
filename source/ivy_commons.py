@@ -336,15 +336,20 @@ class FibonacciSequencer():
         self.previous = 0
         self.current = 1
     def __seq_gen__(self, steps=1):
-        n = self.n + steps
-        while self.n <= n:
-            next_number = self.current + self.previous
-            self.previous = self.current
-            self.current = next_number
-            self.n += 1
-            yield next_number
+        steps -= 1
+        if steps > 0:
+            n = self.n + steps
+            while self.n <= n:
+                next_number = self.current + self.previous
+                self.previous = self.current
+                self.current = next_number
+                self.n += 1
+                yield next_number
+        else:
+            yield self.current
     def next(self, n=1):
         return [i for i in self.__seq_gen__(steps=n)]
     def skip(self, n):
         for _ in self.__seq_gen__(steps=n):
             pass
+        return self
