@@ -116,11 +116,13 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     if cheese:
+        pkws['linewidth'] = wid_base * 0.55
         pkws['color'] = '#FFE88E' # gouda
         #pkws['color'] = '#FF9600' # cheddar
         pkws['label'] = f'Prediction:'
         pkws['label'] += f' {round(predictions[-1], 2)}'
         ax1.plot(range(len(predictions)), predictions, alpha=1, **pkws)
+        pkws['linewidth'] = wid_line
     for key in features.keys():
         cdl_data = features[key]
         cdl_range = range(len(cdl_data))
@@ -132,6 +134,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         else:
             pkws['label'] = None
         if key == 'price_dh':
+            pkws['color'] = (0.4, 0.7, 0.4, 0.8)
             pkws['linestyle'] = 'dotted'
             pkws['linewidth'] = wid_line * 0.67
         if key not in ['volume_wema', 'volume_mid', 'volume_dh', 'volume_dl']:

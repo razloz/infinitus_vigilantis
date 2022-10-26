@@ -19,11 +19,10 @@ class ThreeBlindMice(nn.Module):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         self._features_ = [
-            'open', 'high', 'low', 'close', 'vol_wma_price', 'trend',
+            'open', 'high', 'low', 'close', 'vol_wma_price',
             'fib_retrace_0.236', 'fib_retrace_0.382', 'fib_retrace_0.5',
             'fib_retrace_0.618', 'fib_retrace_0.786', 'fib_retrace_0.886',
-            'price_zs', 'price_sdev', 'price_wema', 'price_dh', 'price_dl',
-            'price_mid', 'cdl_change',
+            'price_wema', 'price_dh', 'price_dl', 'price_mid',
             ]
         self._targets_ = 'price_med'
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -33,29 +32,20 @@ class ThreeBlindMice(nn.Module):
         self._state_path_ = abspath('./rnn')
         self.verbosity = int(verbosity)
         self._n_features_ = len(self._features_)
-        self._n_hidden_ = int(self._n_features_ * 3)
-        self._n_layers_ = 1024
-        self._tolerance_ = 0.01618033988749894
-        self.torch_batch = nn.BatchNorm1d(
-            self._n_features_,
-            )
-        self.torch_gate = nn.GRU(
+        self._n_hidden_ = 512
+        self._tolerance_ = 0.618033988749894
+        self.torch_gate = nn.LSTM(
             input_size=self._n_features_,
             hidden_size=self._n_hidden_,
-            num_layers=self._n_layers_,
+            num_layers=self._n_hidden_,
             bias=True,
             batch_first=True,
-            dropout=float(self._tolerance_ * 10),
+            dropout=self._tolerance_,
+            proj_size=self._n_features_,
             device=self._device_,
             )
-        self.torch_linear = nn.Linear(
-            in_features=self._n_hidden_,
-            out_features=1,
-            bias=True,
-            )
-        self.torch_loss = nn.HuberLoss(
+        self.torch_loss = nn.CrossEntropyLoss(
             reduction='mean',
-            delta=0.99,
             )
         self.metrics = nn.ParameterDict()
         self.optimizer = NAdam(
@@ -69,7 +59,7 @@ class ThreeBlindMice(nn.Module):
             )
         self.scheduler = WarmRestarts(
             optimizer=self.optimizer,
-            T_0=5,
+            T_0=256,
             T_mult=1,
             eta_min=1e-5,
             )
@@ -79,8 +69,6 @@ class ThreeBlindMice(nn.Module):
             inputs=None,
             targets=None,
             )
-        self.threshold = 0
-        self.wax = 0
         self.predictions = nn.ParameterDict()
         self.to(self._device_)
         if self.verbosity > 1:
@@ -128,23 +116,43 @@ class ThreeBlindMice(nn.Module):
             self.train()
         elif mode == 'eval':
             self.eval()
-        wax = self.wax
         if study is True:
-            threshold = self.threshold
-            candles = self.tensors['inputs'][batch_start:batch_stop]
-            targets = self.tensors['targets'][batch_start:batch_stop]
-            targets = torch.vstack(tuple(t for t in targets.split(1)))
-            batch_size = candles.shape[0]
             self.optimizer.zero_grad()
-            candles = (self(candles) * wax)
-            loss = self.torch_loss(candles, targets)
+            candles = self.tensors['inputs'][batch_start:batch_stop]
+            batch_size = candles.shape[0]
+            r_batch = range(batch_size)
+            targets = self.tensors['targets'][batch_start:batch_stop]
+            targets = [targets[b] - candles[b] for b in r_batch]
+            targets = (1 - torch.vstack(targets).abs()).softmax(1)
+            probs = self.torch_gate(candles)[0]
+            probs = probs.softmax(1)
+            hot_targets = torch.zeros(targets.shape, **self._p_tensor_)
+            target_index = list()
+            for b in r_batch:
+                t = targets[b].argmax()
+                target_index.append(t)
+                hot_targets[b][t.item()] = 1
+            loss = self.torch_loss(probs, hot_targets)
             loss.backward()
-            difference = (candles - targets)
-            correct = difference[difference >= -threshold]
-            correct = correct[correct <= threshold].shape[0]
+            predictions = list()
+            prob_index = list()
+            for b in r_batch:
+                p = probs[b].argmax()
+                prob_index.append(p)
+                predictions.append(candles[b][p.item()])
+            predictions = torch.vstack(predictions)
+            prob_index = torch.vstack(prob_index)
+            target_index = torch.vstack(target_index)
+            # print('probs', probs)
+            # print('prob_index', prob_index)
+            # print('target_index', target_index)
+            # print('hot_targets', hot_targets)
+            # print('loss', loss.item())
+            difference = (prob_index - target_index)
+            correct = difference[difference == 0].shape[0]
             self.metrics['loss'] = loss.item()
-            self.tensors['coated'] = candles.clone()
-            self.tensors['sealed'].append(candles.clone())
+            self.tensors['coated'] = predictions.clone()
+            self.tensors['sealed'].append(predictions.clone())
             self.metrics['acc'][0] += int(correct)
             self.metrics['acc'][1] += int(batch_size)
             if not self.metrics['mae']:
@@ -164,9 +172,15 @@ class ThreeBlindMice(nn.Module):
                         traceback.print_exception(details)
                 finally:
                     candles = self.tensors['inputs'][batch_start:]
-                    candles = (self(candles) * wax)
-                    self.tensors['coated'] = candles.clone()
-                    self.tensors['sealed'].append(candles.clone())
+                    batch_size = candles.shape[0]
+                    probs = self.torch_gate(candles)[0]
+                    probs = (1 - probs.abs()).softmax(1)
+                    predictions = list()
+                    for i in range(batch_size):
+                        predictions.append(candles[i][probs[i].argmax()])
+                    predictions = torch.vstack(predictions)
+                    self.tensors['coated'] = predictions.clone()
+                    self.tensors['sealed'].append(predictions.clone())
         if self.verbosity == 2 and study is False:
             msg = f'{self._prefix_} ' + '{}: {}'
             lr = self.scheduler._last_lr
@@ -186,16 +200,7 @@ class ThreeBlindMice(nn.Module):
                 print(msg.format('targets shape:\n', targets.shape))
             print('coated:\n', len(self.tensors['coated']))
 
-    def forward(self, candles):
-        """Gate activation."""
-        candles = self.torch_batch(candles)
-        candles = candles.tanh().log_softmax(0)
-        candles = self.torch_gate(candles)
-        candles = self.torch_linear(candles[0])
-        candles = torch.exp(candles).relu()
-        return candles.clone()
-
-    def research(self, symbol, dataframe, mode, timeout=1, epoch_save=False):
+    def research(self, symbol, dataframe, mode, epoch_save=False):
         """Moirai research session, fully stocked with cheese and drinks."""
         _TK_ = icy.TimeKeeper()
         time_start = _TK_.reset
@@ -216,116 +221,100 @@ class ThreeBlindMice(nn.Module):
         tensor = torch.tensor
         target = self._targets_
         features = self._features_
-        fib_seq = icy.FibonacciSequencer().skip(6).next(4)
-        small_batch = fib_seq[:2]
-        large_batch = fib_seq[2:]
-        large_batch.reverse()
-        if self.verbosity > 1:
-            print(prefix, f'fib batch seq: {fib_seq}')
-            print(prefix, f'final batch size: {large_batch[-1]}')
-        reverse_candles = True
+        timeout = self._n_hidden_ + 1
+        batch_size = 55
         total_epochs = 0
-        for i in range(2):
-            batch_sizes = (small_batch[i], large_batch[i])
-            for batch_size in batch_sizes:
+        batch_index = 0
+        batch_fit = 0
+        for n_batch in range(len(dataframe.index)):
+            batch_index += 1
+            if batch_index % batch_size == 0:
+                batch_fit += batch_size
                 batch_index = 0
-                batch_fit = 0
-                for n_batch in range(len(dataframe.index)):
-                    batch_index += 1
-                    if batch_index % batch_size == 0:
-                        batch_fit += batch_size
-                        batch_index = 0
-                timestamps = int(batch_fit)
-                batch_range = range(timestamps)
-                for _ in range(2):
-                    if reverse_candles:
-                        candles = dataframe[::-1]
-                        candles = candles[-batch_fit:]
-                    else:
-                        candles = dataframe[-batch_fit:]
-                    self.release_tensors()
-                    self.reset_metrics()
-                    inputs = candles[features].to_numpy()
-                    targets = candles[target].to_numpy()[batch_size:]
-                    self.tensors['inputs'] = tensor(inputs, **p_tensor)
-                    self.tensors['inputs'].requires_grad_(True)
-                    self.tensors['targets'] = tensor(targets, **p_tensor)
-                    self.wax = round(self.tensors['targets'].mean().item(), 3)
-                    self.threshold = self.wax * self._tolerance_
-                    if self.verbosity > 1:
-                        print(prefix, 'inputs:', self.tensors['inputs'].shape)
-                        print(prefix, 'targets:', self.tensors['targets'].shape)
-                        print(prefix, 'wax:', self.wax)
-                        print(prefix, 'threshold:', self.threshold)
-                    target_accuracy = 99.0
-                    target_loss = 0.1 / batch_size
-                    target_mae = 1e-3
-                    target_mse = target_mae ** 2
-                    if self.verbosity > 1:
-                        print(prefix, 'target_accuracy', target_accuracy)
-                        print(prefix, 'target_loss', target_loss)
-                        print(prefix, 'target_mae', target_mae)
-                        print(prefix, 'target_mse', target_mse)
-                    epochs = 0
-                    accuracy = 0
-                    while accuracy < target_accuracy:
-                        time_update = _TK_.update[0]
-                        if self.verbosity > 1:
-                            msg = f'{prefix} epoch {epochs} '
-                            msg += f'elapsed time {time_update}.'
-                            print(msg)
-                        break_check = all((
-                            self.metrics['loss'],
-                            self.metrics['mae'],
-                            self.metrics['mse'],
-                            ))
-                        if break_check:
-                            break_condition = all((
-                                self.metrics['loss'] < target_loss,
-                                self.metrics['mae'] < target_mae,
-                                self.metrics['mse'] < target_mse,
-                                ))
-                        else:
-                            break_condition = False
-                        if epochs == timeout or break_condition:
-                            break
-                        epochs += 1
-                        total_epochs += 1
-                        self.release_candles()
-                        self.reset_metrics()
-                        accuracy = 0
-                        last_batch = 0
-                        for i in batch_range:
-                            indices = (i, i + batch_size)
-                            if i < last_batch:
-                                continue
-                            else:
-                                last_batch = int(indices[1])
-                            if last_batch <= batch_range[-1]:
-                                time_step(indices, mode, study=True)
-                            else:
-                                n_total = 0
-                                n_correct = 0
-                                indices = (-batch_size, None)
-                                time_step(indices, mode, epochs=timestamps)
-                                n_correct = self.metrics['acc'][0]
-                                n_total = self.metrics['acc'][1]
-                                n_wrong = n_total - n_correct
-                                accuracy = abs((n_wrong - n_total) / n_total)
-                                accuracy = round(100 * accuracy, 3)
-                                break
-                        self.optimizer.step()
-                        self.scheduler.step()
-                        if epoch_save:
-                            self.__manage_state__(call_type=1)
-                        if self.verbosity > 0:
-                            msg = f'A moment of research yielded '
-                            msg += f'an accuracy of {accuracy}% '
-                            msg += f'(epoch: {total_epochs}, '
-                            msg += f'batch: {batch_size}, '
-                            msg += f'reverse: {reverse_candles})'
-                            print(prefix, msg)
-                    reverse_candles = not reverse_candles
+        timestamps = int(batch_fit)
+        batch_range = range(timestamps)
+        candles = dataframe[-batch_fit:]
+        self.release_tensors()
+        self.reset_metrics()
+        inputs = candles[features].to_numpy()
+        targets = candles[target].to_numpy()[batch_size:]
+        self.tensors['inputs'] = tensor(inputs, **p_tensor)
+        self.tensors['inputs'].requires_grad_(True)
+        self.tensors['targets'] = tensor(targets, **p_tensor)
+        self.wax = round(self.tensors['targets'].mean().item(), 3)
+        self.threshold = self.wax * self._tolerance_
+        if self.verbosity > 1:
+            print(prefix, 'inputs:', self.tensors['inputs'].shape)
+            print(prefix, 'targets:', self.tensors['targets'].shape)
+            print(prefix, 'wax:', self.wax)
+            print(prefix, 'threshold:', self.threshold)
+        target_accuracy = 99.0
+        target_loss = 0.1 / batch_size
+        target_mae = 1e-3
+        target_mse = target_mae ** 2
+        if self.verbosity > 1:
+            print(prefix, 'target_accuracy', target_accuracy)
+            print(prefix, 'target_loss', target_loss)
+            print(prefix, 'target_mae', target_mae)
+            print(prefix, 'target_mse', target_mse)
+        epochs = 0
+        accuracy = 0
+        while accuracy < target_accuracy:
+            time_update = _TK_.update[0]
+            if self.verbosity > 1:
+                msg = f'{prefix} epoch {epochs} '
+                msg += f'elapsed time {time_update}.'
+                print(msg)
+            break_check = all((
+                self.metrics['loss'],
+                self.metrics['mae'],
+                self.metrics['mse'],
+                ))
+            if break_check:
+                break_condition = all((
+                    self.metrics['loss'] < target_loss,
+                    self.metrics['mae'] < target_mae,
+                    self.metrics['mse'] < target_mse,
+                    ))
+            else:
+                break_condition = False
+            if epochs == timeout or break_condition:
+                break
+            epochs += 1
+            total_epochs += 1
+            self.release_candles()
+            self.reset_metrics()
+            accuracy = 0
+            last_batch = 0
+            for i in batch_range:
+                indices = (i, i + batch_size)
+                if i < last_batch:
+                    continue
+                else:
+                    last_batch = int(indices[1])
+                if last_batch <= batch_range[-1]:
+                    time_step(indices, mode, study=True)
+                else:
+                    n_total = 0
+                    n_correct = 0
+                    indices = (-batch_size, None)
+                    time_step(indices, mode, epochs=timestamps)
+                    n_correct = self.metrics['acc'][0]
+                    n_total = self.metrics['acc'][1]
+                    n_wrong = n_total - n_correct
+                    accuracy = abs((n_wrong - n_total) / n_total)
+                    accuracy = round(100 * accuracy, 3)
+                    break
+            self.optimizer.step()
+            self.scheduler.step()
+            if epoch_save:
+                self.__manage_state__(call_type=1)
+            if self.verbosity > 0:
+                msg = f'A moment of research yielded '
+                msg += f'an accuracy of {accuracy}% '
+                msg += f'(epoch: {total_epochs}, '
+                msg += f'batch: {batch_size})'
+                print(prefix, msg)
         last_pred = float(self.tensors['coated'][-1].item())
         last_price = float(candles['close'][-1])
         proj_gain = float(((last_pred - last_price) / last_price) * 100)
@@ -354,6 +343,7 @@ class ThreeBlindMice(nn.Module):
             if self.verbosity > 1:
                 for k, v in self.predictions.items():
                     print(f'{prefix} {symbol} predictions {k}: {v}')
+            epochs = self.predictions[symbol]['num_epochs']
             epoch_str = 'epoch' if epochs == 1 else 'epochs'
             msg = 'After {} {}, an accuracy of {}% was realized.'
             print(prefix, msg.format(epochs, epoch_str, accuracy))
@@ -385,3 +375,4 @@ class ThreeBlindMice(nn.Module):
         self.metrics['mae'] = None
         self.metrics['mse'] = None
         return True
+
