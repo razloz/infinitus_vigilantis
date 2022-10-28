@@ -469,12 +469,12 @@ class Candelabrum:
             paterae[symbol] = bars[trim:]
         print(self._PREFIX, 'Starting research loop...')
         loop_start = time.time()
-        moirai = ThreeBlindMice(verbosity=1)
+        moirai = ThreeBlindMice(verbosity=3)
         while aeternalis:
             for offering, candles in paterae.items():
                 symbols_researched += 1
                 print(msg.format(offering, symbols_researched, symbols_total))
-                if moirai.research(offering, candles, mode):
+                if moirai.research(offering, candles, mode, epoch_save=True):
                     cheese = dict(moirai.predictions[offering])
                     prediction = moirai.tensors['sealed'].tolist()[0]
                     cheese['prediction'] = prediction

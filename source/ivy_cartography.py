@@ -33,9 +33,8 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ts_lbls = features.index.tolist()
     moirai_metrics = ''
     if cheese:
-        metrics = ['num_epochs', 'threshold', 'accuracy', 'mae', 'mse',
-                   'loss', 'batch_size', 'batch_pred', 'proj_gain',
-                   'proj_time_str']
+        metrics = ['num_epochs', 'accuracy', 'mae', 'mse', 'loss',
+                   'batch_size', 'batch_pred', 'proj_gain', 'proj_time_str']
         for metric_label in metrics:
             m_value = cheese[metric_label]
             addendum = f'{metric_label}: {m_value}'
