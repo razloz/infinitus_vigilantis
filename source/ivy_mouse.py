@@ -15,9 +15,10 @@ __license__ = 'GPL v3'
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, verbosity=0, *args, **kwargs):
+    def __init__(self, batch_size=8, verbosity=0, *args, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
+        golden_ratio = 0.618033988749894
         self._features_ = [
             'open', 'high', 'low', 'close', 'vol_wma_price',
             'fib_retrace_0.236', 'fib_retrace_0.382', 'fib_retrace_0.5',
@@ -32,11 +33,12 @@ class ThreeBlindMice(nn.Module):
         self._state_path_ = abspath('./rnn')
         self.verbosity = int(verbosity)
         self._n_features_ = len(self._features_)
-        self._n_hidden_ = 512
+        self._n_hidden_ = 128
         self._n_layers_ = self._n_hidden_
-        self._tolerance_ = 0.618033988749894
-        self._dropout_ = self._tolerance_
+        self._tolerance_ = golden_ratio
+        self._dropout_ = golden_ratio
         self._proj_size_ = self._n_features_
+        self._batch_size_ = int(batch_size)
         self.torch_gate = nn.LSTM(
             input_size=self._n_features_,
             hidden_size=self._n_hidden_,
@@ -47,10 +49,6 @@ class ThreeBlindMice(nn.Module):
             proj_size=self._proj_size_,
             device=self._device_,
             )
-        self.torch_loss = nn.CrossEntropyLoss(
-            reduction='mean',
-            )
-        self.metrics = nn.ParameterDict()
         self.optimizer = NAdam(
             params=self.parameters(),
             lr=self._tolerance_,
@@ -62,7 +60,7 @@ class ThreeBlindMice(nn.Module):
             )
         self.scheduler = WarmRestarts(
             optimizer=self.optimizer,
-            T_0=256,
+            T_0=89,
             eta_min=0.01,
             )
         self.tensors = dict(
@@ -71,7 +69,11 @@ class ThreeBlindMice(nn.Module):
             inputs=None,
             targets=None,
             )
+        self.torch_onehot = torch.nn.functional.one_hot
+        self.metrics = nn.ParameterDict()
         self.predictions = nn.ParameterDict()
+        self.torch_loss = nn.CrossEntropyLoss()
+        self.wax = 0
         self.to(self._device_)
         if self.verbosity > 1:
             print(self._prefix_, 'set device_type to', self._device_type_)
@@ -115,73 +117,61 @@ class ThreeBlindMice(nn.Module):
            Let Atropos seal the candles
            Let Awen contain the wax"""
         batch_start, batch_stop = indices
+        wax = self.wax
         if mode == 'train':
             self.train()
         elif mode == 'eval':
             self.eval()
         if study is True:
             self.optimizer.zero_grad()
+            onehot = self.torch_onehot
             candles = self.tensors['inputs'][batch_start:batch_stop]
-            batch_size = candles.shape[0]
-            inputs = list()
-            for i in range(batch_size):
-                cdl = candles[i]
-                inputs.append(cdl / cdl.sum())
-            inputs = torch.vstack(inputs).sigmoid()
-            probs = self.torch_gate(inputs)[0]
-            logits = probs.log_softmax(1)
             targets = self.tensors['targets'][batch_start:batch_stop]
-            predictions = list()
-            prob_index = list()
-            target_index = list()
+            targets = targets.expand(1, targets.shape[0]).H
+            delta = (targets - candles).abs()
+            predictions = self.torch_gate(candles)[0].log_softmax(1)
+            coated = list()
+            hot_wax = list()
             correct = 0
-            for i in range(batch_size):
-                delta = (targets[i] - candles[i]).abs()
-                t_i = delta.argmin()
-                p_i = logits[i].argmin()
-                if t_i == p_i: correct += 1
-                predictions.append(candles[i][p_i.item()])
-                prob_index.append(p_i)
-                target_index.append(t_i)
-            predictions = torch.vstack(predictions)
-            prob_index = torch.hstack(prob_index)
-            target_index = torch.hstack(target_index)
-            loss = self.torch_loss(logits, target_index)
+            batch_size = candles.shape[0]
+            for n in range(batch_size):
+                p = predictions[n].argmax()
+                t = delta[n].argmin()
+                if p == t: correct += 1
+                coated.append(candles[n, p] * wax)
+                hot_wax.append(t)
+            coated = torch.vstack(coated)
+            hot_wax = torch.hstack(hot_wax)
+            hot_wax = onehot(hot_wax, num_classes=delta.shape[1])
+            cold_wax = ((hot_wax.float() - 1) * -1).abs()
+            loss = self.torch_loss(predictions, cold_wax)
             loss.backward()
-            self.optimizer.step()
-            self.scheduler.step()
-            self.tensors['coated'] = predictions.clone()
-            self.tensors['sealed'].append(predictions.clone())
-            if not self.metrics['mae']:
+            absolute_error = batch_size - correct
+            self.tensors['coated'] = coated.clone()
+            self.tensors['sealed'].append(coated.clone())
+            if not self.metrics['loss']:
                 self.metrics['loss'] = 0
-            self.metrics['loss'] += loss.item()
-            self.metrics['acc'][0] += int(correct)
-            self.metrics['acc'][1] += int(batch_size)
             if not self.metrics['mae']:
                 self.metrics['mae'] = 0
             if not self.metrics['mse']:
                 self.metrics['mse'] = 0
-            absolute_error = batch_size - correct
+            self.metrics['acc'][0] += int(correct)
+            self.metrics['acc'][1] += int(batch_size)
+            self.metrics['loss'] += loss.item()
             self.metrics['mae'] += absolute_error
             self.metrics['mse'] += absolute_error ** 2
         else:
             with torch.no_grad():
                 candles = self.tensors['inputs'][batch_start:]
                 batch_size = candles.shape[0]
-                inputs = list()
-                for i in range(batch_size):
-                    cdl = candles[i]
-                    inputs.append(cdl / cdl.sum())
-                inputs = torch.vstack(inputs).sigmoid()
-                probs = self.torch_gate(inputs)[0]
-                logits = probs.log_softmax(1)
-                predictions = list()
-                for i in range(batch_size):
-                    p_i = logits[i].argmin()
-                    predictions.append(candles[i][p_i.item()])
-                predictions = torch.vstack(predictions)
-                self.tensors['coated'] = predictions.clone()
-                self.tensors['sealed'].append(predictions.clone())
+                predictions = self.torch_gate(candles)[0].log_softmax(1)
+                coated = list()
+                for n in range(candles.shape[0]):
+                    p = predictions[n].argmax()
+                    coated.append(candles[n, p] * wax)
+                coated = torch.vstack(coated)
+                self.tensors['coated'] = coated.clone()
+                self.tensors['sealed'].append(coated.clone())
                 self.metrics['loss'] = self.metrics['loss'] / epochs
                 self.metrics['mae'] = self.metrics['mae'] / epochs
                 self.metrics['mse'] = sqrt(self.metrics['mse'] / epochs)
@@ -195,8 +185,8 @@ class ThreeBlindMice(nn.Module):
             print(msg.format('Mean Absolute Error', self.metrics['mae']))
             print(msg.format('Mean Squared Error', self.metrics['mse']))
             if study:
-                print(msg.format('Prob Index', prob_index))
-                print(msg.format('Target Index', target_index))
+                print(msg.format('Prediction', predictions))
+                print(msg.format('Hot Wax', hot_wax))
 
     def research(self, symbol, dataframe, mode, epoch_save=False):
         """Moirai research session, fully stocked with cheese and drinks."""
@@ -219,8 +209,8 @@ class ThreeBlindMice(nn.Module):
         tensor = torch.tensor
         target = self._targets_
         features = self._features_
-        timeout = self._n_hidden_
-        batch_size = 34
+        timeout = self._batch_size_
+        batch_size = self._batch_size_
         total_epochs = 0
         batch_index = 0
         batch_fit = 0
@@ -237,8 +227,11 @@ class ThreeBlindMice(nn.Module):
         inputs = candles[features].to_numpy()
         targets = candles[target].to_numpy()[batch_size:]
         self.tensors['inputs'] = tensor(inputs, **p_tensor)
-        self.tensors['inputs'].requires_grad_(True)
         self.tensors['targets'] = tensor(targets, **p_tensor)
+        self.wax = self.tensors['inputs'].sum()
+        self.tensors['inputs'] = self.tensors['inputs'] / self.wax
+        self.tensors['targets'] = self.tensors['targets'] / self.wax
+        self.tensors['inputs'].requires_grad_(True)
         if self.verbosity > 1:
             print(prefix, 'inputs:', self.tensors['inputs'].shape)
             print(prefix, 'targets:', self.tensors['targets'].shape)
@@ -299,6 +292,8 @@ class ThreeBlindMice(nn.Module):
                     accuracy = abs((n_wrong - n_total) / n_total)
                     accuracy = round(100 * accuracy, 3)
                     break
+            self.optimizer.step()
+            self.scheduler.step()
             if epoch_save:
                 self.__manage_state__(call_type=1)
             if self.verbosity > 0:

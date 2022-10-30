@@ -469,7 +469,7 @@ class Candelabrum:
             paterae[symbol] = bars[trim:]
         print(self._PREFIX, 'Starting research loop...')
         loop_start = time.time()
-        moirai = ThreeBlindMice(verbosity=3)
+        moirai = ThreeBlindMice(verbosity=2)
         while aeternalis:
             for offering, candles in paterae.items():
                 symbols_researched += 1
