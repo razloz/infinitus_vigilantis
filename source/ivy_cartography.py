@@ -70,7 +70,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ylim_low = min(features['low'])
     ylim_high = max(features['high'])
     ax1.set_ylim((ylim_low * 0.97, ylim_high * 1.03))
-    yticks_range = [round(i, 2) for i in arange(ylim_low, ylim_high, 0.01)]
+    yticks_range = [round(i, 2) for i in arange(ylim_low, ylim_high, 0.5)]
     ax1.set_yticks(yticks_range)
     ax1.set_yticklabels(yticks_range)
     ax1.yaxis.set_major_locator(mticker.AutoLocator())

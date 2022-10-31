@@ -212,16 +212,17 @@ class Candelabrum:
                     candelabrum_candles = job[2]
                     sealed_package = job[3]
                     ts = sealed_package['proj_timestamp']
-                    c_path = f'{chart_path}/{chart_symbol}'
-                    if not path.exists(c_path):
-                        mkdir(c_path)
+                    c_path = f'{chart_path}'
+                    # c_path = f'{chart_path}/{chart_symbol}'
+                    # if not path.exists(c_path):
+                        # mkdir(c_path)
                     c_path += f'/{ts}-{chart_symbol}.png'
                     cartography(
                         str(chart_symbol),
                         candelabrum_candles,
                         cheese=sealed_package,
                         chart_path=c_path,
-                        chart_size=0,
+                        chart_size=400,
                         )
                 elif job[0] == 'clean':
                     try:
@@ -474,7 +475,7 @@ class Candelabrum:
             for offering, candles in paterae.items():
                 symbols_researched += 1
                 print(msg.format(offering, symbols_researched, symbols_total))
-                if moirai.research(offering, candles, mode, epoch_save=True):
+                if moirai.research(offering, candles, mode):
                     cheese = dict(moirai.predictions[offering])
                     prediction = moirai.tensors['sealed'].tolist()[0]
                     cheese['prediction'] = prediction
