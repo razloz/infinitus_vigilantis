@@ -145,6 +145,15 @@ class Candelabrum:
         self._ERROR_PATH = './errors'
         self._IVI_PATH = './indicators'
         self._CHART_PATH = './charts'
+        sym_path = [
+            self._DATA_PATH,
+            self._ERROR_PATH,
+            self._IVI_PATH,
+            self._CHART_PATH
+            ]
+        for _path in sym_path:
+            if not path.exists(path.abspath(_path)):
+                mkdir(c_path)
         self._PREFIX = 'Candelabrum:'
         self._TIMER = icy.TimeKeeper()
         self._exceptions_ = list()
@@ -211,12 +220,7 @@ class Candelabrum:
                     chart_symbol = job[1]
                     candelabrum_candles = job[2]
                     sealed_package = job[3]
-                    ts = sealed_package['proj_timestamp']
-                    c_path = f'{chart_path}'
-                    # c_path = f'{chart_path}/{chart_symbol}'
-                    # if not path.exists(c_path):
-                        # mkdir(c_path)
-                    c_path += f'/{ts}-{chart_symbol}.png'
+                    c_path = f'{chart_path}/{chart_symbol}.png'
                     cartography(
                         str(chart_symbol),
                         candelabrum_candles,
@@ -451,37 +455,44 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def research_candles(self, mode='train', trim=90, aeternalis=True):
+    def research_candles(self, trim=90, aeternalis=True):
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        if mode == 'train':
-            symbols = ['QQQ', 'SPY']
-        elif mode == 'eval':
-            symbols = [s for s, e in composite_index()]
+        symbols = [s for s, e in composite_index()]
         symbols_researched = 0
         symbols_total = len(symbols)
-        msg = self._PREFIX + ' Sent {} to The Moirai. ( {} / {} ) '
-        paterae = dict()
-        for symbol in symbols:
-            bars = get_daily(symbol)
-            indicators = omenize(bars)
-            bars = bars.merge(indicators, left_index=True, right_index=True)
-            paterae[symbol] = bars[trim:]
+        msg = self._PREFIX + '({}) Sent {} to The Moirai.'
         print(self._PREFIX, 'Starting research loop...')
         loop_start = time.time()
         moirai = ThreeBlindMice(verbosity=2)
+        ri = random.randint
+        n_batch = 34
         while aeternalis:
-            for offering, candles in paterae.items():
+            paterae = [ri(1, symbols_total) - 1 for _ in range(100)]
+            for offering in paterae:
                 symbols_researched += 1
-                print(msg.format(offering, symbols_researched, symbols_total))
-                if moirai.research(offering, candles, mode):
-                    cheese = dict(moirai.predictions[offering])
-                    prediction = moirai.tensors['sealed'].tolist()[0]
-                    cheese['prediction'] = prediction
-                    self._QUEUE.put(('cartography', offering, candles, cheese))
-            if mode == 'eval':
-                aeternalis = False
+                symbol = symbols[offering]
+                bars = get_daily(symbol)
+                indicators = omenize(bars)
+                bars = bars.merge(indicators, left_index=True, right_index=True)
+                bars = bars[trim:]
+                n_time = len(bars.index) - 1
+                selecting_batch = True
+                while selecting_batch:
+                    batch_from = ri(0, n_time)
+                    batch_to = batch_from + n_batch
+                    if n_time >= batch_to:
+                        selecting_batch = False
+                batch = bars[batch_from:batch_to]
+                batch_str = f'{symbol} ({batch_from} : {batch_to})'
+                print(msg.format(symbols_researched, batch_str))
+                moirai.research(batch)
+                # if moirai.research(batch):
+                    # cheese = dict(moirai.predictions[offering])
+                    # prediction = moirai.tensors['sealed'].tolist()[0]
+                    # cheese['prediction'] = prediction
+                    # self._QUEUE.put(('cartography', offering, candles, cheese))
         self.join_workers()
         elapsed = time.time() - loop_start
         message = 'Research of {} symbols complete after'

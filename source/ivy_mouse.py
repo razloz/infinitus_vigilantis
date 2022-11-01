@@ -3,14 +3,26 @@ import time
 import torch
 import torch.nn as nn
 import traceback
+import matplotlib.pyplot as plt
 import source.ivy_commons as icy
-from torch.optim import NAdam
+from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
-from math import sqrt, log
-from os.path import abspath
+from math import sqrt, log, inf
+from os import mkdir
+from os.path import abspath, exists
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
+# global constants
+µ = 0.000001
+α = 0.0072973525693
+γ = 0.577215664901532
+ħ = 1.054571817
+φ = 1.618033988749894
+ε = 2.71828
+π = 3.141592653589793
+τ = 137
+εφπ = (-log(φ) * -log(π)) ** ε
 
 
 class ThreeBlindMice(nn.Module):
@@ -18,11 +30,6 @@ class ThreeBlindMice(nn.Module):
     def __init__(self, batch_size=34, verbosity=0, *args, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
-        golden_ratio = 1.618033988749894
-        euler = 0.577215664901532
-        pi = 3.141592653589793
-        # *** dlc skin unlocked ***
-        eulers_golden_pi = euler * (-log(golden_ratio) * -log(pi))
         self._features_ = [
             'open', 'high', 'low', 'close', 'vol_wma_price',
             'fib_retrace_0.236', 'fib_retrace_0.382', 'fib_retrace_0.5',
@@ -35,38 +42,37 @@ class ThreeBlindMice(nn.Module):
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._state_path_ = abspath('./rnn')
+        if not exists(self._state_path_): mkdir(self._state_path_)
+        self._epochs_path_ = abspath('./rnn/epochs')
+        if not exists(self._epochs_path_): mkdir(self._epochs_path_)
         self.verbosity = int(verbosity)
         self._n_features_ = len(self._features_)
-        self._n_gate_ = 128
-        self._n_hidden_ = 256
-        self._n_layers_ = 128
-        self._tolerance_ = (golden_ratio - 1) * 0.01
-        self._dropout_ = eulers_golden_pi
-        self._lr_ = eulers_golden_pi
+        self._n_hidden_ = self._n_features_ ** 2
+        self._n_layers_ = τ
+        self._tolerance_ = α
+        self._dropout_ = εφπ
+        self._lr_ = γ
         self._batch_size_ = int(batch_size)
+        self.inputs = None
         self.torch_gate = nn.LSTM(
-            self._n_gate_,
-            self._n_hidden_,
-            self._n_layers_,
+            input_size=self._n_features_,
+            hidden_size=self._n_hidden_,
+            num_layers=self._n_layers_,
             bias=True,
             batch_first=True,
             dropout=self._dropout_,
             device=self._device_,
             )
-        self.torch_linear = nn.Linear(
-            self._n_features_,
-            self._n_gate_,
-            **self._p_tensor_,
-            )
-        self.torch_loss = nn.HuberLoss(reduction='mean', delta=golden_ratio)
+        self.torch_loss = nn.HuberLoss(reduction='sum', delta=ħ)
         self.torch_pool = nn.MaxPool1d(self._n_hidden_)
-        self.optimizer = NAdam(self.parameters(), lr=self._lr_, foreach=True)
-        self.scheduler = WarmRestarts(self.optimizer, T_0=1000, eta_min=1e-13)
+        self.optimizer = Adam(self.parameters(), lr=self._lr_, foreach=True)
+        self.scheduler = WarmRestarts(self.optimizer, T_0=τ, eta_min=µ)
         self.tensors = dict(coated=None, sealed=[], inputs=None, targets=None)
         self.metrics = nn.ParameterDict()
         self.predictions = nn.ParameterDict()
-        self.wax = 0
+        self.wax = τ
         self.to(self._device_)
+        self.__manage_state__(call_type=0)
         if self.verbosity > 1:
             print(self._prefix_, 'set device_type to', self._device_type_)
             print(self._prefix_, 'set n_features to', self._n_features_)
@@ -74,9 +80,9 @@ class ThreeBlindMice(nn.Module):
             print(self._prefix_, 'set tolerance to', self._tolerance_)
             print(self._prefix_, 'set dropout to', self._dropout_)
             print(self._prefix_, 'set learning rate to', self._lr_)
-            print(self._prefix_, 'set n_gate to', self._n_features_)
             print(self._prefix_, 'set n_hidden to', self._n_hidden_)
             print(self._prefix_, 'set n_layers to', self._n_layers_)
+            print('')
 
     def __manage_state__(self, call_type=0):
         """Handles loading and saving of the RNN state."""
@@ -87,11 +93,14 @@ class ThreeBlindMice(nn.Module):
                 self.load_state_dict(state['moirai'])
                 for key, value in state['predictions'].items():
                     self.predictions[key] = value
+                for key, value in state['metrics'].items():
+                    self.metrics[key] = value
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             elif call_type == 1:
                 torch.save(
                     {
+                        'metrics': self.metrics,
                         'moirai': self.state_dict(),
                         'predictions': self.predictions,
                         },
@@ -99,252 +108,119 @@ class ThreeBlindMice(nn.Module):
                     )
                 if self.verbosity > 2:
                     print(self._prefix_, 'Saved RNN state.')
+        except FileNotFoundError:
+            self.metrics['acc'] = (0, 0)
+            for key in ['epochs', 'loss', 'mae', 'mse']:
+                self.metrics[key] = 0
         except Exception as details:
-            if self.verbosity > 2:
+            if self.verbosity > 0:
                 print(self._prefix_, 'Encountered an exception.')
                 traceback.print_exception(details)
 
-    def __research__(self, symbol, dataframe, mode, epoch_save=False):
-        """Moirai research session, fully stocked with cheese and drinks."""
-        _TK_ = icy.TimeKeeper()
-        time_start = _TK_.reset
-        df_keys = dataframe.keys()
-        if self._targets_ not in df_keys:
-            return False
-        for key in self._features_:
-            if key not in df_keys:
-                return False
-        self.__manage_state__(call_type=0)
-        symbol = symbol.upper()
-        time_step = self.__time_step__
-        prefix = self._prefix_
-        p_tensor = self._p_tensor_
-        tolerance = self._tolerance_
-        hstack = torch.hstack
-        vstack = torch.vstack
-        tensor = torch.tensor
-        target = self._targets_
-        features = self._features_
-        timeout = 34
-        batch_size = self._batch_size_
-        total_epochs = 0
-        batch_index = 0
-        batch_fit = 0
-        for n_batch in range(len(dataframe.index)):
-            batch_index += 1
-            if batch_index % batch_size == 0:
-                batch_fit += batch_size
-                batch_index = 0
-        timestamps = int(batch_fit)
-        batch_range = range(timestamps)
-        candles = dataframe[-batch_fit:]
-        self.release_tensors()
-        self.reset_metrics()
-        inputs = candles[features].to_numpy()
-        targets = candles[target].to_numpy()[batch_size:]
-        self.tensors['inputs'] = tensor(inputs, **p_tensor)
-        self.tensors['targets'] = tensor(targets, **p_tensor)
-        self.wax = self.tensors['inputs'].sum()
-        self.tensors['inputs'] = self.tensors['inputs'] / self.wax
-        self.tensors['targets'] = self.tensors['targets'] / self.wax
-        self.tensors['inputs'].requires_grad_(True)
-        if self.verbosity > 1:
-            print(prefix, 'inputs:', self.tensors['inputs'].shape)
-            print(prefix, 'targets:', self.tensors['targets'].shape)
-        target_accuracy = 99.0
-        target_loss = 0.01 / batch_size
-        target_mae = 1e-3
-        target_mse = target_mae ** 2
-        if self.verbosity > 1:
-            print(prefix, 'target_accuracy', target_accuracy)
-            print(prefix, 'target_loss', target_loss)
-            print(prefix, 'target_mae', target_mae)
-            print(prefix, 'target_mse', target_mse)
-        epochs = 0
-        accuracy = 0
-        while accuracy < target_accuracy:
-            time_update = _TK_.update[0]
-            if self.verbosity > 1:
-                msg = f'{prefix} epoch {epochs} '
-                msg += f'elapsed time {time_update}.'
-                print(msg)
-            break_check = all((
-                self.metrics['loss'],
-                self.metrics['mae'],
-                self.metrics['mse'],
-                ))
-            if break_check:
-                break_condition = all((
-                    self.metrics['loss'] < target_loss,
-                    self.metrics['mae'] < target_mae,
-                    self.metrics['mse'] < target_mse,
-                    ))
-            else:
-                break_condition = False
-            if epochs == timeout or break_condition:
-                break
-            epochs += 1
-            total_epochs += 1
-            self.release_candles()
-            self.reset_metrics()
-            accuracy = 0
-            last_batch = 0
-            for i in batch_range:
-                indices = (i, i + batch_size)
-                if i < last_batch:
-                    continue
-                else:
-                    last_batch = int(indices[1])
-                if last_batch <= batch_range[-1]:
-                    time_step(indices, mode, study=True)
-                else:
-                    n_total = 0
-                    n_correct = 0
-                    indices = (-batch_size, None)
-                    time_step(indices, mode, epochs=timestamps)
-                    n_correct = self.metrics['acc'][0]
-                    n_total = self.metrics['acc'][1]
-                    n_wrong = n_total - n_correct
-                    accuracy = abs((n_wrong - n_total) / n_total)
-                    accuracy = round(100 * accuracy, 3)
-                    break
-            if epoch_save:
-                self.__manage_state__(call_type=1)
-            if self.verbosity > 0:
-                msg = f'A moment of research yielded '
-                msg += f'an accuracy of {accuracy}% '
-                msg += f'(epoch: {total_epochs})'
-                print(prefix, msg)
-        last_pred = float(self.tensors['coated'][-1].item())
-        last_price = float(candles['close'][-1])
-        proj_gain = float(((last_pred - last_price) / last_price) * 100)
-        timestamp = time.time()
-        time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
-        if symbol not in self.predictions.keys():
-            self.predictions[symbol] = dict(num_epochs=total_epochs)
-        else:
-            self.predictions[symbol]['num_epochs'] += total_epochs
-        self.predictions[symbol]['accuracy'] = accuracy
-        self.predictions[symbol]['mae'] = self.metrics['mae']
-        self.predictions[symbol]['mse'] = self.metrics['mse']
-        self.predictions[symbol]['loss'] = self.metrics['loss']
-        self.predictions[symbol]['last_price'] = round(last_price, 3)
-        self.predictions[symbol]['batch_size'] = batch_size
-        self.predictions[symbol]['batch_pred'] = round(last_pred, 3)
-        self.predictions[symbol]['proj_gain'] = round(proj_gain, 3)
-        self.predictions[symbol]['proj_timestamp'] = timestamp
-        self.predictions[symbol]['proj_time_str'] = time_str
-        self.tensors['coated'] = self.tensors['coated'].detach().cpu().numpy()
-        self.tensors['sealed'] = vstack(self.tensors['sealed']).H
-        self.tensors['sealed'] = self.tensors['sealed'].detach().cpu().numpy()
-        self.__manage_state__(call_type=1)
-        if self.verbosity > 0:
-            if self.verbosity > 1:
-                for k, v in self.predictions.items():
-                    print(f'{prefix} {symbol} predictions {k}: {v}')
-            epochs = self.predictions[symbol]['num_epochs']
-            epoch_str = 'epoch' if epochs == 1 else 'epochs'
-            msg = 'After {} {}, an accuracy of {}% was realized.'
-            print(prefix, msg.format(epochs, epoch_str, accuracy))
-            time_elapsed = _TK_.final[0]
-            print(f'{prefix} final elapsed time {time_elapsed}.')
-            print('')
-        return True
-
-    def __time_step__(self, indices, mode, epochs=0, study=False):
+    def __time_step__(self, targets, study=False, plot=True):
         """Let Clotho mold the candles
            Let Lachesis measure the candles
            Let Atropos seal the candles
            Let Awen contain the wax"""
-        batch_start, batch_stop = indices
-        wax = self.wax
-        if mode == 'train':
+        if study:
             self.train()
-        elif mode == 'eval':
-            self.eval()
-        if study is True:
             self.optimizer.zero_grad()
-            candles = self.tensors['inputs'][batch_start:batch_stop]
-            targets = self.tensors['targets'][batch_start:batch_stop]
-            targets = targets.expand(1, targets.shape[0]).H
-            predictions = self(candles)
-            loss = self.torch_loss(predictions, targets)
-            loss.backward()
-            self.optimizer.step()
-            self.scheduler.step()
-            tolerance = candles.mean() * self._tolerance_
-            delta = (predictions - targets).abs()
+            best_grad = None
+            coated = 0
+            coating_candles = True
+            last_seal = inf
+            least_loss = inf
+            losses = [inf, inf, inf]
+            while True:
+                outputs = self.forward()
+                loss = self.torch_loss(outputs, targets)
+                loss.backward()
+                self.optimizer.step()
+                self.scheduler.step()
+                if coating_candles == False:
+                    break
+                n_loss = loss.item()
+                losses[coated] = n_loss
+                if n_loss < least_loss:
+                    best_grad = self.inputs.grad.detach()
+                    least_loss = n_loss
+                if coated == 2:
+                    coated = 0
+                    sealed = sum(losses) / 3
+                    if sealed < last_seal:
+                        last_seal = sealed
+                    else:
+                        coating_candles = False
+                        self.inputs.grad = best_grad
+                else:
+                    coated += 1
+            tolerance = self.inputs.mean() * self._tolerance_
+            delta = (outputs - targets).abs()
             correct = delta[delta >= tolerance]
             correct = delta[delta <= tolerance].shape[0]
-            batch_size = candles.shape[0]
+            batch_size = self.inputs.shape[0]
             absolute_error = batch_size - correct
-            predictions *= wax
-            self.tensors['coated'] = predictions.clone()
-            self.tensors['sealed'].append(predictions.clone())
-            if not self.metrics['loss']:
-                self.metrics['loss'] = 0
-            if not self.metrics['mae']:
-                self.metrics['mae'] = 0
-            if not self.metrics['mse']:
-                self.metrics['mse'] = 0
-            self.metrics['acc'][0] += int(correct)
-            self.metrics['acc'][1] += int(batch_size)
+            self.metrics['acc'] = (correct, batch_size)
+            self.metrics['epochs'] += 1
             self.metrics['loss'] += loss.item()
             self.metrics['mae'] += absolute_error
             self.metrics['mse'] += absolute_error ** 2
+            predictions = self.wax * outputs
+            if plot:
+                epoch = self.metrics['epochs']
+                x = range(batch_size)
+                y = predictions.detach().cpu()
+                y_lbl = f'Prediction: {y[-1].item()}'
+                plt.plot(x, y, label=y_lbl, color='#FFE88E')
+                y = (self.wax * targets).detach().cpu()
+                y_lbl = f'Target: {y[-1].item()}'
+                plt.plot(x, y, label=y_lbl, color='#FF9600')
+                plt.suptitle(f'Epoch: {epoch}', fontsize=18)
+                plt.legend(ncol=1, fancybox=True)
+                ts = int(time.time())
+                epochs_path = f'{self._epochs_path_}/{ts}.png'
+                plt.savefig(epochs_path)
+                plt.clf()
+            if self.verbosity > 1:
+                prefix = self._prefix_
+                print(prefix, 'ACC:', self.metrics['acc'])
+                print(prefix, 'EPOCH:', epoch)
+                for key in ['loss', 'mae', 'mse']:
+                    value = self.metrics[key]
+                    if key == 'mse':
+                        print(prefix, f'{key.upper()}: {sqrt(value)}')
+                    else:
+                        print(prefix, f'{key.upper()}: {value / epoch}')
+                print('')
+            return predictions.clone()
         else:
+            self.eval()
             with torch.no_grad():
-                candles = self.tensors['inputs'][batch_start:]
-                predictions = self(candles) * wax
-                self.tensors['coated'] = predictions.clone()
-                self.tensors['sealed'].append(predictions.clone())
-                self.metrics['loss'] = self.metrics['loss'] / epochs
-                self.metrics['mae'] = self.metrics['mae'] / epochs
-                self.metrics['mse'] = sqrt(self.metrics['mse'] / epochs)
-        if (self.verbosity > 2) or (self.verbosity > 1 and study is False):
-            msg = f'{self._prefix_} ' + '{}: {}'
-            lr = self.scheduler._last_lr
-            print('')
-            print(msg.format('Learning Rate', lr))
-            print(msg.format('Accuracy', self.metrics['acc']))
-            print(msg.format('Loss', self.metrics['loss']))
-            print(msg.format('Mean Absolute Error', self.metrics['mae']))
-            print(msg.format('Mean Squared Error', self.metrics['mse']))
-            if study:
-                print(msg.format('Predictions', predictions))
-                print(msg.format('Targets', targets * wax))
+                predictions = self.wax * self.forward()
+            return predictions.clone()
 
-    def forward(self, candles):
-        predictions = self.torch_linear(candles).sigmoid()
-        predictions = self.torch_gate(predictions)[0].relu()
-        predictions = self.torch_pool(predictions) / self._n_hidden_
+    def forward(self):
+        """**bubble*bubble**bubble**"""
+        predictions = self.torch_gate(self.inputs)[0]
+        predictions = self.torch_pool(predictions).relu()
         return predictions.clone()
 
-    def release_candles(self):
-        """Clear stored candles from memory."""
-        self.tensors['coated'] = None
-        self.tensors['sealed'] = list()
-        return True
+    def predict(self, dataframe):
+        """Take a batch of inputs and return the future signal."""
+        features = dataframe[self._features_].to_numpy()
+        self.inputs = torch.tensor(features, **self._p_tensor_)
+        self.inputs = (self.inputs / self.wax).requires_grad_(True)
+        return self.__time_step__(None, study=False)
 
-    def release_tensors(self):
-        """Clear stored tensors from memory."""
-        self.tensors = dict(
-            coated=None,
-            sealed=list(),
-            inputs=None,
-            targets=None,
-            )
-        return True
-
-    def research(self, *args, **kwargs):
-        """**bubble*bubble**bubble**"""
-        return self.__research__(*args, **kwargs)
-
-    def reset_metrics(self):
-        """Clear previous metrics."""
-        self.metrics['acc'] = [0, 0]
-        self.metrics['loss'] = None
-        self.metrics['mae'] = None
-        self.metrics['mse'] = None
-        return True
+    def research(self, dataframe):
+        """Moirai research session, fully stocked with cheese and drinks."""
+        features = dataframe[self._features_].to_numpy()
+        self.inputs = torch.tensor(features, **self._p_tensor_)
+        self.inputs = (self.inputs / self.wax).requires_grad_(True)
+        targets = dataframe[self._targets_].to_numpy()
+        targets = torch.tensor(targets, **self._p_tensor_)
+        targets = targets.expand(1, targets.shape[0]).H
+        targets = targets / self.wax
+        self.__manage_state__(call_type=1)
+        return self.__time_step__(targets, study=True)
 
