@@ -1,10 +1,10 @@
 """Three blind mice to predict the future."""
 import time
 import torch
-import torch.nn as nn
 import traceback
 import matplotlib.pyplot as plt
 import source.ivy_commons as icy
+from torch.nn import GRU, Linear, Module, MSELoss, ParameterDict
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
 from math import sqrt, log, inf
@@ -25,7 +25,7 @@ __license__ = 'GPL v3'
 εφπ = (-log(φ) * -log(π)) ** ε
 
 
-class ThreeBlindMice(nn.Module):
+class ThreeBlindMice(Module):
     """Let the daughters of necessity shape the candles of the future."""
     def __init__(self, batch_size=34, verbosity=0, *args, **kwargs):
         """Beckon the Norn."""
@@ -46,15 +46,15 @@ class ThreeBlindMice(nn.Module):
         self._epochs_path_ = abspath('./rnn/epochs')
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
         self.verbosity = int(verbosity)
+        self._batch_size_ = int(batch_size)
         self._n_features_ = len(self._features_)
         self._n_hidden_ = self._n_features_ ** 2
-        self._n_layers_ = τ
+        self._n_layers_ = self._batch_size_
         self._tolerance_ = α
         self._dropout_ = εφπ
         self._lr_ = γ
-        self._batch_size_ = int(batch_size)
         self.inputs = None
-        self.torch_gate = nn.LSTM(
+        self.torch_gate = GRU(
             input_size=self._n_features_,
             hidden_size=self._n_hidden_,
             num_layers=self._n_layers_,
@@ -63,13 +63,13 @@ class ThreeBlindMice(nn.Module):
             dropout=self._dropout_,
             device=self._device_,
             )
-        self.torch_loss = nn.HuberLoss(reduction='sum', delta=ħ)
-        self.torch_pool = nn.MaxPool1d(self._n_hidden_)
+        self.torch_loss = MSELoss()
+        self.torch_linear = Linear(self._n_hidden_, 1, **self._p_tensor_)
         self.optimizer = Adam(self.parameters(), lr=self._lr_, foreach=True)
         self.scheduler = WarmRestarts(self.optimizer, T_0=τ, eta_min=µ)
         self.tensors = dict(coated=None, sealed=[], inputs=None, targets=None)
-        self.metrics = nn.ParameterDict()
-        self.predictions = nn.ParameterDict()
+        self.metrics = ParameterDict()
+        self.predictions = ParameterDict()
         self.wax = τ
         self.to(self._device_)
         self.__manage_state__(call_type=0)
@@ -125,16 +125,26 @@ class ThreeBlindMice(nn.Module):
         if study:
             self.train()
             self.optimizer.zero_grad()
+            batch_size = self._batch_size_
+            n_features = self._n_features_
             best_grad = None
             coated = 0
             coating_candles = True
             last_seal = inf
             least_loss = inf
-            losses = [inf, inf, inf]
+            loss_size = int((batch_size * n_features) / 2)
+            loss_stop = loss_size - 1
+            losses = [inf for _ in range(loss_size)]
+            confirmed = 0
+            print('targets tail:', targets[-3:])
+            print('starting loss loop:', loss_size)
             while True:
                 outputs = self.forward()
+                #print('outputs head:', outputs[:3])
+                #print('outputs tail:', outputs[-3:])
                 loss = self.torch_loss(outputs, targets)
                 loss.backward()
+                print('loss:', loss.item())
                 self.optimizer.step()
                 self.scheduler.step()
                 if coating_candles == False:
@@ -143,22 +153,27 @@ class ThreeBlindMice(nn.Module):
                 losses[coated] = n_loss
                 if n_loss < least_loss:
                     best_grad = self.inputs.grad.detach()
+                    print('best_grad head:', best_grad[:3])
+                    print('best_grad tail:', best_grad[-3:])
+                    print('least_loss:', least_loss)
                     least_loss = n_loss
-                if coated == 2:
+                if coated == loss_stop:
                     coated = 0
-                    sealed = sum(losses) / 3
+                    sealed = sum(losses) / loss_size
                     if sealed < last_seal:
+                        confirmed = 0
                         last_seal = sealed
                     else:
-                        coating_candles = False
-                        self.inputs.grad = best_grad
+                        confirmed += 1
+                        if confirmed == 3 and n_loss < 0:
+                            coating_candles = False
+                            self.inputs.grad = best_grad
                 else:
                     coated += 1
             tolerance = self.inputs.mean() * self._tolerance_
             delta = (outputs - targets).abs()
             correct = delta[delta >= tolerance]
             correct = delta[delta <= tolerance].shape[0]
-            batch_size = self.inputs.shape[0]
             absolute_error = batch_size - correct
             self.metrics['acc'] = (correct, batch_size)
             self.metrics['epochs'] += 1
@@ -171,9 +186,11 @@ class ThreeBlindMice(nn.Module):
                 x = range(batch_size)
                 y = predictions.detach().cpu()
                 y_lbl = f'Prediction: {y[-1].item()}'
+                print(y_lbl)
                 plt.plot(x, y, label=y_lbl, color='#FFE88E')
                 y = (self.wax * targets).detach().cpu()
                 y_lbl = f'Target: {y[-1].item()}'
+                print(y_lbl)
                 plt.plot(x, y, label=y_lbl, color='#FF9600')
                 plt.suptitle(f'Epoch: {epoch}', fontsize=18)
                 plt.legend(ncol=1, fancybox=True)
@@ -196,13 +213,13 @@ class ThreeBlindMice(nn.Module):
         else:
             self.eval()
             with torch.no_grad():
-                predictions = self.wax * self.forward()
+                predictions = self.wax * ((-1 * self.forward()) ** 2)
             return predictions.clone()
 
     def forward(self):
         """**bubble*bubble**bubble**"""
-        predictions = self.torch_gate(self.inputs)[0]
-        predictions = self.torch_pool(predictions).relu()
+        predictions = self.torch_gate(self.inputs)[1]
+        predictions = self.torch_linear(predictions)
         return predictions.clone()
 
     def predict(self, dataframe):
@@ -221,6 +238,7 @@ class ThreeBlindMice(nn.Module):
         targets = torch.tensor(targets, **self._p_tensor_)
         targets = targets.expand(1, targets.shape[0]).H
         targets = targets / self.wax
+        print('target shape:', targets.shape)
         self.__manage_state__(call_type=1)
         return self.__time_step__(targets, study=True)
 
