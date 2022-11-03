@@ -4,7 +4,7 @@ import torch
 import traceback
 import matplotlib.pyplot as plt
 import source.ivy_commons as icy
-from torch.nn import GRU, Linear, Module, MSELoss, ParameterDict
+from torch.nn import MaxPool1d, GRU, Linear, Module, MSELoss, ParameterDict
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
 from math import sqrt, log, inf
@@ -22,6 +22,9 @@ __license__ = 'GPL v3'
 ε = 2.71828
 π = 3.141592653589793
 τ = 137
+Ξ = ((γ / φ) * α) / τ
+ξ = µ * α
+ζ = int(ε*π*τ*φ / γ)
 εφπ = (-log(φ) * -log(π)) ** ε
 
 
@@ -52,7 +55,7 @@ class ThreeBlindMice(Module):
         self._n_layers_ = self._batch_size_
         self._tolerance_ = α
         self._dropout_ = εφπ
-        self._lr_ = γ
+        self._lr_ = Ξ
         self.inputs = None
         self.torch_gate = GRU(
             input_size=self._n_features_,
@@ -64,9 +67,14 @@ class ThreeBlindMice(Module):
             device=self._device_,
             )
         self.torch_loss = MSELoss()
-        self.torch_linear = Linear(self._n_hidden_, 1, **self._p_tensor_)
+        self.torch_pool = MaxPool1d(self._n_hidden_)
+        self.torch_linear = Linear(
+            self._n_hidden_,
+            self._n_hidden_,
+            **self._p_tensor_,
+            )
         self.optimizer = Adam(self.parameters(), lr=self._lr_, foreach=True)
-        self.scheduler = WarmRestarts(self.optimizer, T_0=τ, eta_min=µ)
+        self.scheduler = WarmRestarts(self.optimizer, T_0=ζ, eta_min=ξ)
         self.tensors = dict(coated=None, sealed=[], inputs=None, targets=None)
         self.metrics = ParameterDict()
         self.predictions = ParameterDict()
@@ -126,51 +134,27 @@ class ThreeBlindMice(Module):
             self.train()
             self.optimizer.zero_grad()
             batch_size = self._batch_size_
-            n_features = self._n_features_
-            best_grad = None
             coated = 0
             coating_candles = True
-            last_seal = inf
-            least_loss = inf
-            loss_size = int((batch_size * n_features) / 2)
-            loss_stop = loss_size - 1
-            losses = [inf for _ in range(loss_size)]
-            confirmed = 0
-            print('targets tail:', targets[-3:])
-            print('starting loss loop:', loss_size)
-            while True:
+            targets_mean = targets.mean().item()
+            while coating_candles:
+                coated += 1
                 outputs = self.forward()
-                #print('outputs head:', outputs[:3])
-                #print('outputs tail:', outputs[-3:])
                 loss = self.torch_loss(outputs, targets)
                 loss.backward()
-                print('loss:', loss.item())
+                adj_loss = loss.item() / targets_mean
+                if coated % 100 == 0:
+                    print(f'\n({coated})',
+                          'outputs tail:', outputs[-1:].item(),
+                          'targets tail:', targets[-1:].item())
+                    print(f'({coated})',
+                          'adj_loss:', adj_loss,
+                          'loss:', loss.item())
                 self.optimizer.step()
                 self.scheduler.step()
-                if coating_candles == False:
-                    break
-                n_loss = loss.item()
-                losses[coated] = n_loss
-                if n_loss < least_loss:
-                    best_grad = self.inputs.grad.detach()
-                    print('best_grad head:', best_grad[:3])
-                    print('best_grad tail:', best_grad[-3:])
-                    print('least_loss:', least_loss)
-                    least_loss = n_loss
-                if coated == loss_stop:
-                    coated = 0
-                    sealed = sum(losses) / loss_size
-                    if sealed < last_seal:
-                        confirmed = 0
-                        last_seal = sealed
-                    else:
-                        confirmed += 1
-                        if confirmed == 3 and n_loss < 0:
-                            coating_candles = False
-                            self.inputs.grad = best_grad
-                else:
-                    coated += 1
-            tolerance = self.inputs.mean() * self._tolerance_
+                if adj_loss < 3e-3:
+                    coating_candles = False
+            tolerance = targets_mean * self._tolerance_
             delta = (outputs - targets).abs()
             correct = delta[delta >= tolerance]
             correct = delta[delta <= tolerance].shape[0]
@@ -220,6 +204,7 @@ class ThreeBlindMice(Module):
         """**bubble*bubble**bubble**"""
         predictions = self.torch_gate(self.inputs)[1]
         predictions = self.torch_linear(predictions)
+        predictions = self.torch_pool(predictions)
         return predictions.clone()
 
     def predict(self, dataframe):
@@ -233,12 +218,13 @@ class ThreeBlindMice(Module):
         """Moirai research session, fully stocked with cheese and drinks."""
         features = dataframe[self._features_].to_numpy()
         self.inputs = torch.tensor(features, **self._p_tensor_)
-        self.inputs = (self.inputs / self.wax).requires_grad_(True)
+        inputs_mean = self.inputs.mean().item()
+        for i in range(self.inputs.shape[0]):
+            self.inputs[i] = (self.inputs[i] / inputs_mean) / self.wax
+        self.inputs.requires_grad_(True)
         targets = dataframe[self._targets_].to_numpy()
         targets = torch.tensor(targets, **self._p_tensor_)
         targets = targets.expand(1, targets.shape[0]).H
-        targets = targets / self.wax
-        print('target shape:', targets.shape)
         self.__manage_state__(call_type=1)
         return self.__time_step__(targets, study=True)
 
