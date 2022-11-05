@@ -465,9 +465,10 @@ class Candelabrum:
         msg = self._PREFIX + '({}) Sent {} to The Moirai.'
         print(self._PREFIX, 'Starting research loop...')
         loop_start = time.time()
-        moirai = ThreeBlindMice(verbosity=2)
+        batch_size = 89
+        n_batch = batch_size * 2
+        moirai = ThreeBlindMice(batch_size=batch_size, verbosity=2)
         ri = random.randint
-        n_batch = 34
         while aeternalis:
             paterae = [ri(1, symbols_total) - 1 for _ in range(100)]
             for offering in paterae:
@@ -477,7 +478,11 @@ class Candelabrum:
                 indicators = omenize(bars)
                 bars = bars.merge(indicators, left_index=True, right_index=True)
                 bars = bars[trim:]
-                n_time = len(bars.index) - 1
+                n_time = len(bars.index)
+                if n_time > n_batch:
+                    n_time -= 1
+                else:
+                    continue
                 selecting_batch = True
                 while selecting_batch:
                     batch_from = ri(0, n_time)

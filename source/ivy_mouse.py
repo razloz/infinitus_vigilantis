@@ -5,8 +5,8 @@ import traceback
 import matplotlib.pyplot as plt
 import source.ivy_commons as icy
 from torch.nn import MaxPool1d, GRU, Linear, Module, MSELoss, ParameterDict
-from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts as WarmRestarts
+from torch.optim import NAdam
+from torch.optim.lr_scheduler import OneCycleLR
 from math import sqrt, log, inf
 from os import mkdir
 from os.path import abspath, exists
@@ -22,9 +22,9 @@ __license__ = 'GPL v3'
 ε = 2.71828
 π = 3.141592653589793
 τ = 137
-Ξ = ((γ / φ) * α) / τ
-ξ = µ * α
-ζ = int(ε*π*τ*φ / γ)
+ξ = (γ ** φ) * (ħ ** φ) * (α ** φ)
+Ξ = 1 - (µ ** (sqrt(ξ / (τ ** φ)) * (π ** φ)))
+ζ = int(τ * (γ + ħ + φ + ε + π))
 εφπ = (-log(φ) * -log(π)) ** ε
 
 
@@ -51,11 +51,11 @@ class ThreeBlindMice(Module):
         self.verbosity = int(verbosity)
         self._batch_size_ = int(batch_size)
         self._n_features_ = len(self._features_)
-        self._n_hidden_ = self._n_features_ ** 2
-        self._n_layers_ = self._batch_size_
+        self._n_hidden_ = 3
+        self._n_layers_ = ζ * 2
         self._tolerance_ = α
         self._dropout_ = εφπ
-        self._lr_ = Ξ
+        self._lr_ = ξ
         self.inputs = None
         self.torch_gate = GRU(
             input_size=self._n_features_,
@@ -73,23 +73,23 @@ class ThreeBlindMice(Module):
             self._n_hidden_,
             **self._p_tensor_,
             )
-        self.optimizer = Adam(self.parameters(), lr=self._lr_, foreach=True)
-        self.scheduler = WarmRestarts(self.optimizer, T_0=ζ, eta_min=ξ)
+        self.optimizer = NAdam(self.parameters(), lr=self._lr_, foreach=True)
         self.tensors = dict(coated=None, sealed=[], inputs=None, targets=None)
         self.metrics = ParameterDict()
         self.predictions = ParameterDict()
         self.wax = τ
         self.to(self._device_)
-        self.__manage_state__(call_type=0)
+        self.quick_load()
         if self.verbosity > 1:
             print(self._prefix_, 'set device_type to', self._device_type_)
             print(self._prefix_, 'set n_features to', self._n_features_)
-            print(self._prefix_, 'set batch_size to', self._batch_size_)
-            print(self._prefix_, 'set tolerance to', self._tolerance_)
-            print(self._prefix_, 'set dropout to', self._dropout_)
-            print(self._prefix_, 'set learning rate to', self._lr_)
             print(self._prefix_, 'set n_hidden to', self._n_hidden_)
             print(self._prefix_, 'set n_layers to', self._n_layers_)
+            print(self._prefix_, 'set dropout to', self._dropout_)
+            print(self._prefix_, 'set batch_size to', self._batch_size_)
+            print(self._prefix_, 'set tolerance to', self._tolerance_)
+            print(self._prefix_, 'set learning rate to', self._lr_)
+            print(self._prefix_, 'set restart to', ζ)
             print('')
 
     def __manage_state__(self, call_type=0):
@@ -136,76 +136,86 @@ class ThreeBlindMice(Module):
             batch_size = self._batch_size_
             coated = 0
             coating_candles = True
+            last_avg = inf
+            running_sum = 0
             targets_mean = targets.mean().item()
             while coating_candles:
-                coated += 1
-                outputs = self.forward()
-                loss = self.torch_loss(outputs, targets)
-                loss.backward()
-                adj_loss = loss.item() / targets_mean
-                if coated % 100 == 0:
-                    print(f'\n({coated})',
-                          'outputs tail:', outputs[-1:].item(),
-                          'targets tail:', targets[-1:].item())
-                    print(f'({coated})',
-                          'adj_loss:', adj_loss,
-                          'loss:', loss.item())
-                self.optimizer.step()
-                self.scheduler.step()
-                if adj_loss < 3e-3:
+                if self.verbosity > 1: print('')
+                scheduler = OneCycleLR(self.optimizer, max_lr=Ξ, total_steps=ζ)
+                n_plot = int(ζ * 0.1)
+                for _ in range(ζ - 1):
+                    coated += 1
+                    outputs = self.forward()
+                    loss = self.torch_loss(outputs, targets)
+                    loss.backward()
+                    adj_loss = (sqrt(loss.item()) / targets_mean) / batch_size
+                    self.optimizer.step()
+                    scheduler.step()
+                    running_sum += adj_loss
+                    tolerance = targets_mean * self._tolerance_
+                    delta = (outputs - targets).abs()
+                    correct = delta[delta >= tolerance]
+                    correct = delta[delta <= tolerance].shape[0]
+                    absolute_error = batch_size - correct
+                    self.metrics['acc'] = (correct, batch_size)
+                    self.metrics['epochs'] += 1
+                    self.metrics['loss'] += adj_loss
+                    self.metrics['mae'] += absolute_error
+                    self.metrics['mse'] += absolute_error ** 2
+                    if coated % n_plot == 0:
+                        self.quick_save()
+                        if plot:
+                            epoch = self.metrics['epochs']
+                            x = range(batch_size)
+                            y = outputs.detach().cpu()
+                            y_lbl = f'Prediction: {y[-1].item()}'
+                            plt.plot(x, y, label=y_lbl, color='#FFE88E')
+                            y = targets.detach().cpu()
+                            y_lbl = f'Target: {y[-1].item()}'
+                            plt.plot(x, y, label=y_lbl, color='#FF9600')
+                            plt.suptitle(f'Epoch: {epoch}', fontsize=18)
+                            plt.legend(ncol=1, fancybox=True)
+                            ts = int(time.time())
+                            epochs_path = f'{self._epochs_path_}/{ts}.png'
+                            plt.savefig(epochs_path)
+                            plt.clf()
+                        if self.verbosity > 1:
+                            prefix = self._prefix_
+                            last_lr = scheduler.get_last_lr()[0]
+                            print(prefix, 'LR:', '{:.10f}'.format(last_lr))
+                            print(prefix, 'OUTPUT TAIL:', outputs[-1:].item())
+                            print(prefix, 'MEAN TARGET:', targets_mean)
+                            print(prefix, 'ADJ_LOSS:', adj_loss)
+                            print(prefix, 'ACC:', self.metrics['acc'])
+                            for k in ['loss', 'mae', 'mse']:
+                                v = self.metrics[k]
+                                if k == 'mse':
+                                    print(prefix, f'{k.upper()}: {sqrt(v)}')
+                                else:
+                                    print(prefix, f'{k.upper()}: {v / epoch}')
+                            print(prefix, 'EPOCH:', epoch)
+                running_sum = running_sum / ζ
+                if running_sum < last_avg:
+                    last_avg = running_sum
+                else:
                     coating_candles = False
-            tolerance = targets_mean * self._tolerance_
-            delta = (outputs - targets).abs()
-            correct = delta[delta >= tolerance]
-            correct = delta[delta <= tolerance].shape[0]
-            absolute_error = batch_size - correct
-            self.metrics['acc'] = (correct, batch_size)
-            self.metrics['epochs'] += 1
-            self.metrics['loss'] += loss.item()
-            self.metrics['mae'] += absolute_error
-            self.metrics['mse'] += absolute_error ** 2
-            predictions = self.wax * outputs
-            if plot:
-                epoch = self.metrics['epochs']
-                x = range(batch_size)
-                y = predictions.detach().cpu()
-                y_lbl = f'Prediction: {y[-1].item()}'
-                print(y_lbl)
-                plt.plot(x, y, label=y_lbl, color='#FFE88E')
-                y = (self.wax * targets).detach().cpu()
-                y_lbl = f'Target: {y[-1].item()}'
-                print(y_lbl)
-                plt.plot(x, y, label=y_lbl, color='#FF9600')
-                plt.suptitle(f'Epoch: {epoch}', fontsize=18)
-                plt.legend(ncol=1, fancybox=True)
-                ts = int(time.time())
-                epochs_path = f'{self._epochs_path_}/{ts}.png'
-                plt.savefig(epochs_path)
-                plt.clf()
-            if self.verbosity > 1:
-                prefix = self._prefix_
-                print(prefix, 'ACC:', self.metrics['acc'])
-                print(prefix, 'EPOCH:', epoch)
-                for key in ['loss', 'mae', 'mse']:
-                    value = self.metrics[key]
-                    if key == 'mse':
-                        print(prefix, f'{key.upper()}: {sqrt(value)}')
-                    else:
-                        print(prefix, f'{key.upper()}: {value / epoch}')
-                print('')
-            return predictions.clone()
+            if self.verbosity > 1: print('')
+            return outputs.clone()
         else:
             self.eval()
             with torch.no_grad():
-                predictions = self.wax * ((-1 * self.forward()) ** 2)
-            return predictions.clone()
+                outputs = self.forward()
+            return outputs.clone()
 
     def forward(self):
         """**bubble*bubble**bubble**"""
-        predictions = self.torch_gate(self.inputs)[1]
-        predictions = self.torch_linear(predictions)
-        predictions = self.torch_pool(predictions)
-        return predictions.clone()
+        wax = self.inputs.mean()
+        layers = self.inputs.shape[0]
+        candles = self.torch_gate(self.inputs)[0]
+        candles = self.torch_linear(candles)
+        candles = self.torch_pool(candles)
+        candles = wax * (1 - candles)
+        return candles.clone()
 
     def predict(self, dataframe):
         """Take a batch of inputs and return the future signal."""
@@ -214,17 +224,25 @@ class ThreeBlindMice(Module):
         self.inputs = (self.inputs / self.wax).requires_grad_(True)
         return self.__time_step__(None, study=False)
 
+    def quick_load(self):
+        """Alias to load RNN state."""
+        self.__manage_state__(call_type=0)
+
+    def quick_save(self):
+        """Alias to save RNN state."""
+        self.__manage_state__(call_type=1)
+
     def research(self, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""
-        features = dataframe[self._features_].to_numpy()
+        batch_size = self._batch_size_
+        features = dataframe[self._features_][:batch_size].to_numpy()
         self.inputs = torch.tensor(features, **self._p_tensor_)
         inputs_mean = self.inputs.mean().item()
         for i in range(self.inputs.shape[0]):
             self.inputs[i] = (self.inputs[i] / inputs_mean) / self.wax
         self.inputs.requires_grad_(True)
-        targets = dataframe[self._targets_].to_numpy()
+        targets = dataframe[self._targets_][-batch_size:].to_numpy()
         targets = torch.tensor(targets, **self._p_tensor_)
         targets = targets.expand(1, targets.shape[0]).H
-        self.__manage_state__(call_type=1)
         return self.__time_step__(targets, study=True)
 
