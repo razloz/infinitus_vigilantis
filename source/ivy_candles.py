@@ -455,26 +455,27 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def research_candles(self, trim=90, aeternalis=True):
+    def research_candles(self, trim=90, aeternalis=True, watch_list=True):
         """Send candles to the Moirai to study."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        symbols = [s for s, e in composite_index()]
+        if watch_list:
+            paterae = ['QQQ', 'SPY', 'GME', 'AMD', 'NVDA', 'INTC',
+                       'QCOM', 'PALL', 'SPPP', 'JPM', 'DIS', 'SYK']
+        else:
+            paterae = [s[0] for s in composite_index()]
         symbols_researched = 0
-        symbols_total = len(symbols)
+        symbols_total = len(paterae)
         msg = self._PREFIX + '({}) Sent {} to The Moirai.'
         print(self._PREFIX, 'Starting research loop...')
-        loop_start = time.time()
-        batch_size = 89
+        batch_size = 5
         n_batch = batch_size * 2
-        moirai = ThreeBlindMice(batch_size=batch_size, verbosity=2)
-        ri = random.randint
+        loop_start = time.time()
         while aeternalis:
-            paterae = [ri(1, symbols_total) - 1 for _ in range(100)]
             for offering in paterae:
+                offering_start = time.time()
                 symbols_researched += 1
-                symbol = symbols[offering]
-                bars = get_daily(symbol)
+                bars = get_daily(offering)
                 indicators = omenize(bars)
                 bars = bars.merge(indicators, left_index=True, right_index=True)
                 bars = bars[trim:]
@@ -483,21 +484,24 @@ class Candelabrum:
                     n_time -= 1
                 else:
                     continue
-                selecting_batch = True
-                while selecting_batch:
-                    batch_from = ri(0, n_time)
-                    batch_to = batch_from + n_batch
-                    if n_time >= batch_to:
-                        selecting_batch = False
-                batch = bars[batch_from:batch_to]
-                batch_str = f'{symbol} ({batch_from} : {batch_to})'
-                print(msg.format(symbols_researched, batch_str))
-                moirai.research(batch)
-                # if moirai.research(batch):
-                    # cheese = dict(moirai.predictions[offering])
-                    # prediction = moirai.tensors['sealed'].tolist()[0]
-                    # cheese['prediction'] = prediction
-                    # self._QUEUE.put(('cartography', offering, candles, cheese))
+                moirai = ThreeBlindMice(offering, batch_size=batch_size)
+                for batch_start in range(n_time):
+                    batch_stop = batch_start + n_batch
+                    if batch_stop > n_time:
+                        break
+                    if batch_start % n_batch == 0:
+                        batch = bars[batch_start:batch_stop]
+                        batch_str = f'{offering} ({batch_start} : {batch_stop})'
+                        print(msg.format(symbols_researched, batch_str))
+                        moirai.research(batch)
+                elapsed = time.time() - offering_start
+                message = f'Research of {offering} complete after'
+                message = format_time(elapsed, message=message)
+                print(self._PREFIX, message.format(symbols_total))
+            elapsed = time.time() - loop_start
+            message = 'Aeternalis elapsed time is'
+            message = format_time(elapsed, message=message)
+            print(self._PREFIX, message.format(symbols_total))
         self.join_workers()
         elapsed = time.time() - loop_start
         message = 'Research of {} symbols complete after'
