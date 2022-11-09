@@ -455,58 +455,62 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def research_candles(self, trim=90, aeternalis=True, watch_list=True):
-        """Send candles to the Moirai to study."""
-        get_daily = self.get_daily_candles
-        omenize = self.apply_indicators
+    def research_candles(self, epochs=9001, watch_list=True):
+        """Spend time with the Norn researching candles."""
         if watch_list:
-            paterae = ['QQQ', 'SPY', 'GME', 'AMD', 'NVDA', 'INTC',
-                       'QCOM', 'PALL', 'SPPP', 'JPM', 'DIS', 'SYK']
+            paterae = ['QQQ', 'SPY']
         else:
             paterae = [s[0] for s in composite_index()]
-        symbols_researched = 0
-        symbols_total = len(paterae)
-        msg = self._PREFIX + '({}) Sent {} to The Moirai.'
-        print(self._PREFIX, 'Starting research loop...')
-        batch_size = 5
-        n_batch = batch_size * 2
+        aeternalis = True
+        total_candles = len(paterae)
+        epoch = 0
         loop_start = time.time()
         while aeternalis:
             for offering in paterae:
                 offering_start = time.time()
-                symbols_researched += 1
-                bars = get_daily(offering)
-                indicators = omenize(bars)
-                bars = bars.merge(indicators, left_index=True, right_index=True)
-                bars = bars[trim:]
-                n_time = len(bars.index)
-                if n_time > n_batch:
-                    n_time -= 1
-                else:
-                    continue
-                moirai = ThreeBlindMice(offering, batch_size=batch_size)
-                for batch_start in range(n_time):
-                    batch_stop = batch_start + n_batch
-                    if batch_stop > n_time:
-                        break
-                    if batch_start % n_batch == 0:
-                        batch = bars[batch_start:batch_stop]
-                        batch_str = f'{offering} ({batch_start} : {batch_stop})'
-                        print(msg.format(symbols_researched, batch_str))
-                        moirai.research(batch)
+                moirai = ThreeBlindMice(offering, verbosity=2)
+                predictions = moirai.research()
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
-                message = format_time(elapsed, message=message)
-                print(self._PREFIX, message.format(symbols_total))
+                print(self._PREFIX, format_time(elapsed, message=message))
+            epoch += 1
+            if epoch == epochs:
+                aeternalis = False
             elapsed = time.time() - loop_start
             message = 'Aeternalis elapsed time is'
+            print(self._PREFIX, format_time(elapsed, message=message))
+
+    def make_offering(self, trim=90, watch_list=True):
+        """Supply the mice with endless amounts of cheese."""
+        get_daily = self.get_daily_candles
+        omenize = self.apply_indicators
+        if watch_list:
+            paterae = ['QQQ', 'SPY']
+        else:
+            paterae = [s[0] for s in composite_index()]
+        candles_offered = 0
+        candles_total = len(paterae)
+        msg = self._PREFIX + '({}) Sent {} to The Moirai.'
+        print(self._PREFIX, 'placing offerings...')
+        loop_start = time.time()
+        for offering in paterae:
+            offering_start = time.time()
+            candles_offered += 1
+            candles = get_daily(offering)
+            omens = omenize(candles)
+            candles = candles.merge(omens, left_index=True, right_index=True)
+            candles = candles[trim:]
+            moirai = ThreeBlindMice(offering, verbosity=0)
+            print(msg.format(candles_offered, offering))
+            accepted = moirai.collect(candles)
+            elapsed = time.time() - offering_start
+            message = f'{offering} collected after'
             message = format_time(elapsed, message=message)
-            print(self._PREFIX, message.format(symbols_total))
-        self.join_workers()
+            print(self._PREFIX, message.format(candles_total))
         elapsed = time.time() - loop_start
-        message = 'Research of {} symbols complete after'
+        message = '{} offerings collected after'
         message = format_time(elapsed, message=message)
-        print(self._PREFIX, message.format(symbols_total))
+        print(self._PREFIX, message.format(candles_total))
 
     def candle_maker(self, candles):
         """Makes a candle."""
