@@ -20,8 +20,12 @@ if __name__ == '__main__':
                    help='Build historical database.')
     p.add_argument('--clean', action='store_true',
                    help='Remove all corruption from the candelabrum.')
+    p.add_argument('--feed', action='store_true',
+                   help='Feed and care for the mice. <333')
     p.add_argument('--indicators', action='store_true',
                    help='Build historical indicators.')
+    p.add_argument('--offering', action='store_true',
+                   help='Offer cheese and candles to the Norn.')
     p.add_argument('--research', action='store_true',
                    help='Visit the three blind mice.')
     p.add_argument('--start_date', help='Defaults to 2019-01-01.')
@@ -36,11 +40,16 @@ if __name__ == '__main__':
         updater.build_historical_database()
     elif args.clean:
         updater.Candelabrum().clean_candelabrum()
-    elif args.research:
+    elif args.feed:
+        updater.Candelabrum().make_offering()
         updater.Candelabrum().research_candles()
     elif args.indicators:
         print('Applying indicators...')
         updater.Candelabrum().apply_indicators()
         print("""Job's done!""")
+    elif args.offering:
+        updater.Candelabrum().make_offering()
+    elif args.research:
+        updater.Candelabrum().research_candles()
     else:
         print('Missing argument.')
