@@ -8,7 +8,7 @@ from time import localtime
 from time import gmtime
 from statistics import stdev
 from statistics import mean
-from numpy import busday_count, errstate
+from numpy import busday_count, errstate, inf, nan
 from datetime import datetime
 from threading import Thread, Lock
 from queue import Queue
@@ -249,7 +249,9 @@ def get_indicators(df, index_key='time'):
     l = df['low'].values
     c = df['close'].values
     indicators['price_med'] = ((o + h + l + c) / 4).tolist()
-    indicators['cdl_change'] = safe_div((c - o), o).tolist()
+    indicators['delta'] = indicators['price_med'] - indicators['price_wema']
+    indicators['delta'] = indicators['delta'] / indicators['price_wema']
+    indicators.replace([inf, -inf], nan, inplace=True)
     indicators.fillna(0, inplace=True)
     return indicators.copy()
 
