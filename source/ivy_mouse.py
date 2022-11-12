@@ -34,13 +34,14 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._state_path_): mkdir(self._state_path_)
         self._epochs_path_ = abspath('./rnn/epochs')
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
-        self._lr_init_ = 0.03
+        self._lr_init_ = phi
         self._lr_max_ = iota / (phi - 1)
         self._lr_min_ = iota / phi
         self._n_dropout_ = ((137 * phi) ** iota) - 1
         self._n_inputs_ = len(self._candles_)
-        self._n_hidden_ = 624
-        self._n_layers_ = self._batch_size_ * 4
+        self._n_hidden_ = 3
+        self._n_layers_ = 1024
+        self._n_stride_ = 3
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = str(symbol).upper()
@@ -57,7 +58,7 @@ class ThreeBlindMice(nn.Module):
             dropout=self._n_dropout_,
             )
         self.loss_fn = nn.HuberLoss(
-            reduction='mean',
+            reduction='sum',
             delta=1.0,
             )
         self.normalizer = nn.InstanceNorm1d(
@@ -71,8 +72,9 @@ class ThreeBlindMice(nn.Module):
             lr=self._lr_init_,
             foreach=True,
             )
-        self.pool_hidden = nn.AvgPool1d(
-            kernel_size=self._n_hidden_,
+        self.pool_hidden = nn.MaxPool1d(
+            kernel_size=self._cluster_size_,
+            stride=self._n_stride_,
             )
         self.pool_layers = nn.AvgPool1d(
             kernel_size=4,
@@ -102,6 +104,9 @@ class ThreeBlindMice(nn.Module):
             print(self._prefix_, 'set hidden to', self._n_hidden_)
             print(self._prefix_, 'set layers to', self._n_layers_)
             print(self._prefix_, 'set dropout to', self._n_dropout_)
+            print(self._prefix_, 'set batch size to', self._batch_size_)
+            print(self._prefix_, 'set cluster size to', self._cluster_size_)
+            print(self._prefix_, 'set stride to', self._n_stride_)
             print(self._prefix_, 'set initial lr to', self._lr_init_)
             print(self._prefix_, 'set max lr to', self._lr_max_)
             print(self._prefix_, 'set min lr to', self._lr_min_)
@@ -240,9 +245,11 @@ class ThreeBlindMice(nn.Module):
         """**bubble*bubble**bubble**"""
         candles = self.normalizer(candles)
         candles = self.cauldron(candles)[1]
-        candles = self.pool_hidden(candles).H
-        candles = self.pool_layers(candles).H
-        candles = gelu(candles)
+        bubbles = torch.topk(candles.sum(1), self._batch_size_)
+        print('bubbles:', candles.shape, '\n', candles)
+        candles = candles[bubbles.indices].sum(1)
+        candles = gelu(candles.unsqueeze(0).H)
+        print('gelu:', candles.shape, '\n', candles)
         return candles.clone()
 
     def predict(self, dataframe):
