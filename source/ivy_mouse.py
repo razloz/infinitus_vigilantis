@@ -23,7 +23,6 @@ class ThreeBlindMice(nn.Module):
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         self._batch_size_ = 5
         self._candles_ = ['open', 'high', 'low', 'close']
-        self._cluster_size_ = 8
         self._cook_time_ = 1800
         self._c_iota_ = iota = 1 / 137
         self._c_phi_ = phi = 1.618033988749894
@@ -40,8 +39,9 @@ class ThreeBlindMice(nn.Module):
         self._n_dropout_ = ((137 * phi) ** iota) - 1
         self._n_inputs_ = len(self._candles_)
         self._n_hidden_ = 3
-        self._n_layers_ = 1024
-        self._n_stride_ = 3
+        self._n_kernel_ = 2
+        self._n_layers_ = 2048
+        self._n_stride_ = 2
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = str(symbol).upper()
@@ -72,12 +72,9 @@ class ThreeBlindMice(nn.Module):
             lr=self._lr_init_,
             foreach=True,
             )
-        self.pool_hidden = nn.MaxPool1d(
-            kernel_size=self._cluster_size_,
+        self.pool = nn.AvgPool1d(
+            kernel_size=self._n_kernel_,
             stride=self._n_stride_,
-            )
-        self.pool_layers = nn.AvgPool1d(
-            kernel_size=4,
             )
         self.schedule_cyclic = CyclicLR(
             self.optimizer,
@@ -105,7 +102,7 @@ class ThreeBlindMice(nn.Module):
             print(self._prefix_, 'set layers to', self._n_layers_)
             print(self._prefix_, 'set dropout to', self._n_dropout_)
             print(self._prefix_, 'set batch size to', self._batch_size_)
-            print(self._prefix_, 'set cluster size to', self._cluster_size_)
+            print(self._prefix_, 'set kernel size to', self._n_kernel_)
             print(self._prefix_, 'set stride to', self._n_stride_)
             print(self._prefix_, 'set initial lr to', self._lr_init_)
             print(self._prefix_, 'set max lr to', self._lr_max_)
@@ -245,8 +242,9 @@ class ThreeBlindMice(nn.Module):
         """**bubble*bubble**bubble**"""
         candles = self.normalizer(candles)
         candles = self.cauldron(candles)[1]
+        candles = self.pool(candles.H).H
         bubbles = torch.topk(candles.sum(1), self._batch_size_)
-        print('bubbles:', candles.shape, '\n', candles)
+        print('bubbles:\n', bubbles.indices)
         candles = candles[bubbles.indices].sum(1)
         candles = gelu(candles.unsqueeze(0).H)
         print('gelu:', candles.shape, '\n', candles)
