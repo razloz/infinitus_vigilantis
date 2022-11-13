@@ -18,12 +18,12 @@ __license__ = 'GPL v3'
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, symbol, *args, verbosity=1, **kwargs):
+    def __init__(self, *args, verbosity=1, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         self._batch_size_ = 5
         self._candles_ = ['open', 'high', 'low', 'close']
-        self._cook_time_ = 1800
+        self._cook_time_ = 300
         self._c_iota_ = iota = 1 / 137
         self._c_phi_ = phi = 1.618033988749894
         self._delta_ = 'delta'
@@ -44,7 +44,7 @@ class ThreeBlindMice(nn.Module):
         self._n_stride_ = 6
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
-        self._symbol_ = str(symbol).upper()
+        self._symbol_ = None
         self._targets_ = 'price_med'
         self._tolerance_ = 1e-4
         self._warm_steps_ = 256
@@ -216,23 +216,24 @@ class ThreeBlindMice(nn.Module):
                 coated_candles = self.forward(candles)
             return coated_candles.clone()
 
-    def collect(self, offering):
+    def collect(self, offering, candles):
         """Takes the offered dataframe and converts it to candle tensors."""
-        n_time = len(offering.index)
+        n_time = len(candles.index)
         if n_time < self._batch_size_:
             return False
+        self._symbol_ = str(offering).upper()
         params = self._p_tensor_
         tensor = torch.tensor
-        candles = offering[self._candles_].to_numpy()
-        candles = tensor(candles, **params)
-        self.candles = candles.detach().cpu().requires_grad_(True)
-        delta = offering[self._delta_].to_list()
+        cdls = candles[self._candles_].to_numpy()
+        cdls = tensor(cdls, **params)
+        self.candles = cdls.detach().cpu().requires_grad_(True)
+        delta = candles[self._delta_].to_list()
         delta = tensor((delta,), **params).H
         self.delta = delta.detach().cpu()
-        targets = offering[self._targets_].to_list()
+        targets = candles[self._targets_].to_list()
         targets = tensor((targets,), **params).H
         self.targets = targets.detach().cpu()
-        wax = offering[self._wax_].to_list()
+        wax = candles[self._wax_].to_list()
         wax = tensor((wax,), **params).H
         self.wax = wax.detach().cpu()
         self.quick_save()
@@ -253,8 +254,9 @@ class ThreeBlindMice(nn.Module):
                 )
         return candles.unsqueeze(0).H.clone()
 
-    def predict(self, dataframe):
+    def predict(self, offering):
         """Take a batch of inputs and return the future signal."""
+        self._symbol_ = str(offering).upper()
         self.quick_load()
         batch_size = self._batch_size_
         candles = self.candles[-batch_size:]
@@ -269,8 +271,9 @@ class ThreeBlindMice(nn.Module):
         """Alias to save RNN state."""
         self.__manage_state__(call_type=1)
 
-    def research(self):
+    def research(self, offering):
         """Moirai research session, fully stocked with cheese and drinks."""
+        self._symbol_ = str(offering).upper()
         self.quick_load()
         batch_size = self._batch_size_
         batch_len = self.candles.shape[0]

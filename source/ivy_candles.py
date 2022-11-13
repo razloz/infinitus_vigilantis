@@ -455,21 +455,34 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def research_candles(self, epochs=9001, watch_list=True):
+    def research_candles(self, epochs=9001, watch_list=False):
         """Spend time with the Norn researching candles."""
         if watch_list:
-            paterae = ['QQQ', 'SPY']
+            offerings = ['QQQ', 'SPY']
         else:
-            paterae = [s[0] for s in composite_index()]
+            offerings = [s[0] for s in composite_index()]
         aeternalis = True
-        total_candles = len(paterae)
+        total_candles = len(offerings)
         epoch = 0
         loop_start = time.time()
+        rng = random.randint
+        n_selections = 100
+        selections = list()
+        moirai = ThreeBlindMice(verbosity=2)
         while aeternalis:
+            if not watch_list:
+                if len(selections) == 0:
+                    selections = list(offerings)
+                paterae = list()
+                for i in range(n_selections):
+                    if len(selections) == 0:
+                        break
+                    paterae.append(selections.pop(rng(0, len(selections))))
+            else:
+                paterae = offerings
             for offering in paterae:
                 offering_start = time.time()
-                moirai = ThreeBlindMice(offering, verbosity=2)
-                predictions = moirai.research()
+                predictions = moirai.research(offering)
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
                 print(self._PREFIX, format_time(elapsed, message=message))
@@ -480,7 +493,7 @@ class Candelabrum:
             message = 'Aeternalis elapsed time is'
             print(self._PREFIX, format_time(elapsed, message=message))
 
-    def make_offering(self, trim=90, watch_list=True):
+    def make_offering(self, trim=90, watch_list=False):
         """Supply the mice with endless amounts of cheese."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
@@ -493,6 +506,7 @@ class Candelabrum:
         msg = self._PREFIX + '({}) Sent {} to The Moirai.'
         print(self._PREFIX, 'placing offerings...')
         loop_start = time.time()
+        moirai = ThreeBlindMice(verbosity=0)
         for offering in paterae:
             offering_start = time.time()
             candles_offered += 1
@@ -500,9 +514,8 @@ class Candelabrum:
             omens = omenize(candles)
             candles = candles.merge(omens, left_index=True, right_index=True)
             candles = candles[trim:]
-            moirai = ThreeBlindMice(offering, verbosity=0)
             print(msg.format(candles_offered, offering))
-            accepted = moirai.collect(candles)
+            accepted = moirai.collect(offering, candles)
             elapsed = time.time() - offering_start
             message = f'{offering} collected after'
             message = format_time(elapsed, message=message)
