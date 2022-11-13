@@ -39,9 +39,9 @@ class ThreeBlindMice(nn.Module):
         self._n_dropout_ = ((137 * phi) ** iota) - 1
         self._n_inputs_ = len(self._candles_)
         self._n_hidden_ = 3
-        self._n_kernel_ = 2
-        self._n_layers_ = 2048
-        self._n_stride_ = 2
+        self._n_kernel_ = 9
+        self._n_layers_ = 3 ** 7
+        self._n_stride_ = 6
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = str(symbol).upper()
@@ -243,6 +243,7 @@ class ThreeBlindMice(nn.Module):
         candles = self.normalizer(candles)
         candles = self.cauldron(candles)[1]
         candles = self.pool(candles.H).H
+        print('pool:\n', candles.shape)
         bubbles = torch.topk(candles.sum(1), self._batch_size_)
         print('bubbles:\n', bubbles.indices)
         candles = candles[bubbles.indices].sum(1)
