@@ -241,15 +241,17 @@ class ThreeBlindMice(nn.Module):
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
         candles = self.normalizer(candles)
-        candles = self.cauldron(candles)[1]
-        candles = self.pool(candles.H).H
-        print('pool:\n', candles.shape)
+        candles = self.cauldron(candles)[1].H
+        candles = self.pool(candles).H
         bubbles = torch.topk(candles.sum(1), self._batch_size_)
-        print('bubbles:\n', bubbles.indices)
-        candles = candles[bubbles.indices].sum(1)
-        candles = gelu(candles.unsqueeze(0).H)
-        print('gelu:', candles.shape, '\n', candles)
-        return candles.clone()
+        candles = gelu(candles[bubbles.indices].sum(1)) / 3
+        if self.verbosity > 1:
+            print('bubbles:', bubbles.indices.tolist())
+            print(
+                'candles:',
+                [float('{:.10f}'.format(i)) for i in candles.tolist()],
+                )
+        return candles.unsqueeze(0).H.clone()
 
     def predict(self, dataframe):
         """Take a batch of inputs and return the future signal."""
