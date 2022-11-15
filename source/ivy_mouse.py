@@ -18,12 +18,12 @@ __license__ = 'GPL v3'
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, *args, verbosity=1, **kwargs):
+    def __init__(self, *args, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         self._batch_size_ = 5
         self._candles_ = ['open', 'high', 'low', 'close']
-        self._cook_time_ = 300
+        self._cook_time_ = 0
         self._c_iota_ = iota = 1 / 137
         self._c_phi_ = phi = 1.618033988749894
         self._delta_ = 'delta'
@@ -33,6 +33,8 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._state_path_): mkdir(self._state_path_)
         self._epochs_path_ = abspath('./rnn/epochs')
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
+        self._offerings_path_ = abspath('./rnn/offerings')
+        if not exists(self._offerings_path_): mkdir(self._offerings_path_)
         self._lr_init_ = phi
         self._lr_max_ = iota / (phi - 1)
         self._lr_min_ = iota / phi
@@ -46,7 +48,7 @@ class ThreeBlindMice(nn.Module):
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = None
         self._targets_ = 'price_med'
-        self._tolerance_ = 1e-4
+        self._tolerance_ = 3e-3
         self._warm_steps_ = 256
         self._wax_ = 'price_wema'
         self.cauldron = nn.GRU(
@@ -86,15 +88,18 @@ class ThreeBlindMice(nn.Module):
             self._warm_steps_,
             eta_min=self._lr_min_,
             )
-        self.candles = None
-        self.delta = None
-        self.targets = None
-        self.wax = None
-        self.metrics = nn.ParameterDict()
+        self.metrics = nn.ParameterDict({
+            'acc': (0, 0),
+            'epochs': 0,
+            'loss': 0,
+            'mae': 0,
+            'mse': 0,
+            })
+        self.offerings = nn.ParameterDict()
         self.predictions = nn.ParameterDict()
         self.verbosity = int(verbosity)
         self.to(self._device_)
-        if self.verbosity > 1:
+        if self.verbosity > 0:
             print(self._prefix_, 'set device_type to', self._device_type_)
             print(self._prefix_, 'set tolerance to', self._tolerance_)
             print(self._prefix_, 'set inputs to', self._n_inputs_)
@@ -113,73 +118,100 @@ class ThreeBlindMice(nn.Module):
 
     def __manage_state__(self, call_type=0):
         """Handles loading and saving of the RNN state."""
-        try:
-            state_path = f'{self._state_path_}/'
-            if call_type == 0:
-                state = torch.load(
-                    f'{state_path}.state',
-                    map_location=self._device_type_,
-                    )
-                self.load_state_dict(state['moirai'])
-                for key, value in state['predictions'].items():
-                    self.predictions[key] = value
-                for key, value in state['metrics'].items():
-                    self.metrics[key] = value
-                if self.verbosity > 2:
-                    print(self._prefix_, 'Loaded RNN state.')
-                state_path += self._symbol_
-                self.candles = torch.load(
+        state_path = f'{self._state_path_}/moirai.state'
+        if call_type == 0:
+            state = torch.load(state_path, map_location=self._device_type_)
+            self.load_state_dict(state['moirai'])
+            for key, value in state['predictions'].items():
+                self.predictions[key] = value
+            for key, value in state['metrics'].items():
+                self.metrics[key] = value
+            for symbol in state['offerings']:
+                symbol = symbol.upper()
+                state_path = f'{self._offerings_path_}/{symbol}'
+                self.offerings[symbol] = dict()
+                self.offerings[symbol]['candles'] = torch.load(
                     f'{state_path}.candles',
                     map_location=self._device_type_,
                     )
-                self.delta = torch.load(
+                self.offerings[symbol]['delta'] = torch.load(
                     f'{state_path}.delta',
                     map_location=self._device_type_,
                     )
-                self.targets = torch.load(
+                self.offerings[symbol]['targets'] = torch.load(
                     f'{state_path}.targets',
                     map_location=self._device_type_,
                     )
-                self.wax = torch.load(
+                self.offerings[symbol]['wax'] = torch.load(
                     f'{state_path}.wax',
                     map_location=self._device_type_,
                     )
-            elif call_type == 1:
+            if self.verbosity > 2:
+                print(self._prefix_, 'Loaded RNN state.')
+        elif call_type == 1:
+            offerings = list(self.offerings.keys())
+            torch.save(
+                {
+                    'metrics': self.metrics,
+                    'moirai': self.state_dict(),
+                    'predictions': self.predictions,
+                    'offerings': offerings,
+                    },
+                state_path,
+                )
+            for symbol in offerings:
+                if len(self.offerings[symbol].keys()) == 0:
+                    continue
+                symbol = symbol.upper()
+                state_path = f'{self._offerings_path_}/{symbol}'
                 torch.save(
-                    {
-                        'metrics': self.metrics,
-                        'moirai': self.state_dict(),
-                        'predictions': self.predictions,
-                        },
-                    f'{state_path}.state',
+                    self.offerings[symbol]['candles'],
+                    f'{state_path}.candles',
                     )
-                state_path += self._symbol_
-                torch.save(self.candles, f'{state_path}.candles')
-                torch.save(self.delta, f'{state_path}.delta')
-                torch.save(self.targets, f'{state_path}.targets')
-                torch.save(self.wax, f'{state_path}.wax')
-                if self.verbosity > 2:
-                    print(self._prefix_, 'Saved RNN state.')
-        except FileNotFoundError:
-            self.metrics['acc'] = (0, 0)
-            for key in ['epochs', 'loss', 'mae', 'mse']:
-                self.metrics[key] = 0
-        except Exception as details:
-            if self.verbosity > 0:
-                print(self._prefix_, 'Encountered an exception.')
-                traceback.print_exception(details)
+                torch.save(
+                    self.offerings[symbol]['delta'],
+                    f'{state_path}.delta',
+                    )
+                torch.save(
+                    self.offerings[symbol]['targets'],
+                    f'{state_path}.targets',
+                    )
+                torch.save(
+                    self.offerings[symbol]['wax'],
+                    f'{state_path}.wax',
+                    )
+            if self.verbosity > 2:
+                print(self._prefix_, 'Saved RNN state.')
 
-    def __time_plot__(self, predictions, targets, adj_loss):
+    def __reset_offerings__(self, offerings):
+        for symbol in offerings:
+            self.offerings[symbol] = dict()
+        self.quick_save()
+
+    def __time_plot__(self, predictions, targets, wax, adj_loss):
         epoch = self.metrics['epochs']
+        accuracy = self.metrics['acc']
         x = range(predictions.shape[0])
         y_p = predictions.detach().cpu()
         y_t = targets.detach().cpu()
+        y_w = wax.detach().cpu()
         n_p = round(y_p[-1].item(), 2)
         n_t = round(y_t[-1].item(), 2)
-        plt.plot(x, y_p, label=f'Prediction: {n_p}', color='#FFE88E')
-        plt.plot(x, y_t, label=f'Target: {n_t}', color='#FF9600')
-        plt.suptitle(f'{self._symbol_} (epochs: {epoch})', fontsize=18)
-        plt.legend(ncol=1, fancybox=True)
+        n_w = round(y_w[-1].item(), 2)
+        fig = plt.figure(figsize=(19.20, 10.80), dpi=100)
+        ax = fig.add_subplot()
+        ax.grid(True, color=(0.3, 0.3, 0.3))
+        ax.set_ylabel('Price', fontweight='bold')
+        ax.set_xlabel('Epoch', fontweight='bold')
+        ax.plot(x, y_t, label=f'Target: {n_t}', color='#FF9600')
+        ax.plot(x, y_p, label=f'Prediction: {n_p}', color='#FFE88E')
+        ax.plot(x, y_w, label=f'Wax: {n_w}', color='#FFFFE0', linestyle=':')
+        title = f'{self._symbol_}\n'
+        title += f'Accuracy: {accuracy}, '
+        title += f'Epochs: {epoch}, '
+        title += 'Loss: {:.10f}'.format(adj_loss)
+        fig.suptitle(title, fontsize=18)
+        plt.legend(fancybox=True, loc='best', ncol=1)
         ts = int(time.time())
         epochs_path = f'{self._epochs_path_}/{ts}.png'
         plt.savefig(epochs_path)
@@ -188,8 +220,9 @@ class ThreeBlindMice(nn.Module):
             prefix = self._prefix_
             print(prefix, 'PREDICTIONS TAIL:', y_p[-1].item())
             print(prefix, 'TARGET TAIL:', y_t[-1].item())
+            print(prefix, 'WAX TAIL:', y_w[-1].item())
             print(prefix, 'ADJ_LOSS:', adj_loss)
-            print(prefix, 'ACC:', self.metrics['acc'])
+            print(prefix, 'ACC:', accuracy)
             for k in ['loss', 'mae', 'mse']:
                 v = self.metrics[k]
                 if k == 'mse':
@@ -218,25 +251,26 @@ class ThreeBlindMice(nn.Module):
 
     def collect(self, offering, candles):
         """Takes the offered dataframe and converts it to candle tensors."""
+        symbol = self._symbol_ = str(offering).upper()
         n_time = len(candles.index)
         if n_time < self._batch_size_:
             return False
-        self._symbol_ = str(offering).upper()
+        symbol = self._symbol_ = str(offering).upper()
         params = self._p_tensor_
         tensor = torch.tensor
         cdls = candles[self._candles_].to_numpy()
-        cdls = tensor(cdls, **params)
-        self.candles = cdls.detach().cpu().requires_grad_(True)
+        cdls = tensor(cdls, **params).requires_grad_(True)
         delta = candles[self._delta_].to_list()
         delta = tensor((delta,), **params).H
-        self.delta = delta.detach().cpu()
         targets = candles[self._targets_].to_list()
         targets = tensor((targets,), **params).H
-        self.targets = targets.detach().cpu()
         wax = candles[self._wax_].to_list()
         wax = tensor((wax,), **params).H
-        self.wax = wax.detach().cpu()
-        self.quick_save()
+        self.offerings[symbol] = dict()
+        self.offerings[symbol]['candles'] = cdls.detach().cpu()
+        self.offerings[symbol]['delta'] = delta.detach().cpu()
+        self.offerings[symbol]['targets'] = targets.detach().cpu()
+        self.offerings[symbol]['wax'] = wax.detach().cpu()
         return True
 
     def forward(self, candles):
@@ -256,11 +290,12 @@ class ThreeBlindMice(nn.Module):
 
     def predict(self, offering):
         """Take a batch of inputs and return the future signal."""
-        self._symbol_ = str(offering).upper()
-        self.quick_load()
+        symbol = self._symbol_ = str(offering).upper()
+        candles = self.offerings[symbol]['candles']
+        wax = self.offerings[symbol]['wax']
         batch_size = self._batch_size_
-        candles = self.candles[-batch_size:]
-        wax = self.wax[-batch_size:]
+        candles = candles[-batch_size:]
+        wax = wax[-batch_size:]
         return self.__time_step__(candles, wax, study=False)
 
     def quick_load(self):
@@ -273,10 +308,13 @@ class ThreeBlindMice(nn.Module):
 
     def research(self, offering):
         """Moirai research session, fully stocked with cheese and drinks."""
-        self._symbol_ = str(offering).upper()
-        self.quick_load()
+        symbol = self._symbol_ = str(offering).upper()
+        all_candles = self.offerings[symbol]['candles']
+        all_targets = self.offerings[symbol]['targets']
+        all_delta = self.offerings[symbol]['delta']
+        all_wax = self.offerings[symbol]['wax']
         batch_size = self._batch_size_
-        batch_len = self.candles.shape[0]
+        batch_len = all_candles.shape[0]
         coated = batch_size
         if batch_len <= batch_size * 2:
             return False
@@ -290,36 +328,41 @@ class ThreeBlindMice(nn.Module):
         n_heat = 0
         n_heat_avg = inf
         n_reheat = 137
-        sealed = dict(candles=list(), targets=list())
-        self.metrics['epochs'] = 0
+        sealed = dict(candles=list(), targets=list(), wax=list())
+        self.metrics['acc'] = (0, 0)
         self.metrics['loss'] = 0
         self.metrics['mae'] = 0
         self.metrics['mse'] = 0
-        tolerance = self._tolerance_ * self.targets.mean().item()
+        tolerance = self._tolerance_ * all_targets.mean().item()
         t_cook = time.time()
         vstack = torch.vstack
         while coating_candles:
             if batch_len <= coated + batch_size:
-                if time.time() - t_cook >= cook_time:
-                    coating_candles = False
-                    epochs = self.metrics['epochs']
-                    self.metrics['loss'] = self.metrics['loss'] / epochs
-                    self.metrics['mae'] = self.metrics['mae'] / epochs
-                    self.metrics['mse'] = sqrt(self.metrics['mse'])
-                    break
-                self.quick_save()
+                self.metrics['loss'] = self.metrics['loss'] / coated
+                self.metrics['mae'] = self.metrics['mae'] / coated
+                self.metrics['mse'] = sqrt(self.metrics['mse']) / coated
                 c_plot = vstack(sealed['candles'])
                 t_plot = vstack(sealed['targets'])
-                self.__time_plot__(c_plot, t_plot, adj_loss)
-                sealed = dict(candles=list(), targets=list())
-                coated = batch_size
-                continue
+                w_plot = vstack(sealed['wax'])
+                self.predictions[symbol] = dict(self.metrics)
+                self.__time_plot__(c_plot, t_plot, w_plot, adj_loss)
+                if time.time() - t_cook >= cook_time:
+                    coating_candles = False
+                    break
+                else:
+                    sealed = dict(candles=list(), targets=list(), wax=list())
+                    coated = batch_size
+                    self.metrics['acc'] = (0, 0)
+                    self.metrics['loss'] = 0
+                    self.metrics['mae'] = 0
+                    self.metrics['mse'] = 0
+                    continue
             c_i = coated - batch_size
             c_ii = coated + batch_size
-            candles = self.candles[c_i:coated]
-            targets = self.targets[coated:c_ii]
-            t_delta = self.delta[coated:c_ii]
-            wax = self.wax[c_i:coated]
+            candles = all_candles[c_i:coated]
+            targets = all_targets[coated:c_ii]
+            t_delta = all_delta[coated:c_ii]
+            wax = all_wax[c_i:coated]
             coated_candles = self.__time_step__(candles, study=True)
             loss = self.loss_fn(coated_candles, t_delta)
             loss.backward()
@@ -340,7 +383,9 @@ class ThreeBlindMice(nn.Module):
             correct = delta[delta >= tolerance]
             correct = delta[delta <= tolerance].shape[0]
             absolute_error = batch_size - correct
-            self.metrics['acc'] = (correct, batch_size)
+            t_correct = correct + self.metrics['acc'][0]
+            t_batch = batch_size + self.metrics['acc'][1]
+            self.metrics['acc'] = (t_correct, t_batch)
             self.metrics['epochs'] += 1
             self.metrics['loss'] += adj_loss
             self.metrics['mae'] += absolute_error
@@ -355,10 +400,7 @@ class ThreeBlindMice(nn.Module):
                 n_heat = 0
             sealed['candles'].append(coated_candles.clone())
             sealed['targets'].append(targets.clone())
+            sealed['wax'].append(wax.clone())
             coated += batch_size
-        self.quick_save()
-        c_plot = vstack(sealed['candles'])
-        t_plot = vstack(sealed['targets'])
-        self.__time_plot__(c_plot, t_plot, adj_loss)
         if self.verbosity > 1: print('')
         return True

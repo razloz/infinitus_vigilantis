@@ -467,25 +467,30 @@ class Candelabrum:
         loop_start = time.time()
         rng = random.randint
         n_selections = 100
-        selections = list()
-        moirai = ThreeBlindMice(verbosity=2)
+        selections = list(offerings)
+        moirai = ThreeBlindMice(verbosity=1)
+        moirai.__reset_offerings__(offerings)
+        moirai.quick_load()
         while aeternalis:
             if not watch_list:
-                if len(selections) == 0:
-                    selections = list(offerings)
                 paterae = list()
                 for i in range(n_selections):
-                    if len(selections) == 0:
+                    l = len(selections)
+                    if l == 1:
+                        paterae.append(selections[0])
+                        selections = list(offerings)
                         break
-                    paterae.append(selections.pop(rng(0, len(selections))))
+                    else:
+                        paterae.append(selections.pop(rng(0, l - 1)))
             else:
                 paterae = offerings
             for offering in paterae:
                 offering_start = time.time()
                 predictions = moirai.research(offering)
+                moirai.quick_save()
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
-                print(self._PREFIX, format_time(elapsed, message=message))
+                print(self._PREFIX, format_time(elapsed, message=message), '\n')
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
@@ -506,7 +511,7 @@ class Candelabrum:
         msg = self._PREFIX + '({}) Sent {} to The Moirai.'
         print(self._PREFIX, 'placing offerings...')
         loop_start = time.time()
-        moirai = ThreeBlindMice(verbosity=0)
+        moirai = ThreeBlindMice(verbosity=1)
         for offering in paterae:
             offering_start = time.time()
             candles_offered += 1
@@ -520,6 +525,7 @@ class Candelabrum:
             message = f'{offering} collected after'
             message = format_time(elapsed, message=message)
             print(self._PREFIX, message.format(candles_total))
+        moirai.quick_save()
         elapsed = time.time() - loop_start
         message = '{} offerings collected after'
         message = format_time(elapsed, message=message)
