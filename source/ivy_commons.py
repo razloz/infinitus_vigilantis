@@ -163,8 +163,8 @@ def get_indicators(df, index_key='time'):
     fibs_extended = list()
     fibs_retraced = list()
     gartley_checks = list()
-    sample = 89
-    weights = dict(fast=8, weight=34)
+    sample = 34
+    weights = dict(fast=3, weight=13)
     money_p = {f'price_{k}': list() for k in _NO_MONEY_.keys()}
     money_v = {f'volume_{k}': list() for k in _NO_MONEY_.keys()}
     df_range = range(len(df))

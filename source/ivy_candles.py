@@ -455,7 +455,7 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def research_candles(self, epochs=9001, watch_list=False):
+    def research_candles(self, epochs=9001, watch_list=True):
         """Spend time with the Norn researching candles."""
         if watch_list:
             offerings = ['QQQ', 'SPY']
@@ -469,8 +469,7 @@ class Candelabrum:
         n_selections = 100
         selections = list(offerings)
         moirai = ThreeBlindMice(verbosity=1)
-        moirai.__reset_offerings__(offerings)
-        moirai.quick_load()
+        moirai.quick_load(rnn=True, offerings=offerings)
         while aeternalis:
             if not watch_list:
                 paterae = list()
@@ -487,7 +486,7 @@ class Candelabrum:
             for offering in paterae:
                 offering_start = time.time()
                 predictions = moirai.research(offering)
-                moirai.quick_save()
+                moirai.quick_save(rnn=True, offerings=[offering])
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
                 print(self._PREFIX, format_time(elapsed, message=message), '\n')
@@ -498,7 +497,7 @@ class Candelabrum:
             message = 'Aeternalis elapsed time is'
             print(self._PREFIX, format_time(elapsed, message=message))
 
-    def make_offering(self, trim=90, watch_list=False):
+    def make_offering(self, trim=90, watch_list=True):
         """Supply the mice with endless amounts of cheese."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
@@ -513,19 +512,22 @@ class Candelabrum:
         loop_start = time.time()
         moirai = ThreeBlindMice(verbosity=1)
         for offering in paterae:
-            offering_start = time.time()
             candles_offered += 1
+            print(msg.format(candles_offered, offering))
+            offering_start = time.time()
             candles = get_daily(offering)
             omens = omenize(candles)
             candles = candles.merge(omens, left_index=True, right_index=True)
             candles = candles[trim:]
-            print(msg.format(candles_offered, offering))
             accepted = moirai.collect(offering, candles)
             elapsed = time.time() - offering_start
-            message = f'{offering} collected after'
+            if accepted:
+                message = f'{offering} collected after'
+            else:
+                message = f'{offering} rejected after'
             message = format_time(elapsed, message=message)
             print(self._PREFIX, message.format(candles_total))
-        moirai.quick_save()
+        moirai.quick_save(rnn=True, offerings=paterae)
         elapsed = time.time() - loop_start
         message = '{} offerings collected after'
         message = format_time(elapsed, message=message)

@@ -21,9 +21,9 @@ class ThreeBlindMice(nn.Module):
     def __init__(self, *args, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
-        self._batch_size_ = 5
+        self._batch_size_ = 34
         self._candles_ = ['open', 'high', 'low', 'close']
-        self._cook_time_ = 0
+        self._cook_time_ = 3600
         self._c_iota_ = iota = 1 / 137
         self._c_phi_ = phi = 1.618033988749894
         self._delta_ = 'delta'
@@ -38,17 +38,17 @@ class ThreeBlindMice(nn.Module):
         self._lr_init_ = phi
         self._lr_max_ = iota / (phi - 1)
         self._lr_min_ = iota / phi
+        self._n_cluster_ = 9
         self._n_dropout_ = ((137 * phi) ** iota) - 1
+        self._n_hidden_ = 3 ** 4
         self._n_inputs_ = len(self._candles_)
-        self._n_hidden_ = 3
-        self._n_kernel_ = 9
-        self._n_layers_ = 3 ** 7
-        self._n_stride_ = 6
+        self._n_layers_ = 3 ** 6
+        self._n_stride_ = 3
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = None
         self._targets_ = 'price_med'
-        self._tolerance_ = 3e-3
+        self._tolerance_ = 0.00033
         self._warm_steps_ = 256
         self._wax_ = 'price_wema'
         self.cauldron = nn.GRU(
@@ -74,9 +74,10 @@ class ThreeBlindMice(nn.Module):
             lr=self._lr_init_,
             foreach=True,
             )
-        self.pool = nn.AvgPool1d(
-            kernel_size=self._n_kernel_,
+        self.pool = nn.MaxPool1d(
+            kernel_size=self._n_cluster_,
             stride=self._n_stride_,
+            return_indices=True,
             )
         self.schedule_cyclic = CyclicLR(
             self.optimizer,
@@ -107,7 +108,7 @@ class ThreeBlindMice(nn.Module):
             print(self._prefix_, 'set layers to', self._n_layers_)
             print(self._prefix_, 'set dropout to', self._n_dropout_)
             print(self._prefix_, 'set batch size to', self._batch_size_)
-            print(self._prefix_, 'set kernel size to', self._n_kernel_)
+            print(self._prefix_, 'set cluster size to', self._n_cluster_)
             print(self._prefix_, 'set stride to', self._n_stride_)
             print(self._prefix_, 'set initial lr to', self._lr_init_)
             print(self._prefix_, 'set max lr to', self._lr_max_)
@@ -122,11 +123,28 @@ class ThreeBlindMice(nn.Module):
         if call_type == 0:
             state = torch.load(state_path, map_location=self._device_type_)
             self.load_state_dict(state['moirai'])
-            for key, value in state['predictions'].items():
-                self.predictions[key] = value
             for key, value in state['metrics'].items():
                 self.metrics[key] = value
-            for symbol in state['offerings']:
+            for key, value in state['predictions'].items():
+                self.predictions[key] = value
+            if self.verbosity > 2:
+                print(self._prefix_, 'Loaded RNN state.')
+        elif call_type == 1:
+            torch.save(
+                {
+                    'metrics': self.metrics,
+                    'moirai': self.state_dict(),
+                    'predictions': self.predictions,
+                    },
+                state_path,
+                )
+            if self.verbosity > 2:
+                print(self._prefix_, 'Saved RNN state.')
+
+    def __manage_tensors__(self, offerings, call_type=0):
+        """Handles loading and saving of the offering tensors."""
+        if call_type == 0:
+            for symbol in offerings:
                 symbol = symbol.upper()
                 state_path = f'{self._offerings_path_}/{symbol}'
                 self.offerings[symbol] = dict()
@@ -147,18 +165,8 @@ class ThreeBlindMice(nn.Module):
                     map_location=self._device_type_,
                     )
             if self.verbosity > 2:
-                print(self._prefix_, 'Loaded RNN state.')
+                print(self._prefix_, f'Loaded {len(offerings)} offerings.')
         elif call_type == 1:
-            offerings = list(self.offerings.keys())
-            torch.save(
-                {
-                    'metrics': self.metrics,
-                    'moirai': self.state_dict(),
-                    'predictions': self.predictions,
-                    'offerings': offerings,
-                    },
-                state_path,
-                )
             for symbol in offerings:
                 if len(self.offerings[symbol].keys()) == 0:
                     continue
@@ -181,12 +189,7 @@ class ThreeBlindMice(nn.Module):
                     f'{state_path}.wax',
                     )
             if self.verbosity > 2:
-                print(self._prefix_, 'Saved RNN state.')
-
-    def __reset_offerings__(self, offerings):
-        for symbol in offerings:
-            self.offerings[symbol] = dict()
-        self.quick_save()
+                print(self._prefix_, f'Saved {len(offerings)} offerings.')
 
     def __time_plot__(self, predictions, targets, wax, adj_loss):
         epoch = self.metrics['epochs']
@@ -216,6 +219,7 @@ class ThreeBlindMice(nn.Module):
         epochs_path = f'{self._epochs_path_}/{ts}.png'
         plt.savefig(epochs_path)
         plt.clf()
+        plt.close()
         if self.verbosity > 0:
             prefix = self._prefix_
             print(prefix, 'PREDICTIONS TAIL:', y_p[-1].item())
@@ -276,10 +280,13 @@ class ThreeBlindMice(nn.Module):
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
         candles = self.normalizer(candles)
-        candles = self.cauldron(candles)[1].H
-        candles = self.pool(candles).H
-        bubbles = torch.topk(candles.sum(1), self._batch_size_)
-        candles = gelu(candles[bubbles.indices].sum(1)) / 3
+        candles = self.cauldron(candles)[1]
+        clusters, indices = self.pool(candles)
+        candles = candles[:, indices[1]]
+        bubbles = torch.topk(candles, 3)
+        candles = candles[:, bubbles.indices[1]].sum(1)
+        bubbles = torch.topk(candles, self._batch_size_)
+        candles = gelu(candles[bubbles.indices])
         if self.verbosity > 1:
             print('bubbles:', bubbles.indices.tolist())
             print(
@@ -298,13 +305,20 @@ class ThreeBlindMice(nn.Module):
         wax = wax[-batch_size:]
         return self.__time_step__(candles, wax, study=False)
 
-    def quick_load(self):
-        """Alias to load RNN state."""
-        self.__manage_state__(call_type=0)
+    def quick_load(self, rnn=True, offerings=None):
+        """Alias to load RNN state and/or offering tensors."""
+        if rnn:
+            self.__manage_state__(call_type=0)
+        if type(offerings) == list:
+            self.__manage_tensors__(offerings, call_type=0)
 
-    def quick_save(self):
-        """Alias to save RNN state."""
-        self.__manage_state__(call_type=1)
+
+    def quick_save(self, rnn=True, offerings=None):
+        """Alias to save RNN state and/or offering tensors."""
+        if rnn:
+            self.__manage_state__(call_type=1)
+        if type(offerings) == list:
+            self.__manage_tensors__(offerings, call_type=1)
 
     def research(self, offering):
         """Moirai research session, fully stocked with cheese and drinks."""
@@ -327,7 +341,6 @@ class ThreeBlindMice(nn.Module):
             heating_up = True
         n_heat = 0
         n_heat_avg = inf
-        n_reheat = 137
         sealed = dict(candles=list(), targets=list(), wax=list())
         self.metrics['acc'] = (0, 0)
         self.metrics['loss'] = 0
@@ -337,7 +350,9 @@ class ThreeBlindMice(nn.Module):
         t_cook = time.time()
         vstack = torch.vstack
         while coating_candles:
-            if batch_len <= coated + batch_size:
+            c_i = coated - batch_size
+            c_ii = coated + batch_size
+            if batch_len <= c_ii:
                 self.metrics['loss'] = self.metrics['loss'] / coated
                 self.metrics['mae'] = self.metrics['mae'] / coated
                 self.metrics['mse'] = sqrt(self.metrics['mse']) / coated
@@ -346,19 +361,28 @@ class ThreeBlindMice(nn.Module):
                 w_plot = vstack(sealed['wax'])
                 self.predictions[symbol] = dict(self.metrics)
                 self.__time_plot__(c_plot, t_plot, w_plot, adj_loss)
-                if time.time() - t_cook >= cook_time:
-                    coating_candles = False
-                    break
-                else:
-                    sealed = dict(candles=list(), targets=list(), wax=list())
+                if time.time() - t_cook < cook_time:
+                    n_heat = n_heat / coated
+                    if n_heat >= n_heat_avg:
+                        self.metrics['bubbling_wax'] = True
+                        heating_up = True
+                        n_heat_avg = inf
+                        print('heating up!')
+                    else:
+                        self.metrics['bubbling_wax'] = False
+                        heating_up = False
+                        n_heat_avg = n_heat
+                        print('cooking...')
                     coated = batch_size
+                    n_heat = 0
+                    sealed = dict(candles=list(), targets=list(), wax=list())
                     self.metrics['acc'] = (0, 0)
                     self.metrics['loss'] = 0
                     self.metrics['mae'] = 0
                     self.metrics['mse'] = 0
-                    continue
-            c_i = coated - batch_size
-            c_ii = coated + batch_size
+                else:
+                    coating_candles = False
+                continue
             candles = all_candles[c_i:coated]
             targets = all_targets[coated:c_ii]
             t_delta = all_delta[coated:c_ii]
@@ -370,12 +394,7 @@ class ThreeBlindMice(nn.Module):
             if not heating_up:
                 self.schedule_cyclic.step()
             else:
-                if coated == warm_steps:
-                    self.metrics['bubbling_wax'] = True
-                    heating_up = False
-                    self.schedule_cyclic.step()
-                else:
-                    self.schedule_warm.step()
+                self.schedule_warm.step()
             adj_loss = sqrt(loss.item())
             n_heat += adj_loss
             coated_candles = wax + (wax * coated_candles)
@@ -390,17 +409,8 @@ class ThreeBlindMice(nn.Module):
             self.metrics['loss'] += adj_loss
             self.metrics['mae'] += absolute_error
             self.metrics['mse'] += absolute_error ** 2
-            if coated % n_reheat == 0:
-                n_heat = n_heat / n_reheat
-                if n_heat >= n_heat_avg:
-                    heating_up = True
-                    n_heat_avg = inf
-                else:
-                    n_heat_avg = n_heat
-                n_heat = 0
             sealed['candles'].append(coated_candles.clone())
             sealed['targets'].append(targets.clone())
             sealed['wax'].append(wax.clone())
             coated += batch_size
-        if self.verbosity > 1: print('')
         return True
