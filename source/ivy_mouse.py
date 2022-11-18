@@ -49,7 +49,7 @@ class ThreeBlindMice(nn.Module):
         self._symbol_ = None
         self._targets_ = 'price_med'
         self._tolerance_ = 0.00033
-        self._warm_steps_ = 256
+        self._warm_steps_ = 3
         self._wax_ = 'price_wema'
         self.cauldron = nn.GRU(
             input_size=self._n_inputs_,
@@ -281,9 +281,9 @@ class ThreeBlindMice(nn.Module):
         candles = self.normalizer(candles)
         candles = self.cauldron(candles)[1]
         candles = self.pool(candles)
-        coating = bool(self.metrics['bubbling_wax'])
+        coating = not bool(self.metrics['bubbling_wax'])
         bubbles = torch.topk(candles, 3, largest=coating)
-        candles = gelu(candles[:, bubbles.indices[1]].sum(1))
+        candles = candles[:, bubbles.indices[1]].mean(1)
         coating = not coating
         bubbles = torch.topk(candles, self._batch_size_, largest=coating)
         candles = candles[bubbles.indices]
@@ -336,10 +336,9 @@ class ThreeBlindMice(nn.Module):
             return False
         coating_candles = True
         cook_time = self._cook_time_
-        warm_steps = self._warm_steps_
         heating_up = self.metrics['bubbling_wax']
-        n_heat = 0
-        n_heat_avg = inf
+        n_heat = inf
+        n_loss = 0
         sealed = dict(candles=list(), targets=list(), wax=list())
         self.metrics['acc'] = (0, 0)
         self.metrics['loss'] = 0
@@ -348,6 +347,7 @@ class ThreeBlindMice(nn.Module):
         tolerance = self._tolerance_ * all_targets.mean().item()
         t_cook = time.time()
         vstack = torch.vstack
+        warm_steps = self._warm_steps_
         while coating_candles:
             c_i = coated - batch_size
             c_ii = coated + batch_size
@@ -361,17 +361,9 @@ class ThreeBlindMice(nn.Module):
                 self.predictions[symbol] = dict(self.metrics)
                 self.__time_plot__(c_plot, t_plot, w_plot, adj_loss)
                 if time.time() - t_cook < cook_time:
-                    n_heat = n_heat / coated
-                    if n_heat >= n_heat_avg:
-                        heating_up = self.metrics['bubbling_wax'] = True
-                        n_heat_avg = inf
-                        print('heating up!')
-                    else:
-                        heating_up = self.metrics['bubbling_wax'] = False
-                        n_heat_avg = n_heat
-                        print('cooking...')
                     coated = batch_size
-                    n_heat = 0
+                    n_heat = inf
+                    n_loss = 0
                     sealed = dict(candles=list(), targets=list(), wax=list())
                     self.metrics['acc'] = (0, 0)
                     self.metrics['loss'] = 0
@@ -393,7 +385,6 @@ class ThreeBlindMice(nn.Module):
             else:
                 self.schedule_warm.step()
             adj_loss = sqrt(loss.item())
-            n_heat += adj_loss
             coated_candles = wax + (wax * coated_candles)
             delta = (coated_candles - targets).abs()
             correct = delta[delta >= tolerance]
@@ -409,5 +400,17 @@ class ThreeBlindMice(nn.Module):
             sealed['candles'].append(coated_candles.clone())
             sealed['targets'].append(targets.clone())
             sealed['wax'].append(wax.clone())
+            n_loss += adj_loss
+            if self.metrics['epochs'] % warm_steps == 0:
+                n_loss = n_loss / warm_steps
+                if n_loss >= n_heat:
+                    heating_up = self.metrics['bubbling_wax'] = True
+                    n_heat = inf
+                    print('heating up!')
+                else:
+                    heating_up = self.metrics['bubbling_wax'] = False
+                    n_heat = n_loss
+                    print('cooking...')
+                n_loss = 0
             coated += batch_size
         return True
