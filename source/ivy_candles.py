@@ -469,7 +469,7 @@ class Candelabrum:
         n_selections = 100
         selections = list(offerings)
         moirai = ThreeBlindMice(verbosity=1)
-        moirai.quick_load(rnn=True, offerings=offerings)
+        moirai.quick_load(offerings=offerings)
         while aeternalis:
             if not watch_list:
                 paterae = list()
@@ -486,7 +486,7 @@ class Candelabrum:
             for offering in paterae:
                 offering_start = time.time()
                 predictions = moirai.research(offering)
-                moirai.quick_save(rnn=True, offerings=[offering])
+                moirai.quick_save(offerings=[offering])
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
                 print(self._PREFIX, format_time(elapsed, message=message), '\n')
@@ -527,7 +527,7 @@ class Candelabrum:
                 message = f'{offering} rejected after'
             message = format_time(elapsed, message=message)
             print(self._PREFIX, message.format(candles_total))
-        moirai.quick_save(rnn=True, offerings=paterae)
+        moirai.quick_save(offerings=paterae)
         elapsed = time.time() - loop_start
         message = '{} offerings collected after'
         message = format_time(elapsed, message=message)

@@ -40,9 +40,9 @@ class ThreeBlindMice(nn.Module):
         self._lr_min_ = iota / phi
         self._n_cluster_ = 9
         self._n_dropout_ = ((137 * phi) ** iota) - 1
-        self._n_hidden_ = 3 ** 4
+        self._n_hidden_ = 207
         self._n_inputs_ = len(self._candles_)
-        self._n_layers_ = 3 ** 6
+        self._n_layers_ = 207
         self._n_stride_ = 3
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
@@ -60,12 +60,12 @@ class ThreeBlindMice(nn.Module):
             dropout=self._n_dropout_,
             )
         self.loss_fn = nn.HuberLoss(
-            reduction='sum',
+            reduction='mean',
             delta=1.0,
             )
         self.normalizer = nn.InstanceNorm1d(
             self._n_inputs_,
-            eps=1e-5,
+            eps=iota,
             momentum=0.1,
             **self._p_tensor_,
             )
@@ -74,10 +74,9 @@ class ThreeBlindMice(nn.Module):
             lr=self._lr_init_,
             foreach=True,
             )
-        self.pool = nn.MaxPool1d(
+        self.pool = nn.AvgPool1d(
             kernel_size=self._n_cluster_,
             stride=self._n_stride_,
-            return_indices=True,
             )
         self.schedule_cyclic = CyclicLR(
             self.optimizer,
@@ -91,6 +90,7 @@ class ThreeBlindMice(nn.Module):
             )
         self.metrics = nn.ParameterDict({
             'acc': (0, 0),
+            'bubbling_wax': True,
             'epochs': 0,
             'loss': 0,
             'mae': 0,
@@ -117,9 +117,9 @@ class ThreeBlindMice(nn.Module):
             print(self._prefix_, 'set cook time to', self._cook_time_)
             print('')
 
-    def __manage_state__(self, call_type=0):
+    def __manage_state__(self, symbol, call_type=0):
         """Handles loading and saving of the RNN state."""
-        state_path = f'{self._state_path_}/moirai.state'
+        state_path = f'{self._state_path_}/{symbol}.state'
         if call_type == 0:
             state = torch.load(state_path, map_location=self._device_type_)
             self.load_state_dict(state['moirai'])
@@ -255,7 +255,6 @@ class ThreeBlindMice(nn.Module):
 
     def collect(self, offering, candles):
         """Takes the offered dataframe and converts it to candle tensors."""
-        symbol = self._symbol_ = str(offering).upper()
         n_time = len(candles.index)
         if n_time < self._batch_size_:
             return False
@@ -281,12 +280,13 @@ class ThreeBlindMice(nn.Module):
         """**bubble*bubble**bubble**"""
         candles = self.normalizer(candles)
         candles = self.cauldron(candles)[1]
-        clusters, indices = self.pool(candles)
-        candles = candles[:, indices[1]]
-        bubbles = torch.topk(candles, 3)
-        candles = candles[:, bubbles.indices[1]].sum(1)
-        bubbles = torch.topk(candles, self._batch_size_)
-        candles = gelu(candles[bubbles.indices])
+        candles = self.pool(candles)
+        coating = bool(self.metrics['bubbling_wax'])
+        bubbles = torch.topk(candles, 3, largest=coating)
+        candles = gelu(candles[:, bubbles.indices[1]].sum(1))
+        coating = not coating
+        bubbles = torch.topk(candles, self._batch_size_, largest=coating)
+        candles = candles[bubbles.indices]
         if self.verbosity > 1:
             print('bubbles:', bubbles.indices.tolist())
             print(
@@ -308,7 +308,8 @@ class ThreeBlindMice(nn.Module):
     def quick_load(self, rnn=True, offerings=None):
         """Alias to load RNN state and/or offering tensors."""
         if rnn:
-            self.__manage_state__(call_type=0)
+            for symbol in offerings:
+                self.__manage_state__(symbol, call_type=0)
         if type(offerings) == list:
             self.__manage_tensors__(offerings, call_type=0)
 
@@ -316,7 +317,8 @@ class ThreeBlindMice(nn.Module):
     def quick_save(self, rnn=True, offerings=None):
         """Alias to save RNN state and/or offering tensors."""
         if rnn:
-            self.__manage_state__(call_type=1)
+            for symbol in offerings:
+                self.__manage_state__(symbol, call_type=1)
         if type(offerings) == list:
             self.__manage_tensors__(offerings, call_type=1)
 
@@ -335,10 +337,7 @@ class ThreeBlindMice(nn.Module):
         coating_candles = True
         cook_time = self._cook_time_
         warm_steps = self._warm_steps_
-        if 'bubbling_wax' in self.metrics.keys():
-            heating_up = False
-        else:
-            heating_up = True
+        heating_up = self.metrics['bubbling_wax']
         n_heat = 0
         n_heat_avg = inf
         sealed = dict(candles=list(), targets=list(), wax=list())
@@ -364,13 +363,11 @@ class ThreeBlindMice(nn.Module):
                 if time.time() - t_cook < cook_time:
                     n_heat = n_heat / coated
                     if n_heat >= n_heat_avg:
-                        self.metrics['bubbling_wax'] = True
-                        heating_up = True
+                        heating_up = self.metrics['bubbling_wax'] = True
                         n_heat_avg = inf
                         print('heating up!')
                     else:
-                        self.metrics['bubbling_wax'] = False
-                        heating_up = False
+                        heating_up = self.metrics['bubbling_wax'] = False
                         n_heat_avg = n_heat
                         print('cooking...')
                     coated = batch_size
