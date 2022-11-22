@@ -24,10 +24,6 @@ if __name__ == '__main__':
                    help='Feed and care for the mice. <333')
     p.add_argument('--indicators', action='store_true',
                    help='Build historical indicators.')
-    p.add_argument('--offering', action='store_true',
-                   help='Offer cheese and candles to the Norn.')
-    p.add_argument('--research', action='store_true',
-                   help='Visit the three blind mice.')
     p.add_argument('--start_date', help='Defaults to 2019-01-01.')
     p.add_argument('--end_date', help='Defaults to today.')
     vt = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
@@ -42,14 +38,9 @@ if __name__ == '__main__':
         updater.Candelabrum().clean_candelabrum()
     elif args.feed:
         updater.Candelabrum().make_offering()
-        updater.Candelabrum().research_candles()
     elif args.indicators:
         print('Applying indicators...')
         updater.Candelabrum().apply_indicators()
         print("""Job's done!""")
-    elif args.offering:
-        updater.Candelabrum().make_offering()
-    elif args.research:
-        updater.Candelabrum().research_candles()
     else:
         print('Missing argument.')
