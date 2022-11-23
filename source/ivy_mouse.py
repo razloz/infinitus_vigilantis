@@ -62,6 +62,12 @@ class ThreeBlindMice(nn.Module):
             kernel_size=self._n_cluster_,
             stride=self._n_stride_,
             )
+        self.linear = nn.Linear(
+            in_features=18,
+            out_features=300,
+            bias=True,
+            **self._p_tensor_,
+            )
         self.loss_fn = nn.HuberLoss(
             reduction='mean',
             delta=1.0,
@@ -73,7 +79,7 @@ class ThreeBlindMice(nn.Module):
             **self._p_tensor_,
             )
         self.optimizer = RMSprop(
-            self.cauldron.parameters(),
+            self.parameters(),
             lr=self._lr_init_,
             foreach=True,
             )
@@ -206,27 +212,29 @@ class ThreeBlindMice(nn.Module):
 
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
+        coating = list()
         conv = self.conv
+        hstack = torch.hstack
+        linear = self.linear
+        n_batch = self._batch_size_
+        n_dim = 20
+        vstack = torch.vstack
+        candle_body = candles.mean(1).unsqueeze(0).H
         wax = self.normalizer(candles)
         wax = self.cauldron(candles)[1]
-        n_dim = 20
-        n_batch = self._batch_size_
-        coating = list()
-        hstack = torch.hstack
-        vstack = torch.vstack
         for quadrant in wax.chunk(4, dim=1):
             bubbles = conv(quadrant.view(n_batch, n_dim, n_dim))
             layer = list()
             for bubble in bubbles.split(1):
                 bubble = bubble[0, bubble.sum(1).softmax(1).argmax(1), :]
-                bubble = bubble.softmax(1).argmax(1) / bubble.shape[1]
-                layer.append(bubble + bubble + bubble)
+                bubble = linear(bubble.softmax(1))
+                layer.append(bubble.softmax(1).argmax(1) / 100)
             coating.append(hstack(layer))
         coating = vstack(coating).mean(0).unsqueeze(0).H
-        candles = candles * coating
+        sealed = candle_body * coating
         if self.verbosity > 2:
-            print('candles:', candles.shape, f'\n{candles.squeeze()}')
-        return candles.clone()
+            print('sealed candles:', sealed.shape, f'\n{sealed.squeeze()}')
+        return sealed.clone()
 
     def research(self, offering, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""
