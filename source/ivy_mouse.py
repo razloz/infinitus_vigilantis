@@ -64,7 +64,7 @@ class ThreeBlindMice(nn.Module):
             )
         self.linear = nn.Linear(
             in_features=18,
-            out_features=300,
+            out_features=1,
             bias=True,
             **self._p_tensor_,
             )
@@ -215,6 +215,7 @@ class ThreeBlindMice(nn.Module):
         coating = list()
         conv = self.conv
         hstack = torch.hstack
+        iota = self._c_iota_
         linear = self.linear
         n_batch = self._batch_size_
         n_dim = 20
@@ -227,11 +228,11 @@ class ThreeBlindMice(nn.Module):
             layer = list()
             for bubble in bubbles.split(1):
                 bubble = bubble[0, bubble.sum(1).softmax(1).argmax(1), :]
-                bubble = linear(bubble.softmax(1))
-                layer.append(bubble.softmax(1).argmax(1) / 100)
+                bubble = linear(bubble)
+                layer.append(bubble)
             coating.append(hstack(layer))
-        coating = vstack(coating).mean(0).unsqueeze(0).H
-        sealed = candle_body * coating
+        coating = vstack(coating).H
+        sealed = coating ** 2
         if self.verbosity > 2:
             print('sealed candles:', sealed.shape, f'\n{sealed.squeeze()}')
         return sealed.clone()
@@ -330,6 +331,4 @@ class ThreeBlindMice(nn.Module):
             vstack(sealed['targets']),
             self.metrics['loss'],
             )
-        candles = all_candles[-batch_size:]
-        self.predictions[symbol] = self.__time_step__(candles, study=False)
-        return self.predictions[symbol].clone()
+        return self.__time_step__(candles, study=False).clone()
