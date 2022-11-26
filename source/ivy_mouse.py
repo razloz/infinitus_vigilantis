@@ -14,6 +14,16 @@ from os.path import abspath, exists
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
+FEATURE_KEYS = [
+    'open', 'high', 'low', 'close', 'volume', 'num_trades', 'vol_wma_price',
+    'trend', 'fib_retrace_0.236', 'fib_retrace_0.382', 'fib_retrace_0.5',
+    'fib_retrace_0.618', 'fib_retrace_0.786', 'fib_retrace_0.886',
+    'fib_extend_0.236', 'fib_extend_0.382', 'fib_extend_0.5',
+    'fib_extend_0.618', 'fib_extend_0.786', 'fib_extend_0.886',
+    'price_zs', 'price_sdev', 'price_wema', 'price_dh', 'price_dl',
+    'price_mid', 'volume_zs', 'volume_sdev', 'volume_wema',
+    'volume_dh', 'volume_dl', 'volume_mid', 'delta',
+    ]
 
 
 class ThreeBlindMice(nn.Module):
@@ -22,7 +32,6 @@ class ThreeBlindMice(nn.Module):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         self._batch_size_ = 8
-        self._candles_ = ['open', 'high', 'low', 'close']
         self._cook_time_ = 180
         self._c_iota_ = iota = 1 / 137
         self._c_phi_ = phi = 1.618033988749894
@@ -32,14 +41,15 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._state_path_): mkdir(self._state_path_)
         self._epochs_path_ = abspath('./rnn/epochs')
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
-        self._lr_init_ = phi
+        self._feature_keys_ = FEATURE_KEYS
+        self._lr_init_ = phi - 1
         self._lr_max_ = iota / (phi - 1)
         self._lr_min_ = iota / phi
-        self._n_cluster_ = 3
+        self._n_cluster_ = 8
         self._n_dropout_ = ((137 * phi) ** iota) - 1
-        self._n_hidden_ = 40 ** 2
-        self._n_inputs_ = len(self._candles_)
-        self._n_layers_ = self._batch_size_
+        self._n_hidden_ = 1024
+        self._n_inputs_ = len(self._feature_keys_)
+        self._n_layers_ = 16
         self._n_stride_ = 1
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
@@ -56,27 +66,15 @@ class ThreeBlindMice(nn.Module):
             dropout=self._n_dropout_,
             device=self._device_,
             )
-        self.conv = nn.Conv2d(
-            in_channels=self._n_layers_,
-            out_channels=self._n_layers_,
-            kernel_size=self._n_cluster_,
-            stride=self._n_stride_,
-            )
-        self.linear = nn.Linear(
-            in_features=18,
-            out_features=1,
+        self.inscribe = nn.Linear(
+            in_features=25,
+            out_features=2,
             bias=True,
             **self._p_tensor_,
             )
         self.loss_fn = nn.HuberLoss(
             reduction='mean',
             delta=1.0,
-            )
-        self.normalizer = nn.InstanceNorm1d(
-            self._n_inputs_,
-            eps=iota,
-            momentum=0.1,
-            **self._p_tensor_,
             )
         self.optimizer = RMSprop(
             self.parameters(),
@@ -92,6 +90,17 @@ class ThreeBlindMice(nn.Module):
             self.optimizer,
             self._warm_steps_,
             eta_min=self._lr_min_,
+            )
+        self.stir = nn.Conv2d(
+            in_channels=self._n_layers_,
+            out_channels=self._n_layers_,
+            kernel_size=self._n_cluster_,
+            stride=self._n_stride_,
+            )
+        self.melt = nn.InstanceNorm1d(
+            self._n_inputs_,
+            momentum=0.1,
+            **self._p_tensor_,
             )
         self.metrics = nn.ParameterDict({
             'acc': (0, 0),
@@ -213,41 +222,33 @@ class ThreeBlindMice(nn.Module):
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
         coating = list()
-        conv = self.conv
-        hstack = torch.hstack
         iota = self._c_iota_
-        linear = self.linear
+        inscribe = self.inscribe
         n_batch = self._batch_size_
-        n_dim = 20
-        vstack = torch.vstack
-        candle_body = candles.mean(1).unsqueeze(0).H
-        wax = self.normalizer(candles)
-        wax = self.cauldron(candles)[1]
-        for quadrant in wax.chunk(4, dim=1):
-            bubbles = conv(quadrant.view(n_batch, n_dim, n_dim))
-            layer = list()
-            for bubble in bubbles.split(1):
-                bubble = bubble[0, bubble.sum(1).softmax(1).argmax(1), :]
-                bubble = linear(bubble)
-                layer.append(bubble)
-            coating.append(hstack(layer))
-        coating = vstack(coating).H
-        sealed = coating ** 2
-        if self.verbosity > 2:
-            print('sealed candles:', sealed.shape, f'\n{sealed.squeeze()}')
-        return sealed.clone()
+        n_dim = self._n_layers_ * 2
+        bubbles = self.cauldron(self.melt(candles))[1]
+        bubbles = bubbles.view(bubbles.shape[0], n_dim, n_dim)
+        bubbles = self.stir(bubbles)
+        for bubble in bubbles.split(1):
+            bubble = bubble[0, bubble.sum(1).softmax(1).argmax(1), :]
+            coating.append(inscribe(bubble))
+        coating = torch.cat(coating) ** 2
+        candles = list()
+        for sigil in coating.chunk(n_batch, dim=0):
+            candles.append(sigil.mean(1).mean(0))
+        return torch.vstack(candles)
 
     def research(self, offering, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""
         symbol = self._symbol_ = str(offering).upper()
         params = self._p_tensor_
         tensor = torch.tensor
-        all_candles = dataframe[self._candles_].to_numpy()
-        all_candles = tensor(all_candles, **params).requires_grad_(True)
-        all_targets = dataframe[self._targets_].to_list()
-        all_targets = tensor((all_targets,), **params).H
+        cheese_fresh = dataframe[self._feature_keys_].to_numpy()
+        cheese_fresh = tensor(cheese_fresh, **params).requires_grad_(True)
+        cheese_aged = dataframe[self._targets_].to_list()
+        cheese_aged = tensor((cheese_aged,), **params).H
         batch_size = self._batch_size_
-        batch_len = all_candles.shape[0]
+        batch_len = cheese_fresh.shape[0]
         coated = batch_size
         if batch_len <= batch_size * 2:
             return False
@@ -261,7 +262,7 @@ class ThreeBlindMice(nn.Module):
         self.metrics['loss'] = 0
         self.metrics['mae'] = 0
         self.metrics['mse'] = 0
-        tolerance = self._tolerance_ * all_targets.mean().item()
+        tolerance = self._tolerance_ * cheese_aged.mean().item()
         t_cook = time.time()
         vstack = torch.vstack
         warm_steps = self._warm_steps_
@@ -300,10 +301,9 @@ class ThreeBlindMice(nn.Module):
                     coating_candles = False
                     self.__manage_state__(call_type=1)
                 continue
-            candles = all_candles[c_i:coated]
-            targets = all_targets[coated:c_ii]
+            candles = cheese_fresh[c_i:coated]
+            targets = cheese_aged[coated:c_ii]
             coated_candles = self.__time_step__(candles, study=True)
-            coated_candles = coated_candles.mean(1).unsqueeze(0).H
             loss = self.loss_fn(coated_candles, targets)
             loss.backward()
             self.optimizer.step()
@@ -311,7 +311,7 @@ class ThreeBlindMice(nn.Module):
                 self.schedule_cyclic.step()
             else:
                 self.schedule_warm.step()
-            adj_loss = sqrt(loss.item())
+            adj_loss = sqrt(loss.item()) / coated
             delta = (coated_candles - targets).abs()
             correct = delta[delta >= tolerance]
             correct = delta[delta <= tolerance].shape[0]
