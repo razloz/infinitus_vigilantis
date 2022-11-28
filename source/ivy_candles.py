@@ -466,21 +466,12 @@ class Candelabrum:
         aeternalis = True
         total_candles = len(offerings)
         epoch = 0
-        loop_start = time.time()
         rng = random.randint
         n_selections = 100
         selections = list(offerings)
-        moirai = ThreeBlindMice(verbosity=1)
-        calendar = market_calendar()
-        calendar_dates = calendar.index.tolist()
-        start_time = '2019-01-01'
-        tomorrow = time.localtime(time.time() + 86400)
-        end_time = time.strftime('%Y-%m-%d', tomorrow)
-        date_obj = lambda t: datetime.strptime(t, '%Y-%m-%d')
-        dates = (date_obj(start_time), date_obj(end_time))
-        n_days = 6
-        last_ts = 0
         merge_args = dict(left_index=True, right_index=True)
+        moirai = ThreeBlindMice(verbosity=1)
+        loop_start = time.time()
         while aeternalis:
             if not watch_list:
                 paterae = list()
@@ -495,45 +486,17 @@ class Candelabrum:
             else:
                 paterae = offerings
             for offering in paterae:
-                offering_start = time.time()
-                candles = None
-                days = 0
                 print(self._PREFIX, f'Research of {offering} has started.')
-                for ts in calendar_dates:
-                    if days == 0:
-                        last_ts = ts
-                    day_obj = date_obj(ts)
-                    if day_obj < dates[0]: continue
-                    if day_obj > dates[1]: break
-                    try:
-                        day_data = self.load_candles(offering, ts)
-                        if candles is None:
-                            candles = day_data.copy()
-                        else:
-                            candles = pd.concat([candles, day_data])
-                        days += 1
-                        if days == n_days:
-                            omens = omenize(candles)
-                            candles = candles.merge(omens, **merge_args)
-                            candles = candles[trim:]
-                            message = f'Session window: {last_ts} to {ts}'
-                            print(self._PREFIX, message)
-                            predictions = moirai.research(offering, candles)
-                            elapsed = time.time() - offering_start
-                            message = f'Time spent researching {offering} is'
-                            message = format_time(elapsed, message=message)
-                            print(self._PREFIX, message, '\n')
-                            candles = None
-                            days = 0
-                    except Exception as details:
-                        print(self._PREFIX, f'Encountered {details}')
-                        candles = None
-                        days = 0
-                        continue
+                offering_start = time.time()
+                candles = get_daily(offering)
+                omens = omenize(candles)
+                candles = candles.merge(omens, **merge_args)
+                candles = candles[trim:]
+                predictions = moirai.research(offering, candles)
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
                 message = format_time(elapsed, message=message)
-                print(self._PREFIX, message, '\n')
+                print(self._PREFIX, message)
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
