@@ -47,14 +47,13 @@ class ThreeBlindMice(nn.Module):
         self._n_batch_ = b_size = 34
         self._n_cluster_ = 3
         self._n_dropout_ = iota
-        self._n_dim_ = 6
+        self._n_dim_ = n_dim = 9
         self._n_features_ = len(self._feature_keys_)
-        self._n_hidden_ = self._n_dim_ ** 3
+        self._n_hidden_ = n_dim ** 3
         self._n_inputs_ = self._n_features_
-        self._n_layers_ = self._n_hidden_
+        self._n_layers_ = n_dim
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
-        self._p_sample_ = dict(batch_size=b_size, shuffle=True)
         self._symbol_ = None
         self._targets_ = 'price_med'
         self._tolerance_ = iota ** phi
@@ -69,7 +68,7 @@ class ThreeBlindMice(nn.Module):
             device=self._device_,
             )
         self.inscription = nn.Linear(
-            in_features=(4 ** 3) * b_size,
+            in_features=b_size,
             out_features=b_size,
             bias=True,
             **self._p_tensor_,
@@ -99,13 +98,13 @@ class ThreeBlindMice(nn.Module):
             eta_min=self._lr_min_,
             )
         self.stir = nn.Conv3d(
-            in_channels=b_size,
-            out_channels=b_size,
+            in_channels=n_dim,
+            out_channels=n_dim,
             kernel_size=self._n_cluster_,
             **self._p_tensor_,
             )
         self.metrics = nn.ParameterDict({
-            'acc': (0, 0),
+            'acc': [0, 0],
             'bubbling_wax': True,
             'epochs': 0,
             'loss': 0,
@@ -216,30 +215,37 @@ class ThreeBlindMice(nn.Module):
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
         n_dim = self._n_dim_
-        bubbles = self.cauldron(self.melt(candles))[0]
-        bubbles = bubbles.view(bubbles.shape[0], n_dim, n_dim, n_dim)
-        bubbles = self.stir(bubbles)
-        sigil = self.inscription(bubbles.flatten(0))
-        candles = sigil.unsqueeze(0).H
-        return candles ** 2
+        bubbles = self.cauldron(self.melt(candles))[1]
+        bubbles = bubbles.view(n_dim, n_dim, n_dim, n_dim)
+        bubbles = self.stir(bubbles).flatten(0)
+        sigil = torch.topk(bubbles, self._n_batch_)[0]
+        candles = self.inscription(sigil) ** 2
+        return candles.unsqueeze(0).H
 
     def research(self, offering, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""
         symbol = self._symbol_ = str(offering).upper()
         batch = self._n_batch_
         cook_time = self._cook_time_
+        loss_fn = self.loss_fn
+        optimizer = self.optimizer
         p_tensor = self._p_tensor_
+        research = self.__time_step__
         tensor = torch.tensor
         vstack = torch.vstack
         warm_steps = self._warm_steps_
+        trim = 0
+        data_len = len(dataframe)
+        while data_len % batch != 0:
+            dataframe = dataframe[1:]
+            data_len = len(dataframe)
         cheese_fresh = dataframe[self._feature_keys_].to_numpy()
         cheese_fresh = tensor(cheese_fresh, requires_grad=True, **p_tensor)
         cheese_aged = dataframe[self._targets_].to_list()
         cheese_aged = tensor((cheese_aged,), **p_tensor).H
         sample = TensorDataset(cheese_fresh[:-batch], cheese_aged[batch:])
-        candles = DataLoader(sample, **self._p_sample_)
+        candles = DataLoader(sample, batch_size=batch)
         tolerance = self._tolerance_ * cheese_aged.mean(0).item()
-        self.metrics['acc'] = (0, 0)
         self.metrics['loss'] = 0
         self.metrics['mae'] = 0
         self.metrics['mse'] = 0
@@ -247,31 +253,34 @@ class ThreeBlindMice(nn.Module):
         n_loss = 0
         n_heat = inf
         heating_up = self.metrics['bubbling_wax']
-        coating_candles = True
-        targets = None
         t_cook = time.time()
-        while coating_candles:
-            features, targets = next(iter(candles))
-            coated_candles = self.__time_step__(features, study=True)
-            loss = self.loss_fn(coated_candles, targets)
-            loss.backward()
-            self.optimizer.step()
+        cooking = True
+        while cooking:
+            self.metrics['acc'] = [0, 0]
+            predictions = list()
+            for features, targets in iter(candles):
+                coated_candles = research(features, study=True)
+                predictions.append(coated_candles)
+                loss = loss_fn(coated_candles, targets)
+                loss.backward()
+                optimizer.step()
+                adj_loss = sqrt(loss.item()) / batch
+                n_loss += adj_loss
+                delta = (coated_candles - targets).abs()
+                correct = delta[delta >= tolerance]
+                correct = delta[delta <= tolerance].shape[0]
+                absolute_error = batch - correct
+                self.metrics['acc'][0] += correct
+                self.metrics['acc'][1] += batch
+                self.metrics['loss'] += adj_loss
+                self.metrics['mae'] += absolute_error
+                self.metrics['mse'] += absolute_error ** 2
             if not heating_up:
                 self.schedule_cyclic.step()
             else:
                 self.schedule_warm.step()
-            adj_loss = sqrt(loss.item()) / batch
-            delta = (coated_candles - targets).abs()
-            correct = delta[delta >= tolerance]
-            correct = delta[delta <= tolerance].shape[0]
-            absolute_error = batch - correct
-            self.metrics['acc'] = (correct, batch)
-            self.metrics['loss'] += adj_loss
-            self.metrics['mae'] += absolute_error
-            self.metrics['mse'] += absolute_error ** 2
             self.metrics['epochs'] += 1
             epochs += 1
-            n_loss += adj_loss
             if self.metrics['epochs'] % warm_steps == 0:
                 n_loss = n_loss / warm_steps
                 if n_loss >= n_heat:
@@ -285,13 +294,16 @@ class ThreeBlindMice(nn.Module):
                     if self.verbosity > 1:
                         print('cooking...')
                 n_loss = 0
-                self.__time_plot__(coated_candles, targets, adj_loss)
             if time.time() - t_cook >= cook_time:
-                coating_candles = False
-                self.__manage_state__(call_type=1)
+                cooking = False
         self.metrics['loss'] = self.metrics['loss'] / epochs
         self.metrics['mae'] = self.metrics['mae'] / epochs
         self.metrics['mse'] = sqrt(self.metrics['mse']) / epochs
-        self.__time_plot__(coated_candles, targets, self.metrics['loss'])
+        self.__time_plot__(
+            vstack(predictions),
+            cheese_aged[batch:],
+            self.metrics['loss'],
+            )
+        self.__manage_state__(call_type=1)
         #candles = cheese_fresh[batch:]
         return True #self.__time_step__(candles, study=False).clone()
