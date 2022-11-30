@@ -455,7 +455,7 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def make_offering(self, trim=34, epochs=-1, watch_list=False):
+    def make_offering(self, trim=34, epochs=-1, watch_list=True):
         """Spend time with the Norn researching candles."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators

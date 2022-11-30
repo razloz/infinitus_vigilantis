@@ -15,14 +15,17 @@ __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
 FEATURE_KEYS = [
-    'open', 'high', 'low', 'close', 'volume', 'num_trades', 'vol_wma_price',
-    'trend', 'fib_retrace_0.236', 'fib_retrace_0.382', 'fib_retrace_0.5',
+    'volume', 'num_trades', 'vol_wma_price', 'trend',
+    'fib_retrace_0.236', 'fib_retrace_0.382', 'fib_retrace_0.5',
     'fib_retrace_0.618', 'fib_retrace_0.786', 'fib_retrace_0.886',
     'fib_extend_0.236', 'fib_extend_0.382', 'fib_extend_0.5',
     'fib_extend_0.618', 'fib_extend_0.786', 'fib_extend_0.886',
     'price_zs', 'price_sdev', 'price_wema', 'price_dh', 'price_dl',
     'price_mid', 'volume_zs', 'volume_sdev', 'volume_wema',
-    'volume_dh', 'volume_dl', 'volume_mid', 'delta',
+    'volume_dh', 'volume_dl', 'volume_mid', 'delta', 'price_med',
+    ]
+TARGET_KEYS = [
+    'open', 'high', 'low', 'close',
     ]
 
 
@@ -31,7 +34,7 @@ class ThreeBlindMice(nn.Module):
     def __init__(self, *args, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
-        self._cook_time_ = 45
+        self._cook_time_ = 9001
         self._c_iota_ = iota = 1 / 137
         self._c_phi_ = phi = 1.618033988749894
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -41,10 +44,12 @@ class ThreeBlindMice(nn.Module):
         self._epochs_path_ = abspath('./rnn/epochs')
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
         self._feature_keys_ = FEATURE_KEYS
+        self._target_keys_ = TARGET_KEYS
         self._lr_init_ = iota ** (phi - 1)
         self._lr_max_ = iota / (phi - 1)
         self._lr_min_ = iota / phi
-        self._n_batch_ = b_size = 34
+        self._n_batch_ = 13
+        self._n_activations_ = self._n_batch_ * 4
         self._n_cluster_ = 3
         self._n_dropout_ = iota
         self._n_dim_ = n_dim = 9
@@ -55,9 +60,8 @@ class ThreeBlindMice(nn.Module):
         self._prefix_ = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = None
-        self._targets_ = 'price_med'
         self._tolerance_ = iota ** phi
-        self._warm_steps_ = 34
+        self._warm_steps_ = 5
         self.cauldron = nn.GRU(
             input_size=self._n_inputs_,
             hidden_size=self._n_hidden_,
@@ -68,8 +72,8 @@ class ThreeBlindMice(nn.Module):
             device=self._device_,
             )
         self.inscription = nn.Linear(
-            in_features=b_size,
-            out_features=b_size,
+            in_features=self._n_activations_,
+            out_features=self._n_activations_,
             bias=True,
             **self._p_tensor_,
             )
@@ -122,6 +126,7 @@ class ThreeBlindMice(nn.Module):
             print(self._prefix_, 'set dim shape to', self._n_dim_)
             print(self._prefix_, 'set hidden to', self._n_hidden_)
             print(self._prefix_, 'set layers to', self._n_layers_)
+            print(self._prefix_, 'set activations to', self._n_activations_)
             print(self._prefix_, 'set dropout to', self._n_dropout_)
             print(self._prefix_, 'set cluster size to', self._n_cluster_)
             print(self._prefix_, 'set initial lr to', self._lr_init_)
@@ -167,18 +172,15 @@ class ThreeBlindMice(nn.Module):
         epoch = self.metrics['epochs']
         accuracy = self.metrics['acc']
         x = range(predictions.shape[0])
-        y_p = predictions.squeeze(1).tolist()
-        y_t = targets.squeeze(1).tolist()
-        n_p = round(y_p[-1], 2)
-        n_t = round(y_t[-1], 2)
-        ax.plot(x, y_p, label=f'Prediction: {n_p}', color='#FFE88E')
-        ax.plot(x, y_t, label=f'Target: {n_t}', color='#FF9600')
+        y_p = predictions.detach().cpu().numpy()
+        y_t = targets.detach().cpu().numpy()
+        ax.plot(x, y_p, color='#FFE88E')
+        ax.plot(x, y_t, color='#FF9600')
         symbol = self._symbol_
         title = f'{symbol}\n'
         title += f'Accuracy: {accuracy}, '
         title += f'Epochs: {epoch}'
         fig.suptitle(title, fontsize=18)
-        plt.legend(fancybox=True, loc='best', ncol=1)
         plt.savefig(f'{self._epochs_path_}/{int(time.time())}.png')
         plt.clf()
         plt.close()
@@ -218,9 +220,9 @@ class ThreeBlindMice(nn.Module):
         bubbles = self.cauldron(self.melt(candles))[1]
         bubbles = bubbles.view(n_dim, n_dim, n_dim, n_dim)
         bubbles = self.stir(bubbles).flatten(0)
-        sigil = torch.topk(bubbles, self._n_batch_)[0]
-        candles = self.inscription(sigil) ** 2
-        return candles.unsqueeze(0).H
+        sigil = torch.topk(bubbles.softmax(0), self._n_activations_)[1]
+        candles = self.inscription(bubbles[sigil]) ** 2
+        return candles.view(self._n_batch_, 4)
 
     def research(self, offering, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""
@@ -241,11 +243,11 @@ class ThreeBlindMice(nn.Module):
             data_len = len(dataframe)
         cheese_fresh = dataframe[self._feature_keys_].to_numpy()
         cheese_fresh = tensor(cheese_fresh, requires_grad=True, **p_tensor)
-        cheese_aged = dataframe[self._targets_].to_list()
-        cheese_aged = tensor((cheese_aged,), **p_tensor).H
+        cheese_aged = dataframe[self._target_keys_].to_numpy()
+        cheese_aged = tensor(cheese_aged, **p_tensor)
         sample = TensorDataset(cheese_fresh[:-batch], cheese_aged[batch:])
         candles = DataLoader(sample, batch_size=batch)
-        tolerance = self._tolerance_ * cheese_aged.mean(0).item()
+        tolerance = self._tolerance_ * cheese_aged.flatten(0).mean(0).item()
         self.metrics['loss'] = 0
         self.metrics['mae'] = 0
         self.metrics['mse'] = 0
@@ -294,6 +296,11 @@ class ThreeBlindMice(nn.Module):
                     if self.verbosity > 1:
                         print('cooking...')
                 n_loss = 0
+                self.__time_plot__(
+                    vstack(predictions),
+                    cheese_aged[batch:],
+                    self.metrics['loss'],
+                    )
             if time.time() - t_cook >= cook_time:
                 cooking = False
         self.metrics['loss'] = self.metrics['loss'] / epochs
