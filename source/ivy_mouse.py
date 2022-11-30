@@ -5,8 +5,8 @@ import traceback
 import matplotlib.pyplot as plt
 import source.ivy_commons as icy
 from torch import nn
-from torch.optim import RMSprop
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, CyclicLR
+from torch.optim import Adagrad
+#from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, CyclicLR
 from torch.utils.data import DataLoader, TensorDataset
 from math import sqrt, inf
 from os import mkdir
@@ -22,7 +22,7 @@ FEATURE_KEYS = [
     'fib_extend_0.618', 'fib_extend_0.786', 'fib_extend_0.886',
     'price_zs', 'price_sdev', 'price_wema', 'price_dh', 'price_dl',
     'price_mid', 'volume_zs', 'volume_sdev', 'volume_wema',
-    'volume_dh', 'volume_dl', 'volume_mid', 'delta', 'price_med',
+    'volume_dh', 'volume_dl', 'volume_mid', #'delta', 'price_med',
     ]
 TARGET_KEYS = [
     'open', 'high', 'low', 'close',
@@ -34,9 +34,8 @@ class ThreeBlindMice(nn.Module):
     def __init__(self, *args, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
-        self._cook_time_ = 9001
-        self._c_iota_ = iota = 1 / 137
-        self._c_phi_ = phi = 1.618033988749894
+        iota = 1 / 137
+        phi = 1.618033988749894
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self._device_ = torch.device(self._device_type_)
         self._state_path_ = abspath('./rnn')
@@ -45,66 +44,77 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
         self._feature_keys_ = FEATURE_KEYS
         self._target_keys_ = TARGET_KEYS
-        self._lr_init_ = iota ** (phi - 1)
-        self._lr_max_ = iota / (phi - 1)
-        self._lr_min_ = iota / phi
-        self._n_batch_ = 13
-        self._n_activations_ = self._n_batch_ * 4
-        self._n_cluster_ = 3
-        self._n_dropout_ = iota
-        self._n_dim_ = n_dim = 9
-        self._n_features_ = len(self._feature_keys_)
-        self._n_hidden_ = n_dim ** 3
-        self._n_inputs_ = self._n_features_
-        self._n_layers_ = n_dim
-        self._prefix_ = 'Moirai:'
+        self._constants_ = constants = {
+            'activations': 34 * (4 ** 2),
+            'batch_size': 34,
+            'cluster_shape': 3,
+            'cook_time': 9001,
+            'dim': 9,
+            'dropout': iota,
+            'eps': iota * 1e-6,
+            'features': len(self._feature_keys_),
+            'hidden': 9 ** 3,
+            'layers': 9,
+            'lr_decay': iota / (phi - 1),
+            'lr_init': iota ** (phi - 1),
+            'momentum': phi * (phi - 1),
+            'tolerance': iota ** phi,
+            'warm_steps': 5,
+            'weight_decay': iota / phi,
+            }
+        self._prefix_ = prefix = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = None
-        self._tolerance_ = iota ** phi
-        self._warm_steps_ = 5
         self.cauldron = nn.GRU(
-            input_size=self._n_inputs_,
-            hidden_size=self._n_hidden_,
-            num_layers=self._n_layers_,
-            dropout=self._n_dropout_,
+            input_size=constants['features'],
+            hidden_size=constants['hidden'],
+            num_layers=constants['layers'],
+            dropout=constants['dropout'],
             bias=True,
             batch_first=True,
             device=self._device_,
             )
         self.inscription = nn.Linear(
-            in_features=self._n_activations_,
-            out_features=self._n_activations_,
+            in_features=constants['activations'],
+            out_features=constants['activations'],
             bias=True,
             **self._p_tensor_,
             )
         self.loss_fn = nn.HuberLoss(
-            reduction='mean',
+            reduction='sum',
             delta=1.0,
             )
         self.melt = nn.InstanceNorm1d(
-            self._n_inputs_,
-            momentum=0.1,
+            constants['features'],
+            momentum=constants['momentum'],
+            eps=constants['eps'],
             **self._p_tensor_,
             )
-        self.optimizer = RMSprop(
+        self.optimizer = Adagrad(
             self.parameters(),
-            lr=self._lr_init_,
+            lr=constants['lr_init'],
+            lr_decay=constants['lr_decay'],
+            weight_decay=constants['weight_decay'],
+            eps=constants['eps'],
             foreach=True,
+            maximize=False,
             )
-        self.schedule_cyclic = CyclicLR(
-            self.optimizer,
-            self._lr_min_,
-            self._lr_max_,
-            )
-        self.schedule_warm = CosineAnnealingWarmRestarts(
-            self.optimizer,
-            self._warm_steps_,
-            eta_min=self._lr_min_,
-            )
+        # self.schedule_cook = CyclicLR(
+            # self.optimizer,
+            # self._warm_steps_,
+            # eta_min=self._lr_min_,
+            # self._lr_min_,
+            # self._lr_max_,
+            # )
+        # self.schedule_warm = CosineAnnealingWarmRestarts(
+            # self.optimizer,
+            # self._warm_steps_,
+            # eta_min=self._lr_min_,
+            # )
         self.stir = nn.Conv3d(
-            in_channels=n_dim,
-            out_channels=n_dim,
-            kernel_size=self._n_cluster_,
+            in_channels=constants['dim'],
+            out_channels=constants['dim'],
+            kernel_size=constants['cluster_shape'],
             **self._p_tensor_,
             )
         self.metrics = nn.ParameterDict({
@@ -119,21 +129,8 @@ class ThreeBlindMice(nn.Module):
         self.to(self._device_)
         self.__manage_state__(call_type=0)
         if self.verbosity > 0:
-            print(self._prefix_, 'set device type to', self._device_type_)
-            print(self._prefix_, 'set tolerance to', self._tolerance_)
-            print(self._prefix_, 'set inputs to', self._n_inputs_)
-            print(self._prefix_, 'set batch size to', self._n_batch_)
-            print(self._prefix_, 'set dim shape to', self._n_dim_)
-            print(self._prefix_, 'set hidden to', self._n_hidden_)
-            print(self._prefix_, 'set layers to', self._n_layers_)
-            print(self._prefix_, 'set activations to', self._n_activations_)
-            print(self._prefix_, 'set dropout to', self._n_dropout_)
-            print(self._prefix_, 'set cluster size to', self._n_cluster_)
-            print(self._prefix_, 'set initial lr to', self._lr_init_)
-            print(self._prefix_, 'set max lr to', self._lr_max_)
-            print(self._prefix_, 'set min lr to', self._lr_min_)
-            print(self._prefix_, 'set warm steps to', self._warm_steps_)
-            print(self._prefix_, 'set cook time to', self._cook_time_)
+            for key, value in constants.items():
+                print(prefix, f'set {key} to {value}')
             print('')
 
     def __manage_state__(self, call_type=0):
@@ -216,27 +213,28 @@ class ThreeBlindMice(nn.Module):
 
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
-        n_dim = self._n_dim_
+        constants = self._constants_
+        dim = constants['dim']
         bubbles = self.cauldron(self.melt(candles))[1]
-        bubbles = bubbles.view(n_dim, n_dim, n_dim, n_dim)
+        bubbles = bubbles.view(dim, dim, dim, dim)
         bubbles = self.stir(bubbles).flatten(0)
-        sigil = torch.topk(bubbles.softmax(0), self._n_activations_)[1]
+        sigil = torch.topk(bubbles.softmax(0), constants['activations'])[1]
         candles = self.inscription(bubbles[sigil]) ** 2
-        return candles.view(self._n_batch_, 4)
+        return candles.view(constants['batch_size'], 4, 4).mean(2)
 
     def research(self, offering, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""
         symbol = self._symbol_ = str(offering).upper()
-        batch = self._n_batch_
-        cook_time = self._cook_time_
+        constants = self._constants_
+        batch = constants['batch_size']
+        cook_time = constants['cook_time']
         loss_fn = self.loss_fn
         optimizer = self.optimizer
         p_tensor = self._p_tensor_
         research = self.__time_step__
         tensor = torch.tensor
         vstack = torch.vstack
-        warm_steps = self._warm_steps_
-        trim = 0
+        warm_steps = constants['warm_steps']
         data_len = len(dataframe)
         while data_len % batch != 0:
             dataframe = dataframe[1:]
@@ -247,7 +245,8 @@ class ThreeBlindMice(nn.Module):
         cheese_aged = tensor(cheese_aged, **p_tensor)
         sample = TensorDataset(cheese_fresh[:-batch], cheese_aged[batch:])
         candles = DataLoader(sample, batch_size=batch)
-        tolerance = self._tolerance_ * cheese_aged.flatten(0).mean(0).item()
+        tolerance = constants['tolerance'] * cheese_aged.flatten(0).mean(0)
+        n_targets = batch * cheese_aged.shape[1]
         self.metrics['loss'] = 0
         self.metrics['mae'] = 0
         self.metrics['mse'] = 0
@@ -273,14 +272,14 @@ class ThreeBlindMice(nn.Module):
                 correct = delta[delta <= tolerance].shape[0]
                 absolute_error = batch - correct
                 self.metrics['acc'][0] += correct
-                self.metrics['acc'][1] += batch
+                self.metrics['acc'][1] += n_targets
                 self.metrics['loss'] += adj_loss
                 self.metrics['mae'] += absolute_error
                 self.metrics['mse'] += absolute_error ** 2
-            if not heating_up:
-                self.schedule_cyclic.step()
-            else:
-                self.schedule_warm.step()
+            # if not heating_up:
+                # self.schedule_cyclic.step()
+            # else:
+                # self.schedule_warm.step()
             self.metrics['epochs'] += 1
             epochs += 1
             if self.metrics['epochs'] % warm_steps == 0:
