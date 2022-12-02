@@ -10,6 +10,7 @@ import source.ivy_commons as icy
 import source.ivy_alpaca as api
 from source.ivy_cartography import cartography
 from source.ivy_mouse import ThreeBlindMice
+from source.ivy_watchlist import ivy_watchlist
 from datetime import datetime
 from os import path, listdir, cpu_count, remove, mkdir
 __author__ = 'Daniel Ward'
@@ -460,7 +461,7 @@ class Candelabrum:
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
         if watch_list:
-            offerings = ['QQQ', 'SPY']
+            offerings = ivy_watchlist
         else:
             offerings = [s[0] for s in composite_index()]
         aeternalis = True
@@ -496,7 +497,7 @@ class Candelabrum:
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
                 message = format_time(elapsed, message=message)
-                print(self._PREFIX, message)
+                print(self._PREFIX, f'{message}.\n')
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
