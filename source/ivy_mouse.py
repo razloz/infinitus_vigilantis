@@ -3,6 +3,7 @@ import time
 import torch
 import traceback
 import matplotlib.pyplot as plt
+import numpy as np
 import source.ivy_commons as icy
 from torch import nn
 from torch.optim import Adagrad
@@ -30,7 +31,7 @@ TARGET_KEYS = [
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, *args, verbosity=0, **kwargs):
+    def __init__(self, *args, cook_time=0, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         iota = 1 / 137
@@ -44,16 +45,16 @@ class ThreeBlindMice(nn.Module):
         self._feature_keys_ = FEATURE_KEYS
         self._target_keys_ = TARGET_KEYS
         self._constants_ = constants = {
-            'activations': 89 * 4 * 3,
-            'batch_size': 89,
+            'activations': 13 * 4 * 3,
+            'batch_size': 13,
             'cluster_shape': 3,
-            'cook_time': 165,
+            'cook_time': cook_time,
             'dim': 9,
             'dropout': iota,
             'eps': iota * 1e-6,
             'features': len(self._feature_keys_),
             'hidden': 9 ** 3,
-            'layers': 9,
+            'layers': 18,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'momentum': phi * (phi - 1),
@@ -98,8 +99,8 @@ class ThreeBlindMice(nn.Module):
             maximize=False,
             )
         self.stir = nn.Conv3d(
-            in_channels=constants['dim'],
-            out_channels=constants['dim'],
+            in_channels=constants['layers'],
+            out_channels=constants['layers'],
             kernel_size=constants['cluster_shape'],
             **self._p_tensor_,
             )
@@ -156,14 +157,16 @@ class ThreeBlindMice(nn.Module):
         epoch = self.metrics['epochs']
         accuracy = self.metrics['acc']
         adj_loss = self.metrics['loss']
-        x = range(predictions.shape[0])
-        y_p = predictions.mean(1).detach().cpu().tolist()
-        y_t = targets.mean(1).detach().cpu().tolist()
-        predictions_tail = y_p[-1]
-        target_tail = y_t[-1]
-        y_t += [None for _ in range(self._constants_['batch_size'])]
-        ax.plot(x, y_p, color='#FFE88E') #gouda
-        ax.plot(x, y_t, color='#FF9600') #cheddar
+        x = range(200)
+        y_p = predictions.detach().cpu().numpy()
+        y_t = targets.detach().cpu().numpy()
+        predictions_tail = y_p.mean(1)[-1]
+        target_tail = y_t.mean(1)[-1]
+        c_t = [None for _ in range(y_t.shape[1])]
+        p_t = [c_t for _ in range(self._constants_['batch_size'])]
+        y_t = np.vstack((y_t, p_t))
+        ax.plot(x, y_p[-200:], color='#FFE88E') #gouda
+        ax.plot(x, y_t[-200:], color='#FF9600') #cheddar
         symbol = self._symbol_
         title = f'{symbol}\n'
         title += f'Accuracy: {accuracy}, '
@@ -200,27 +203,17 @@ class ThreeBlindMice(nn.Module):
             with torch.no_grad():
                 return self.forward(candles)
 
-    def alpaca_jazz(self, attendants, candelabrum):
-        """CFCG7CFmCC7FCG7CFmCGCG7CB7EmB7EG7C7FCG7CFmCGCG7CB7EmB7EC7FCG7CFmC"""
-        attendees = type(attendants)
-        if attendees not in [str, tuple, list]:
-            raise 'attendees not in [str, tuple, list]'
-        if attendees != str:
-            for attendee in attendants:
-                candelabrum.do_update(attendee,)
-        else:
-            candelabrum.do_update(attendees,)
-
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
         constants = self._constants_
         dim = constants['dim']
         bubbles = self.cauldron(self.melt(candles))[1]
-        bubbles = bubbles.view(dim, dim, dim, dim)
+        bubbles = bubbles.view(bubbles.shape[0], dim, dim, dim)
         bubbles = self.stir(bubbles).flatten(0)
         sigil = torch.topk(bubbles.softmax(0), constants['activations'])[1]
-        candles = self.inscription(bubbles[sigil]) ** 2
-        return candles.view(constants['batch_size'], 4, 3).mean(2)
+        candles = self.inscription(bubbles[sigil])
+        candles = candles.view(constants['batch_size'], 4, 3)
+        return candles.mean(2) ** 2
 
     def research(self, offering, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""

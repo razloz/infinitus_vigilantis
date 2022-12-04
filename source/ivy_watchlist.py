@@ -5,8 +5,6 @@ ivy_watchlist = (
     'AMD',
     'NVDA',
     'INTC',
-    'CARA',
-    'CGC',
     'QCOM',
     'PALL',
     'SPPP',

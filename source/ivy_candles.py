@@ -456,43 +456,41 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def make_offering(self, trim=34, epochs=-1, watch_list=True):
+    def alpaca_jazz(self, attendants=8, cook_time=0, epochs=-1):
+        """🎶🎵🎶 🎃 🪬 🎃 🎶🎵🎶"""
+        rng = random.randint
+        guests = [s[0] for s in composite_index()]
+        attendees = list()
+        for admission in range(attendants):
+            remaining_guests = len(guests) - 1
+            if remaining_guests != 0:
+                attendees.append(guests.pop(rng(0, remaining_guests)))
+            else:
+                attendees.append(guests[0])
+                break
+        self.make_offering(attendees, cook_time=cook_time, epochs=epochs)
+
+    def make_offering(self, paterae, cook_time=0, epochs=-1, trim=34):
         """Spend time with the Norn researching candles."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        if watch_list:
-            offerings = ivy_watchlist
-        else:
-            offerings = [s[0] for s in composite_index()]
-        aeternalis = True
-        total_candles = len(offerings)
+        if type(paterae) not in [list, tuple]:
+            paterae = ivy_watchlist
         epoch = 0
-        rng = random.randint
-        n_selections = 100
-        selections = list(offerings)
-        merge_args = dict(left_index=True, right_index=True)
-        moirai = ThreeBlindMice(verbosity=1)
+        moirai = ThreeBlindMice(cook_time=cook_time, verbosity=1)
+        aeternalis = True
         loop_start = time.time()
+        paterae = {s: get_daily(s) for s in paterae}
+        for offering, candles in paterae.items():
+            paterae[offering] = candles.merge(
+                omenize(candles),
+                left_index=True,
+                right_index=True,
+                )[trim:]
         while aeternalis:
-            if not watch_list:
-                paterae = list()
-                for i in range(n_selections):
-                    l = len(selections)
-                    if l == 1:
-                        paterae.append(selections[0])
-                        selections = list(offerings)
-                        break
-                    else:
-                        paterae.append(selections.pop(rng(0, l - 1)))
-            else:
-                paterae = offerings
-            for offering in paterae:
+            for offering, candles in paterae.items():
                 print(self._PREFIX, f'Research of {offering} has started.')
                 offering_start = time.time()
-                candles = get_daily(offering)
-                omens = omenize(candles)
-                candles = candles.merge(omens, **merge_args)
-                candles = candles[trim:]
                 predictions = moirai.research(offering, candles)
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
@@ -502,7 +500,7 @@ class Candelabrum:
             if epoch == epochs:
                 aeternalis = False
             elapsed = time.time() - loop_start
-            message = 'Aeternalis elapsed time is'
+            message = f'({epoch}) Aeternalis elapsed time is'
             print(self._PREFIX, format_time(elapsed, message=message))
 
     def candle_maker(self, candles):

@@ -171,15 +171,12 @@ def get_indicators(df, index_key='time'):
     df_last = df_range[-1]
     if sample >= df_last + 1:
         return df.copy()
-    # localize dataframe columns
     o = df['open'].tolist()
     h = df['high'].tolist()
     l = df['low'].tolist()
     c = df['close'].tolist()
     v = df['volume'].tolist()
-    # start loop
     for i in df_range:
-        # trend detection and tracking
         if i >= 2:
             ii = i - 1
             iii = i - 2
@@ -214,7 +211,6 @@ def get_indicators(df, index_key='time'):
         fibs_extended.append(e)
         trend.append(trend_strength)
         gartley_checks.append(g)
-        # Collect money line for price and volume
         si = i - sample
         ei = i + 1
         if i == df_last:
@@ -230,7 +226,6 @@ def get_indicators(df, index_key='time'):
             money_p[f'price_{key}'].append(value)
         for key, value in mv.items():
             money_v[f'volume_{key}'].append(value)
-    # Add each indicator column to dataframe
     indicators = DataFrame(index=df.index)
     indicators['trend'] = trend
     dfs = [
@@ -243,7 +238,6 @@ def get_indicators(df, index_key='time'):
     for dataframe in dfs:
         for c, s in dataframe.iteritems():
             indicators[c] = s.tolist()
-    # mice stuff
     o = df['open'].values
     h = df['high'].values
     l = df['low'].values
