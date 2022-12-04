@@ -3,8 +3,7 @@
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = '2022.11'
-__codename__ = 'moirai'
+__version__ = 'muenster'
 
 
 if __name__ == '__main__':
@@ -20,10 +19,14 @@ if __name__ == '__main__':
                    help='Build historical database.')
     p.add_argument('--clean', action='store_true',
                    help='Remove all corruption from the candelabrum.')
-    p.add_argument('--feed', action='store_true',
+    p.add_argument('--tlc', action='store_true',
                    help='Feed and care for the mice. <333')
     p.add_argument('--indicators', action='store_true',
                    help='Build historical indicators.')
+    p.add_argument('--jazz', action='store_true',
+                   help='Alpaca jazz recital.')
+    p.add_argument('--study', action='store_true',
+                   help='Quick study of the watch list.')
     p.add_argument('--start_date', help='Defaults to 2019-01-01.')
     p.add_argument('--end_date', help='Defaults to today.')
     vt = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
@@ -32,15 +35,16 @@ if __name__ == '__main__':
     print('Loading IVy Updater...')
     import source.ivy_candles as updater
     if args.build:
-        print('Starting historical update loop...')
         updater.build_historical_database()
     elif args.clean:
         updater.Candelabrum().clean_candelabrum()
-    elif args.feed:
-        updater.Candelabrum().make_offering()
+    elif args.tlc:
+        updater.Candelabrum().make_offering(None, cook_time=60, epochs=120)
     elif args.indicators:
-        print('Applying indicators...')
         updater.Candelabrum().apply_indicators()
-        print("""Job's done!""")
+    elif args.jazz:
+        updater.Candelabrum().alpaca_jazz(attendants=20, cook_time=60, epochs=5)
+    elif args.study:
+        updater.Candelabrum().make_offering(None, cook_time=60, epochs=5)
     else:
         print('Missing argument.')

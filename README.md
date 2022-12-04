@@ -17,7 +17,9 @@ Usage:
   - with IVY as an absolute path to infinitus vigilantis folder
   - $IVY/updater.py --build
   - $IVY/updater.py --clean
-  - $IVY/updater.py --feed
+  - $IVY/updater.py --tlc
+  - $IVY/updater.py --study
+  - $IVY/updater.py --jazz
 
 Systemd Daemon:
   - Shell script, timer, and service located in daemon folder.
