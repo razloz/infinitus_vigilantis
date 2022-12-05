@@ -7,7 +7,7 @@ __version__ = 'muenster'
 
 
 if __name__ == '__main__':
-    print(f'\n{__doc__}\nVersion: {__version__} ({__codename__})')
+    print(f'\n{__doc__}\nVersion: {__version__}')
     with open('./license/GPLv3.txt', 'r') as f:
         LICENSE = f.read()
     with open('./license/Disclaimer.txt', 'r') as f:
@@ -39,12 +39,24 @@ if __name__ == '__main__':
     elif args.clean:
         updater.Candelabrum().clean_candelabrum()
     elif args.tlc:
-        updater.Candelabrum().make_offering(None, cook_time=60, epochs=120)
+        updater.Candelabrum().make_offering(
+            None,
+            cook_time=150,
+            epochs=32,
+            )
     elif args.indicators:
         updater.Candelabrum().apply_indicators()
     elif args.jazz:
-        updater.Candelabrum().alpaca_jazz(attendants=20, cook_time=60, epochs=5)
+        updater.Candelabrum().alpaca_jazz(
+            attendants=48,
+            cook_time=150,
+            epochs=1,
+            )
     elif args.study:
-        updater.Candelabrum().make_offering(None, cook_time=60, epochs=5)
+        updater.Candelabrum().make_offering(
+            None,
+            cook_time=150,
+            epochs=1,
+            )
     else:
         print('Missing argument.')
