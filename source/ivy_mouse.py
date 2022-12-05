@@ -31,7 +31,7 @@ TARGET_KEYS = [
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, *args, cook_time=0, verbosity=0, **kwargs):
+    def __init__(self, *args, batch_size=5, cook_time=0, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         iota = 1 / 137
@@ -45,8 +45,8 @@ class ThreeBlindMice(nn.Module):
         self._feature_keys_ = FEATURE_KEYS
         self._target_keys_ = TARGET_KEYS
         self._constants_ = constants = {
-            'activations': 13 * 4 * 3,
-            'batch_size': 13,
+            'activations': 18,
+            'batch_size': batch_size,
             'cluster_shape': 3,
             'cook_time': cook_time,
             'dim': 9,
@@ -75,7 +75,7 @@ class ThreeBlindMice(nn.Module):
             )
         self.inscription = nn.Linear(
             in_features=constants['activations'],
-            out_features=constants['activations'],
+            out_features=2,
             bias=True,
             **self._p_tensor_,
             )
@@ -114,14 +114,14 @@ class ThreeBlindMice(nn.Module):
             })
         self.verbosity = int(verbosity)
         self.to(self._device_)
-        if self.verbosity > 0:
+        if self.verbosity > 1:
             for key, value in constants.items():
                 print(prefix, f'set {key} to {value}')
             print('')
 
     def __manage_state__(self, call_type=0):
         """Handles loading and saving of the RNN state."""
-        state_path = f'{self._state_path_}/.{self._symbol_}.state'
+        state_path = f'{self._state_path_}/.MOIRAI.state'
         if call_type == 0:
             try:
                 state = torch.load(state_path, map_location=self._device_type_)
@@ -149,30 +149,31 @@ class ThreeBlindMice(nn.Module):
                 print(self._prefix_, 'Saved RNN state.')
 
     def __time_plot__(self, predictions, targets):
-        fig = plt.figure(figsize=(6.40, 4.80), dpi=100)
+        fig = plt.figure(figsize=(10.24, 7.68), dpi=100)
         ax = fig.add_subplot()
         ax.grid(True, color=(0.3, 0.3, 0.3))
         ax.set_ylabel('Price', fontweight='bold')
         ax.set_xlabel('Epoch', fontweight='bold')
-        epoch = self.metrics['epochs']
         accuracy = self.metrics['acc']
         adj_loss = self.metrics['loss']
-        x = range(200)
-        y_p = predictions.detach().cpu().numpy()
-        y_t = targets.detach().cpu().numpy()
-        predictions_tail = y_p.mean(1)[-1]
-        target_tail = y_t.mean(1)[-1]
-        c_t = [None for _ in range(y_t.shape[1])]
-        p_t = [c_t for _ in range(self._constants_['batch_size'])]
-        y_t = np.vstack((y_t, p_t))
-        ax.plot(x, y_p[-200:], color='#FFE88E') #gouda
-        ax.plot(x, y_t[-200:], color='#FF9600') #cheddar
+        batch_size = self._constants_['batch_size']
+        epoch = self.metrics['epochs']
+        x = range(len(predictions))
+        y_p = predictions
+        y_t = targets.mean(1).detach().cpu().tolist()
+        predictions_tail = y_p[-1]
+        target_tail = y_t[-1]
+        y_t += [None for _ in range(batch_size)]
+        ax.plot(x, y_p, color='#FFE88E') #gouda
+        ax.plot(x, y_t, color='#FF9600') #cheddar
         symbol = self._symbol_
         title = f'{symbol}\n'
         title += f'Accuracy: {accuracy}, '
-        title += f'Epochs: {epoch}'
+        title += f'Epochs: {epoch}, '
+        title += f'Batch Size: {batch_size}'
         fig.suptitle(title, fontsize=18)
-        plt.savefig(f'{self._epochs_path_}/{symbol}-{int(time.time())}.png')
+        file_name = f'{symbol}-{x[-1] - batch_size}-{int(time.time())}'
+        plt.savefig(f'{self._epochs_path_}/{file_name}.png')
         plt.clf()
         plt.close()
         if self.verbosity > 0:
@@ -181,6 +182,7 @@ class ThreeBlindMice(nn.Module):
             print(prefix, 'TARGET TAIL:', target_tail)
             print(prefix, 'ADJ_LOSS:', adj_loss)
             print(prefix, 'ACC:', accuracy)
+            print(prefix, 'BATCH_SIZE:', batch_size)
             for k in ['loss', 'mae', 'mse']:
                 v = self.metrics[k]
                 if k == 'mse':
@@ -188,6 +190,7 @@ class ThreeBlindMice(nn.Module):
                 else:
                     print(prefix, f'{k.upper()}: {v / epoch}')
             print(prefix, 'EPOCH:', epoch)
+            print('')
 
     def __time_step__(self, candles, study=False):
         """Let Clotho mold the candles
@@ -211,21 +214,21 @@ class ThreeBlindMice(nn.Module):
         bubbles = bubbles.view(bubbles.shape[0], dim, dim, dim)
         bubbles = self.stir(bubbles).flatten(0)
         sigil = torch.topk(bubbles.softmax(0), constants['activations'])[1]
-        candles = self.inscription(bubbles[sigil])
-        candles = candles.view(constants['batch_size'], 4, 3)
-        return candles.mean(2) ** 2
+        return self.inscription(bubbles[sigil]) ** 2
 
     def research(self, offering, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""
         symbol = self._symbol_ = str(offering).upper()
         constants = self._constants_
         batch = constants['batch_size']
+        batch_range = range(batch - 2)
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
         optimizer = self.optimizer
         p_tensor = self._p_tensor_
         research = self.__time_step__
         tensor = torch.tensor
+        hstack = torch.hstack
         vstack = torch.vstack
         data_len = len(dataframe)
         if data_len >= batch * 2:
@@ -248,25 +251,43 @@ class ThreeBlindMice(nn.Module):
         self.metrics['mae'] = 0
         self.metrics['mse'] = 0
         epochs = 0
-        t_cook = time.time()
         cooking = True
+        t_cook = time.time()
+        null_pad = [None for _ in batch_range]
         while cooking:
             self.metrics['acc'] = [0, 0]
-            predictions = list()
+            predictions = [None, None]
+            predictions += null_pad
             for features, targets in iter(candles):
-                coated_candles = research(features, study=True)
-                predictions.append(coated_candles)
-                loss = loss_fn(coated_candles, targets)
+                cdls = research(features, study=True)
+                cdls = hstack([
+                    cdls[0].unsqueeze(0),
+                    cdls[-1].unsqueeze(0),
+                    ])
+                targets = targets.mean(1)
+                targets = hstack([
+                    targets[0].unsqueeze(0),
+                    targets[-1].unsqueeze(0),
+                    ])
+                loss = loss_fn(cdls, targets)
                 loss.backward()
                 optimizer.step()
-                adj_loss = sqrt(loss.item()) / batch
+                cdl_open = float(cdls[0])
+                cdl_close = float(cdls[-1])
+                cdl_pad = (cdl_close - cdl_open) / (batch - 2)
+                predictions.append(cdl_open)
+                predictions += [
+                    cdl_open + (cdl_pad * (n + 1)) for n in batch_range
+                    ]
+                predictions.append(cdl_close)
+                adj_loss = sqrt(loss.item())
                 adj_loss = 1 + (adj_loss - mean_cheese) / mean_cheese
-                delta = (coated_candles - targets).abs()
+                delta = (cdls - targets).abs()
                 correct = delta[delta >= tolerance]
                 correct = delta[delta <= tolerance].shape[0]
                 absolute_error = n_targets - correct
                 self.metrics['acc'][0] += correct
-                self.metrics['acc'][1] += n_targets
+                self.metrics['acc'][1] += 2
                 self.metrics['loss'] += adj_loss.item()
                 self.metrics['mae'] += absolute_error
                 self.metrics['mse'] += absolute_error ** 2
@@ -277,8 +298,16 @@ class ThreeBlindMice(nn.Module):
         self.metrics['loss'] = self.metrics['loss'] / epochs
         self.metrics['mae'] = self.metrics['mae'] / epochs
         self.metrics['mse'] = sqrt(self.metrics['mse']) / epochs
-        predictions.append(research(cheese_fresh[-batch:], study=False))
-        self.__time_plot__(vstack(predictions), cheese_aged[batch:])
-        self.metrics['predictions'] = vstack(predictions).flatten(0).tolist()
+        cdls = research(cheese_fresh[-batch:], study=False)
+        cdl_open = float(cdls[0])
+        cdl_close = float(cdls[-1])
+        cdl_pad = (cdl_open - cdl_close) / (batch - 2)
+        predictions.append(cdl_open)
+        predictions += [
+            cdl_open + (cdl_pad * (n + 1)) for n in batch_range
+            ]
+        predictions.append(cdl_close)
+        self.metrics['predictions'] = predictions
+        self.__time_plot__(self.metrics['predictions'], cheese_aged)
         self.__manage_state__(call_type=1)
         return True

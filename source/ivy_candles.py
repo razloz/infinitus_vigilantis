@@ -477,9 +477,9 @@ class Candelabrum:
         if type(paterae) not in [list, tuple]:
             paterae = ivy_watchlist
         epoch = 0
-        moirai = ThreeBlindMice(cook_time=cook_time, verbosity=1)
         aeternalis = True
-        loop_start = time.time()
+        fib_seq = icy.FibonacciSequencer().skip(3).next(n=9)
+        fib_seq.reverse()
         paterae = {s: get_daily(s) for s in paterae}
         for offering, candles in paterae.items():
             paterae[offering] = candles.merge(
@@ -487,15 +487,22 @@ class Candelabrum:
                 left_index=True,
                 right_index=True,
                 )[trim:]
+        loop_start = time.time()
         while aeternalis:
-            for offering, candles in paterae.items():
-                print(self._PREFIX, f'Research of {offering} has started.')
-                offering_start = time.time()
-                predictions = moirai.research(offering, candles)
-                elapsed = time.time() - offering_start
-                message = f'Research of {offering} complete after'
-                message = format_time(elapsed, message=message)
-                print(self._PREFIX, f'{message}.\n')
+            for batch_size in fib_seq:
+                moirai = ThreeBlindMice(
+                    batch_size=batch_size,
+                    cook_time=cook_time,
+                    verbosity=1,
+                    )
+                for offering, candles in paterae.items():
+                    print(self._PREFIX, f'Research of {offering} has started.')
+                    offering_start = time.time()
+                    predictions = moirai.research(offering, candles)
+                    elapsed = time.time() - offering_start
+                    message = f'Research of {offering} complete after'
+                    message = format_time(elapsed, message=message)
+                    print(self._PREFIX, f'{message}.\n')
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
