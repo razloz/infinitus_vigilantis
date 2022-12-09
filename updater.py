@@ -39,24 +39,12 @@ if __name__ == '__main__':
     elif args.clean:
         updater.Candelabrum().clean_candelabrum()
     elif args.tlc:
-        updater.Candelabrum().make_offering(
-            None,
-            cook_time=150,
-            epochs=32,
-            )
+        updater.Candelabrum().make_offering(None, epochs=4320)
     elif args.indicators:
         updater.Candelabrum().apply_indicators()
     elif args.jazz:
-        updater.Candelabrum().alpaca_jazz(
-            attendants=48,
-            cook_time=150,
-            epochs=1,
-            )
+        updater.Candelabrum().alpaca_jazz(attendants=12, epochs=30)
     elif args.study:
-        updater.Candelabrum().make_offering(
-            None,
-            cook_time=150,
-            epochs=1,
-            )
+        updater.Candelabrum().make_offering(None, epochs=180)
     else:
         print('Missing argument.')
