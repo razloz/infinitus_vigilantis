@@ -43,7 +43,7 @@ if __name__ == '__main__':
     elif args.indicators:
         updater.Candelabrum().apply_indicators()
     elif args.jazz:
-        updater.Candelabrum().alpaca_jazz(attendants=12, epochs=30)
+        updater.Candelabrum().alpaca_jazz(attendants=12, epochs=1)
     elif args.study:
         updater.Candelabrum().make_offering(None, epochs=180)
     else:
