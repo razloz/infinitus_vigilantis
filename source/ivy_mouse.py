@@ -14,24 +14,11 @@ from os.path import abspath, exists
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-FEATURE_KEYS = [
-    'volume', 'num_trades', 'vol_wma_price', 'trend',
-    'fib_retrace_0.236', 'fib_retrace_0.382', 'fib_retrace_0.5',
-    'fib_retrace_0.618', 'fib_retrace_0.786', 'fib_retrace_0.886',
-    'fib_extend_0.236', 'fib_extend_0.382', 'fib_extend_0.5',
-    'fib_extend_0.618', 'fib_extend_0.786', 'fib_extend_0.886',
-    'price_zs', 'price_sdev', 'price_wema', 'price_dh', 'price_dl',
-    'price_mid', 'volume_zs', 'volume_sdev', 'volume_wema',
-    'volume_dh', 'volume_dl', 'volume_mid',
-    ]
-TARGET_KEYS = [
-    'open', 'high', 'low', 'close',
-    ]
 
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, *args, batch_size=5, cook_time=0, verbosity=0, **kwargs):
+    def __init__(self, *args, features=0, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         iota = 1 / 137
@@ -42,17 +29,15 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._state_path_): mkdir(self._state_path_)
         self._epochs_path_ = abspath('./rnn/epochs')
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
-        self._feature_keys_ = FEATURE_KEYS
-        self._target_keys_ = TARGET_KEYS
         self._constants_ = constants = {
-            'activations': 18,
-            'batch_size': batch_size,
+            'batch_size': 34,
+            'batch_step': 17,
             'cluster_shape': 3,
-            'cook_time': cook_time,
+            'cook_time': 30,
             'dim': 9,
             'dropout': iota,
             'eps': iota * 1e-6,
-            'features': len(self._feature_keys_),
+            'features': int(features),
             'hidden': 9 ** 3,
             'layers': 18,
             'lr_decay': iota / (phi - 1),
@@ -73,15 +58,8 @@ class ThreeBlindMice(nn.Module):
             batch_first=True,
             device=self._device_,
             )
-        self.inscription = nn.Linear(
-            in_features=constants['activations'],
-            out_features=2,
-            bias=True,
-            **self._p_tensor_,
-            )
-        self.loss_fn = nn.HuberLoss(
+        self.loss_fn = torch.nn.BCELoss(
             reduction='sum',
-            delta=phi,
             )
         self.melt = nn.InstanceNorm1d(
             constants['features'],
@@ -108,8 +86,6 @@ class ThreeBlindMice(nn.Module):
             'acc': [0, 0],
             'epochs': 0,
             'loss': 0,
-            'mae': 0,
-            'mse': 0,
             'predictions': list(),
             })
         self.verbosity = int(verbosity)
@@ -119,9 +95,13 @@ class ThreeBlindMice(nn.Module):
                 print(prefix, f'set {key} to {value}')
             print('')
 
-    def __manage_state__(self, call_type=0):
+    def __manage_state__(self, call_type=0, singular=True):
         """Handles loading and saving of the RNN state."""
-        state_path = f'{self._state_path_}/.MOIRAI.state'
+        state_path = f'{self._state_path_}/'
+        if singular:
+            state_path += '.norn.state'
+        else:
+            state_path += f'.{self._symbol_}.state'
         if call_type == 0:
             try:
                 state = torch.load(state_path, map_location=self._device_type_)
@@ -149,48 +129,40 @@ class ThreeBlindMice(nn.Module):
                 print(self._prefix_, 'Saved RNN state.')
 
     def __time_plot__(self, predictions, targets):
-        fig = plt.figure(figsize=(10.24, 7.68), dpi=100)
+        fig = plt.figure(figsize=(5.12, 3.84), dpi=100)
         ax = fig.add_subplot()
-        ax.grid(True, color=(0.3, 0.3, 0.3))
-        ax.set_ylabel('Price', fontweight='bold')
-        ax.set_xlabel('Epoch', fontweight='bold')
+        ax.grid(True, color=(0.6, 0.6, 0.6))
+        ax.set_ylabel('Probability', fontweight='bold')
+        ax.set_xlabel('Batch', fontweight='bold')
         accuracy = self.metrics['acc']
-        adj_loss = self.metrics['loss']
-        batch_size = self._constants_['batch_size']
         epoch = self.metrics['epochs']
-        x = range(len(predictions))
-        y_p = predictions
-        y_t = targets.mean(1).detach().cpu().tolist()
-        predictions_tail = y_p[-1]
-        target_tail = y_t[-1]
-        y_t += [None for _ in range(batch_size)]
-        ax.plot(x, y_p, color='#FFE88E') #gouda
-        ax.plot(x, y_t, color='#FF9600') #cheddar
+        y_p = predictions.detach().cpu().numpy()
+        y_t = targets.detach().cpu().numpy()
+        y_t = np.vstack([y_t, [None, None, None]])
+        x_range = range(0, y_p.shape[0] * 4, 4)
+        n_y = 0
+        for r_x in x_range:
+            n_x = 0
+            for prob in y_t[n_y]:
+                if prob is None:
+                    continue
+                x = r_x + n_x
+                ax.plot([x, x], [0, prob], color='#FF9600') #cheddar
+                n_x += 1
+            n_x = 0
+            for prob in y_p[n_y]:
+                x = r_x + n_x
+                ax.plot([x, x], [0, prob], color='#FFE88E') #gouda
+                n_x += 1
+            n_y += 1
         symbol = self._symbol_
         title = f'{symbol}\n'
         title += f'Accuracy: {accuracy}, '
         title += f'Epochs: {epoch}, '
-        title += f'Batch Size: {batch_size}'
-        fig.suptitle(title, fontsize=18)
-        file_name = f'{symbol}-{x[-1] - batch_size}-{int(time.time())}'
-        plt.savefig(f'{self._epochs_path_}/{file_name}.png')
+        fig.suptitle(title, fontsize=13)
+        plt.savefig(f'{self._epochs_path_}/{symbol}-{int(time.time())}.png')
         plt.clf()
         plt.close()
-        if self.verbosity > 0:
-            prefix = self._prefix_
-            print(prefix, 'PREDICTIONS TAIL:', predictions_tail)
-            print(prefix, 'TARGET TAIL:', target_tail)
-            print(prefix, 'ADJ_LOSS:', adj_loss)
-            print(prefix, 'ACC:', accuracy)
-            print(prefix, 'BATCH_SIZE:', batch_size)
-            for k in ['loss', 'mae', 'mse']:
-                v = self.metrics[k]
-                if k == 'mse':
-                    print(prefix, f'{k.upper()}: {sqrt(v)}')
-                else:
-                    print(prefix, f'{k.upper()}: {v / epoch}')
-            print(prefix, 'EPOCH:', epoch)
-            print('')
 
     def __time_step__(self, candles, study=False):
         """Let Clotho mold the candles
@@ -209,18 +181,24 @@ class ThreeBlindMice(nn.Module):
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
         constants = self._constants_
+        batch = constants['batch_step']
         dim = constants['dim']
-        bubbles = self.cauldron(self.melt(candles))[1]
+        candles = self.melt(candles)
+        bubbles = self.cauldron(candles)[1]
         bubbles = bubbles.view(bubbles.shape[0], dim, dim, dim)
-        bubbles = self.stir(bubbles).flatten(0)
-        sigil = torch.topk(bubbles.softmax(0), constants['activations'])[1]
-        return self.inscription(bubbles[sigil]) ** 2
+        bubbles = self.stir(bubbles)
+        sigil = bubbles.mean(3).sum(2).mean(1).softmax(0)
+        candles = bubbles[torch.topk(sigil, 3)[1]]
+        candles = candles.mean(3).sum(2).mean(1).softmax(0)
+        return candles.clone()
 
-    def research(self, offering, dataframe):
+    def research(self, offering, dataframe, plot=True):
         """Moirai research session, fully stocked with cheese and drinks."""
         symbol = self._symbol_ = str(offering).upper()
         constants = self._constants_
+        verbosity = self.verbosity
         batch = constants['batch_size']
+        step = constants['batch_step']
         batch_range = range(batch - 2)
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
@@ -238,76 +216,85 @@ class ThreeBlindMice(nn.Module):
         while data_len % batch != 0:
             dataframe = dataframe[1:]
             data_len = len(dataframe)
-        cheese_fresh = dataframe[self._feature_keys_].to_numpy()
-        cheese_fresh = tensor(cheese_fresh, requires_grad=True, **p_tensor)
-        cheese_aged = dataframe[self._target_keys_].to_numpy()
-        cheese_aged = tensor(cheese_aged, **p_tensor)
-        sample = TensorDataset(cheese_fresh[:-batch], cheese_aged[batch:])
+        cheese = tensor(
+            dataframe.to_numpy(),
+            requires_grad=True,
+            **p_tensor,
+            )
+        sample = TensorDataset(cheese)
         candles = DataLoader(sample, batch_size=batch)
-        mean_cheese = cheese_aged.flatten(0).mean(0)
-        tolerance = constants['tolerance'] * mean_cheese
-        n_targets = batch * cheese_aged.shape[1]
         self.metrics['loss'] = 0
-        self.metrics['mae'] = 0
-        self.metrics['mse'] = 0
         epochs = 0
         cooking = True
         t_cook = time.time()
-        null_pad = [None for _ in batch_range]
+        target_tmp = tensor(
+            [0, 1, 0],
+            **p_tensor,
+            )
+        targets = list()
+        n_split = int(batch / 2)
         while cooking:
             self.metrics['acc'] = [0, 0]
-            predictions = [None, None]
-            predictions += null_pad
-            for features, targets in iter(candles):
-                cdls = research(features, study=True)
-                cdls = hstack([
-                    cdls[0].unsqueeze(0),
-                    cdls[-1].unsqueeze(0),
-                    ])
-                targets = targets.mean(1)
-                targets = hstack([
-                    targets[0].unsqueeze(0),
-                    targets[-1].unsqueeze(0),
-                    ])
-                loss = loss_fn(cdls, targets)
+            predictions = list()
+            targets = list()
+            for candle in iter(candles):
+                candle = candle[0]
+                target = candle[n_split:]
+                candle = candle[:n_split]
+                coated_candles = research(candle, study=True)
+                target_tmp *= 0
+                cdl_mean = candle[:, :4].mean(1).mean(0)
+                tgt_mean = target[:, :4].mean(1).mean(0)
+                if tgt_mean > cdl_mean:
+                    target_tmp[0] += 1
+                elif tgt_mean < cdl_mean:
+                    target_tmp[2] += 1
+                else:
+                    target_tmp[1] += 1
+                loss = loss_fn(coated_candles, target_tmp)
                 loss.backward()
                 optimizer.step()
-                cdl_open = float(cdls[0])
-                cdl_close = float(cdls[-1])
-                cdl_pad = (cdl_close - cdl_open) / (batch - 2)
-                predictions.append(cdl_open)
-                predictions += [
-                    cdl_open + (cdl_pad * (n + 1)) for n in batch_range
-                    ]
-                predictions.append(cdl_close)
+                predictions.append(coated_candles)
+                targets.append(target_tmp.clone())
                 adj_loss = sqrt(loss.item())
-                adj_loss = 1 + (adj_loss - mean_cheese) / mean_cheese
-                delta = (cdls - targets).abs()
-                correct = delta[delta >= tolerance]
-                correct = delta[delta <= tolerance].shape[0]
-                absolute_error = n_targets - correct
+                if coated_candles.argmax(0) == target_tmp.argmax(0):
+                    correct = 1
+                else:
+                    correct = 0
                 self.metrics['acc'][0] += correct
-                self.metrics['acc'][1] += 2
-                self.metrics['loss'] += adj_loss.item()
-                self.metrics['mae'] += absolute_error
-                self.metrics['mse'] += absolute_error ** 2
+                self.metrics['acc'][1] += 1
+                self.metrics['loss'] += adj_loss
+                if verbosity == 3:
+                    prefix = self._prefix_
+                    print(prefix, 'prediction tail:', predictions[-1].tolist())
+                    print(prefix, 'target tail:', targets[-1].tolist())
+                    print(prefix, 'accuracy:', self.metrics['acc'])
+                    print(prefix, 'loss:', self.metrics['loss'])
+                    print(prefix, 'epochs:', self.metrics['epochs'])
             self.metrics['epochs'] += 1
             epochs += 1
+            if verbosity == 2:
+                prefix = self._prefix_
+                print(prefix, 'prediction tail:', predictions[-1].tolist())
+                print(prefix, 'target tail:', targets[-1].tolist())
+                print(prefix, 'accuracy:', self.metrics['acc'])
+                print(prefix, 'loss:', self.metrics['loss'])
+                print(prefix, 'epochs:', self.metrics['epochs'])
             if time.time() - t_cook >= cook_time:
                 cooking = False
         self.metrics['loss'] = self.metrics['loss'] / epochs
-        self.metrics['mae'] = self.metrics['mae'] / epochs
-        self.metrics['mse'] = sqrt(self.metrics['mse']) / epochs
-        cdls = research(cheese_fresh[-batch:], study=False)
-        cdl_open = float(cdls[0])
-        cdl_close = float(cdls[-1])
-        cdl_pad = (cdl_open - cdl_close) / (batch - 2)
-        predictions.append(cdl_open)
-        predictions += [
-            cdl_open + (cdl_pad * (n + 1)) for n in batch_range
-            ]
-        predictions.append(cdl_close)
-        self.metrics['predictions'] = predictions
-        self.__time_plot__(self.metrics['predictions'], cheese_aged)
+        predictions.append(research(cheese[-batch:], study=False))
+        predictions = vstack(predictions)
+        targets = vstack(targets)
+        if plot:
+            self.__time_plot__(predictions, targets)
+        self.metrics['predictions'] = predictions.flatten(0).tolist()
+        if verbosity == 1:
+            prefix = self._prefix_
+            print(prefix, 'prediction tail:', predictions[-1].tolist())
+            print(prefix, 'target tail:', targets[-1].tolist())
+            print(prefix, 'accuracy:', self.metrics['acc'])
+            print(prefix, 'loss:', self.metrics['loss'])
+            print(prefix, 'epochs:', self.metrics['epochs'])
         self.__manage_state__(call_type=1)
         return True

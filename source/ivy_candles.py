@@ -456,7 +456,7 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def alpaca_jazz(self, attendants=8, cook_time=0, epochs=-1):
+    def alpaca_jazz(self, attendants=8, epochs=-1):
         """🎶🎵🎶 🎃 🪬 🎃 🎶🎵🎶"""
         rng = random.randint
         guests = [s[0] for s in composite_index()]
@@ -468,9 +468,9 @@ class Candelabrum:
             else:
                 attendees.append(guests[0])
                 break
-        self.make_offering(attendees, cook_time=cook_time, epochs=epochs)
+        self.make_offering(attendees, epochs=epochs)
 
-    def make_offering(self, paterae, cook_time=0, epochs=-1, trim=34):
+    def make_offering(self, paterae, epochs=-1, trim=34):
         """Spend time with the Norn researching candles."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
@@ -478,8 +478,6 @@ class Candelabrum:
             paterae = ivy_watchlist
         epoch = 0
         aeternalis = True
-        fib_seq = icy.FibonacciSequencer().skip(3).next(n=9)
-        fib_seq.reverse()
         paterae = {s: get_daily(s) for s in paterae}
         for offering, candles in paterae.items():
             paterae[offering] = candles.merge(
@@ -487,22 +485,19 @@ class Candelabrum:
                 left_index=True,
                 right_index=True,
                 )[trim:]
+        features = list(paterae.keys())[0]
+        features = len(paterae[features].keys())
+        moirai = ThreeBlindMice(features=features, verbosity=1)
         loop_start = time.time()
         while aeternalis:
-            for batch_size in fib_seq:
-                moirai = ThreeBlindMice(
-                    batch_size=batch_size,
-                    cook_time=cook_time,
-                    verbosity=1,
-                    )
-                for offering, candles in paterae.items():
-                    print(self._PREFIX, f'Research of {offering} has started.')
-                    offering_start = time.time()
-                    predictions = moirai.research(offering, candles)
-                    elapsed = time.time() - offering_start
-                    message = f'Research of {offering} complete after'
-                    message = format_time(elapsed, message=message)
-                    print(self._PREFIX, f'{message}.\n')
+            for offering, candles in paterae.items():
+                print(self._PREFIX, f'Research of {offering} has started.')
+                offering_start = time.time()
+                predictions = moirai.research(offering, candles)
+                elapsed = time.time() - offering_start
+                message = f'Research of {offering} complete after'
+                message = format_time(elapsed, message=message)
+                print(self._PREFIX, f'{message}.\n')
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
