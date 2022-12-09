@@ -43,7 +43,6 @@ class ThreeBlindMice(nn.Module):
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'momentum': phi * (phi - 1),
-            'tolerance': iota ** phi,
             'weight_decay': iota / phi,
             }
         self._prefix_ = prefix = 'Moirai:'
@@ -139,7 +138,7 @@ class ThreeBlindMice(nn.Module):
         y_p = predictions.detach().cpu().numpy()
         y_t = targets.detach().cpu().numpy()
         y_t = np.vstack([y_t, [None, None, None]])
-        x_range = range(0, y_p.shape[0] * 4, 4)
+        x_range = range(0, y_p.shape[0] * 5, 5)
         n_y = 0
         for r_x in x_range:
             n_x = 0
@@ -160,7 +159,7 @@ class ThreeBlindMice(nn.Module):
         title += f'Accuracy: {accuracy}, '
         title += f'Epochs: {epoch}, '
         fig.suptitle(title, fontsize=13)
-        plt.savefig(f'{self._epochs_path_}/{symbol}-{int(time.time())}.png')
+        plt.savefig(f'{self._epochs_path_}/{int(time.time())}.png')
         plt.clf()
         plt.close()
 
@@ -188,8 +187,8 @@ class ThreeBlindMice(nn.Module):
         bubbles = bubbles.view(bubbles.shape[0], dim, dim, dim)
         bubbles = self.stir(bubbles)
         sigil = bubbles.mean(3).sum(2).mean(1).softmax(0)
-        candles = bubbles[torch.topk(sigil, 3)[1]]
-        candles = candles.mean(3).sum(2).mean(1).softmax(0)
+        candles = bubbles[torch.topk(sigil, 3)[1]].mean(3).sum(2)
+        candles = torch.topk(candles, 1)[0].squeeze(1).softmax(0)
         return candles.clone()
 
     def research(self, offering, dataframe, plot=True):

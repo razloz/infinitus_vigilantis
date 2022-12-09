@@ -458,17 +458,29 @@ class Candelabrum:
 
     def alpaca_jazz(self, attendants=8, epochs=-1):
         """🎶🎵🎶 🎃 🪬 🎃 🎶🎵🎶"""
-        rng = random.randint
+        attendance = 0
+        att_msg = 'Current attendance is {} with {} guests remaining.'
         guests = [s[0] for s in composite_index()]
-        attendees = list()
-        for admission in range(attendants):
-            remaining_guests = len(guests) - 1
-            if remaining_guests != 0:
-                attendees.append(guests.pop(rng(0, remaining_guests)))
-            else:
-                attendees.append(guests[0])
-                break
-        self.make_offering(attendees, epochs=epochs)
+        prefix = self._PREFIX
+        rng = random.randint
+        print(prefix, f'The jazz recital with {len(guests)} patrons begins.')
+        recital_start = time.time()
+        while len(guests) > 0:
+            attendees = list()
+            for admission in range(attendants):
+                remaining_guests = len(guests) - 1
+                if remaining_guests != 0:
+                    attendees.append(guests.pop(rng(0, remaining_guests)))
+                else:
+                    attendees.append(guests.pop(0))
+                    break
+            attendance += len(attendees)
+            self.make_offering(attendees, epochs=epochs)
+            print(prefix, att_msg.format(attendance, remaining_guests))
+            elapsed = time.time() - recital_start
+            message = format_time(elapsed, message='Recital elapsed time is')
+            print(prefix, f'{message}.')
+        print(prefix, 'The recital comes to an end.')
 
     def make_offering(self, paterae, epochs=-1, trim=34):
         """Spend time with the Norn researching candles."""
