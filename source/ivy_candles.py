@@ -456,7 +456,7 @@ class Candelabrum:
             'vol_wma_price': float(day_data['vol_wma_price'].mean()),
             }
 
-    def alpaca_jazz(self, attendants=8, epochs=-1):
+    def alpaca_jazz(self, attendants=8, cook_time=0, epochs=-1):
         """🎶🎵🎶 🎃 🪬 🎃 🎶🎵🎶"""
         attendance = 0
         att_msg = 'Current attendance is {} with {} guests remaining.'
@@ -475,14 +475,14 @@ class Candelabrum:
                     attendees.append(guests.pop(0))
                     break
             attendance += len(attendees)
-            self.make_offering(attendees, epochs=epochs)
+            self.make_offering(attendees, cook_time=cook_time, epochs=epochs)
             print(prefix, att_msg.format(attendance, remaining_guests))
             elapsed = time.time() - recital_start
             message = format_time(elapsed, message='Recital elapsed time is')
             print(prefix, f'{message}.')
         print(prefix, 'The recital comes to an end.')
 
-    def make_offering(self, paterae, epochs=-1, trim=34):
+    def make_offering(self, paterae, cook_time=0, epochs=-1, trim=34):
         """Spend time with the Norn researching candles."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
@@ -499,7 +499,11 @@ class Candelabrum:
                 )[trim:]
         features = list(paterae.keys())[0]
         features = len(paterae[features].keys())
-        moirai = ThreeBlindMice(features=features, verbosity=1)
+        moirai = ThreeBlindMice(
+            cook_time=cook_time,
+            features=features,
+            verbosity=1,
+            )
         loop_start = time.time()
         while aeternalis:
             for offering, candles in paterae.items():

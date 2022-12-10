@@ -18,7 +18,7 @@ __license__ = 'GPL v3'
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, *args, features=0, verbosity=0, **kwargs):
+    def __init__(self, *args, cook_time=0, features=0, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         iota = 1 / 137
@@ -33,13 +33,13 @@ class ThreeBlindMice(nn.Module):
             'batch_size': 34,
             'batch_step': 17,
             'cluster_shape': 3,
-            'cook_time': 30,
-            'dim': 9,
+            'cook_time': cook_time,
+            'dim': 5,
             'dropout': iota,
             'eps': iota * 1e-6,
             'features': int(features),
-            'hidden': 9 ** 3,
-            'layers': 18,
+            'hidden': 5 ** 3,
+            'layers': 128,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'momentum': phi * (phi - 1),
@@ -85,10 +85,11 @@ class ThreeBlindMice(nn.Module):
             'acc': [0, 0],
             'epochs': 0,
             'loss': 0,
-            'predictions': list(),
             })
+        self.predictions = nn.ParameterDict()
         self.verbosity = int(verbosity)
         self.to(self._device_)
+        self.__manage_state__(call_type=0)
         if self.verbosity > 1:
             for key, value in constants.items():
                 print(prefix, f'set {key} to {value}')
@@ -107,11 +108,14 @@ class ThreeBlindMice(nn.Module):
                 self.load_state_dict(state['moirai'])
                 for key, value in state['metrics'].items():
                     self.metrics[key] = value
+                for key, value in state['predictions'].items():
+                    self.predictions[key] = value
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             except FileNotFoundError:
-                self.metrics['epochs'] = 0
-                self.metrics['predictions'] = list()
+                if not singular:
+                    self.metrics['epochs'] = 0
+                    self.predictions = nn.ParameterDict()
                 self.__manage_state__(call_type=1)
             except Exception as details:
                 if self.verbosity > 1:
@@ -121,6 +125,7 @@ class ThreeBlindMice(nn.Module):
                 {
                     'metrics': self.metrics,
                     'moirai': self.state_dict(),
+                    'predictions': self.predictions,
                     },
                 state_path,
                 )
@@ -182,16 +187,16 @@ class ThreeBlindMice(nn.Module):
         constants = self._constants_
         batch = constants['batch_step']
         dim = constants['dim']
+        inscribe = torch.topk
         candles = self.melt(candles)
         bubbles = self.cauldron(candles)[1]
         bubbles = bubbles.view(bubbles.shape[0], dim, dim, dim)
         bubbles = self.stir(bubbles)
-        sigil = bubbles.mean(3).sum(2).mean(1).softmax(0)
-        candles = bubbles[torch.topk(sigil, 3)[1]].mean(3).sum(2)
-        candles = torch.topk(candles, 1)[0].squeeze(1).softmax(0)
+        candles = inscribe(bubbles, 1)[0].flatten(0)
+        candles = inscribe(candles, 3)[0].softmax(0)
         return candles.clone()
 
-    def research(self, offering, dataframe, plot=True):
+    def research(self, offering, dataframe, plot=True, keep_predictions=True):
         """Moirai research session, fully stocked with cheese and drinks."""
         symbol = self._symbol_ = str(offering).upper()
         constants = self._constants_
@@ -208,9 +213,7 @@ class ThreeBlindMice(nn.Module):
         hstack = torch.hstack
         vstack = torch.vstack
         data_len = len(dataframe)
-        if data_len >= batch * 2:
-            self.__manage_state__(call_type=0)
-        else:
+        if data_len < batch * 2:
             return False
         while data_len % batch != 0:
             dataframe = dataframe[1:]
@@ -287,7 +290,8 @@ class ThreeBlindMice(nn.Module):
         targets = vstack(targets)
         if plot:
             self.__time_plot__(predictions, targets)
-        self.metrics['predictions'] = predictions.flatten(0).tolist()
+        if keep_predictions:
+            self.predictions[symbol] = predictions.flatten(0).tolist()
         if verbosity == 1:
             prefix = self._prefix_
             print(prefix, 'prediction tail:', predictions[-1].tolist())
