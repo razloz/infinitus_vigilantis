@@ -26,7 +26,7 @@ if __name__ == '__main__':
     p.add_argument('--jazz', action='store_true',
                    help='Alpaca jazz recital.')
     p.add_argument('--study', action='store_true',
-                   help='Quick study of the watch list.')
+                   help='Quick study session.')
     p.add_argument('--start_date', help='Defaults to 2019-01-01.')
     p.add_argument('--end_date', help='Defaults to today.')
     vt = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
@@ -39,12 +39,12 @@ if __name__ == '__main__':
     elif args.clean:
         updater.Candelabrum().clean_candelabrum()
     elif args.tlc:
-        updater.Candelabrum().make_offering(None, epochs=4320)
+        updater.Candelabrum().make_offering(None, cook_time=60, epochs=4320)
     elif args.indicators:
         updater.Candelabrum().apply_indicators()
     elif args.jazz:
-        updater.Candelabrum().alpaca_jazz(attendants=12, epochs=1)
+        updater.Candelabrum().alpaca_jazz(attendants=18, cook_time=60, epochs=1)
     elif args.study:
-        updater.Candelabrum().make_offering(None, epochs=180)
+        updater.Candelabrum().alpaca_jazz(attendants=18, cook_time=0, epochs=1)
     else:
         print('Missing argument.')
