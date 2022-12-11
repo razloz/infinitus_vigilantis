@@ -25,6 +25,8 @@ if __name__ == '__main__':
                    help='Build historical indicators.')
     p.add_argument('--jazz', action='store_true',
                    help='Alpaca jazz recital.')
+    p.add_argument('--pick', action='store_true',
+                   help='Select best candles for trading.')
     p.add_argument('--study', action='store_true',
                    help='Quick study session.')
     p.add_argument('--start_date', help='Defaults to 2019-01-01.')
@@ -43,8 +45,10 @@ if __name__ == '__main__':
     elif args.indicators:
         updater.Candelabrum().apply_indicators()
     elif args.jazz:
-        updater.Candelabrum().alpaca_jazz(attendants=18, cook_time=60, epochs=1)
+        updater.Candelabrum().alpaca_jazz(attendants=34, cook_time=60, epochs=1)
+    elif args.pick:
+        updater.Candelabrum().pick_candles(10)
     elif args.study:
-        updater.Candelabrum().alpaca_jazz(attendants=18, cook_time=0, epochs=1)
+        updater.Candelabrum().alpaca_jazz(attendants=34, cook_time=0, epochs=1)
     else:
         print('Missing argument.')
