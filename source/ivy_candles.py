@@ -521,6 +521,11 @@ class Candelabrum:
             message = f'({epoch}) Aeternalis elapsed time is'
             print(self._PREFIX, format_time(elapsed, message=message))
 
+    def pick_candles(self, num, signal='buy'):
+        moirai = ThreeBlindMice(verbosity=1)
+        candles = moirai.read_sigil(num=num, signal=signal)
+        return candles
+
     def candle_maker(self, candles):
         """Makes a candle."""
         if len(candles) > 0 and type(candles) == pd.Series:

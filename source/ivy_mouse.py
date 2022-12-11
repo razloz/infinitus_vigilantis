@@ -18,7 +18,7 @@ __license__ = 'GPL v3'
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, *args, cook_time=0, features=0, verbosity=0, **kwargs):
+    def __init__(self, *args, cook_time=0, features=28, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         iota = 1 / 137
@@ -39,7 +39,7 @@ class ThreeBlindMice(nn.Module):
             'eps': iota * 1e-6,
             'features': int(features),
             'hidden': 5 ** 3,
-            'layers': 128,
+            'layers': 512,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'momentum': phi * (phi - 1),
@@ -81,11 +81,8 @@ class ThreeBlindMice(nn.Module):
             kernel_size=constants['cluster_shape'],
             **self._p_tensor_,
             )
-        self.metrics = nn.ParameterDict({
-            'acc': [0, 0],
-            'epochs': 0,
-            'loss': 0,
-            })
+        self.epochs = 0
+        self.metrics = nn.ParameterDict()
         self.predictions = nn.ParameterDict()
         self.verbosity = int(verbosity)
         self.to(self._device_)
@@ -94,6 +91,20 @@ class ThreeBlindMice(nn.Module):
             for key, value in constants.items():
                 print(prefix, f'set {key} to {value}')
             print('')
+
+    def __chitchat__(self, prediction_tail, target_tail):
+        """Chat with the mice about candles and things."""
+        prefix = self._prefix_
+        symbol = self._symbol_
+        print(prefix, 'signal:', self.metrics[symbol]['signal'])
+        print(prefix, 'prediction tail:', prediction_tail.tolist())
+        print(prefix, 'target tail:', target_tail.tolist())
+        print(prefix, 'accuracy:', self.metrics[symbol]['acc'])
+        print(prefix, 'percent correct:', self.metrics[symbol]['acc_pct'])
+        print(prefix, 'confidence:', self.metrics[symbol]['confidence'])
+        print(prefix, 'loss:', self.metrics[symbol]['loss'])
+        print(prefix, 'epochs:', self.metrics[symbol]['epochs'])
+        print(prefix, 'total epochs:', self.epochs)
 
     def __manage_state__(self, call_type=0, singular=True):
         """Handles loading and saving of the RNN state."""
@@ -106,8 +117,10 @@ class ThreeBlindMice(nn.Module):
             try:
                 state = torch.load(state_path, map_location=self._device_type_)
                 self.load_state_dict(state['moirai'])
+                self.epochs = state['epochs']
                 for key, value in state['metrics'].items():
                     self.metrics[key] = value
+                    print(key, value, self.metrics[key])
                 for key, value in state['predictions'].items():
                     self.predictions[key] = value
                 if self.verbosity > 2:
@@ -123,6 +136,7 @@ class ThreeBlindMice(nn.Module):
         elif call_type == 1:
             torch.save(
                 {
+                    'epochs': self.epochs,
                     'metrics': self.metrics,
                     'moirai': self.state_dict(),
                     'predictions': self.predictions,
@@ -138,8 +152,6 @@ class ThreeBlindMice(nn.Module):
         ax.grid(True, color=(0.6, 0.6, 0.6))
         ax.set_ylabel('Probability', fontweight='bold')
         ax.set_xlabel('Batch', fontweight='bold')
-        accuracy = self.metrics['acc']
-        epoch = self.metrics['epochs']
         y_p = predictions.detach().cpu().numpy()
         y_t = targets.detach().cpu().numpy()
         y_t = np.vstack([y_t, [None, None, None]])
@@ -160,6 +172,8 @@ class ThreeBlindMice(nn.Module):
                 n_x += 1
             n_y += 1
         symbol = self._symbol_
+        accuracy = self.metrics[symbol]['acc']
+        epoch = self.metrics[symbol]['epochs']
         title = f'{symbol}\n'
         title += f'Accuracy: {accuracy}, '
         title += f'Epochs: {epoch}, '
@@ -218,6 +232,17 @@ class ThreeBlindMice(nn.Module):
         while data_len % batch != 0:
             dataframe = dataframe[1:]
             data_len = len(dataframe)
+        if symbol not in self.metrics.keys():
+            self.metrics[symbol] = {
+                'acc': [0, 0],
+                'acc_pct': 0,
+                'confidence': 0,
+                'epochs': 0,
+                'loss': 0,
+                'rank': 0,
+                'signal': 'neutral',
+                'symbol': symbol,
+                }
         cheese = tensor(
             dataframe.to_numpy(),
             requires_grad=True,
@@ -225,7 +250,7 @@ class ThreeBlindMice(nn.Module):
             )
         sample = TensorDataset(cheese)
         candles = DataLoader(sample, batch_size=batch)
-        self.metrics['loss'] = 0
+        self.metrics[symbol]['loss'] = 0
         epochs = 0
         cooking = True
         t_cook = time.time()
@@ -236,7 +261,7 @@ class ThreeBlindMice(nn.Module):
         targets = list()
         n_split = int(batch / 2)
         while cooking:
-            self.metrics['acc'] = [0, 0]
+            self.metrics[symbol]['acc'] = [0, 0]
             predictions = list()
             targets = list()
             for candle in iter(candles):
@@ -258,46 +283,75 @@ class ThreeBlindMice(nn.Module):
                 optimizer.step()
                 predictions.append(coated_candles)
                 targets.append(target_tmp.clone())
-                adj_loss = sqrt(loss.item())
+                adj_loss = sqrt(loss.item()) / 3
                 if coated_candles.argmax(0) == target_tmp.argmax(0):
                     correct = 1
                 else:
                     correct = 0
-                self.metrics['acc'][0] += correct
-                self.metrics['acc'][1] += 1
-                self.metrics['loss'] += adj_loss
+                self.metrics[symbol]['acc'][0] += correct
+                self.metrics[symbol]['acc'][1] += 1
+                self.metrics[symbol]['loss'] += adj_loss
                 if verbosity == 3:
-                    prefix = self._prefix_
-                    print(prefix, 'prediction tail:', predictions[-1].tolist())
-                    print(prefix, 'target tail:', targets[-1].tolist())
-                    print(prefix, 'accuracy:', self.metrics['acc'])
-                    print(prefix, 'loss:', self.metrics['loss'])
-                    print(prefix, 'epochs:', self.metrics['epochs'])
-            self.metrics['epochs'] += 1
-            epochs += 1
+                    self.__chitchat__(predictions[-1], targets[-1])
+            self.epochs += 1
+            self.metrics[symbol]['epochs'] += 1
             if verbosity == 2:
-                prefix = self._prefix_
-                print(prefix, 'prediction tail:', predictions[-1].tolist())
-                print(prefix, 'target tail:', targets[-1].tolist())
-                print(prefix, 'accuracy:', self.metrics['acc'])
-                print(prefix, 'loss:', self.metrics['loss'])
-                print(prefix, 'epochs:', self.metrics['epochs'])
+                self.__chitchat__(predictions[-1], targets[-1])
             if time.time() - t_cook >= cook_time:
                 cooking = False
-        self.metrics['loss'] = self.metrics['loss'] / epochs
         predictions.append(research(cheese[-batch:], study=False))
         predictions = vstack(predictions)
         targets = vstack(targets)
+        correct, epochs = self.metrics[symbol]['acc']
+        self.metrics[symbol]['acc_pct'] = 1 + (correct - epochs) / epochs
+        signal = predictions[-1].max(0)
+        self.metrics[symbol]['confidence'] = signal[0].item()
+        signal = signal[1].item()
+        if signal == 0:
+            self.metrics[symbol]['signal'] = 'buy'
+        elif signal == 1:
+            self.metrics[symbol]['signal'] = 'neutral'
+        else:
+            self.metrics[symbol]['signal'] = 'sell'
+        self.metrics[symbol]['loss'] = self.metrics[symbol]['loss'] / epochs
         if plot:
             self.__time_plot__(predictions, targets)
         if keep_predictions:
             self.predictions[symbol] = predictions.flatten(0).tolist()
         if verbosity == 1:
-            prefix = self._prefix_
-            print(prefix, 'prediction tail:', predictions[-1].tolist())
-            print(prefix, 'target tail:', targets[-1].tolist())
-            print(prefix, 'accuracy:', self.metrics['acc'])
-            print(prefix, 'loss:', self.metrics['loss'])
-            print(prefix, 'epochs:', self.metrics['epochs'])
+            self.__chitchat__(predictions[-2], targets[-1])
         self.__manage_state__(call_type=1)
         return True
+
+    def read_sigil(self, num=0, signal='buy'):
+        picks = dict()
+        print(self.metrics)
+        for sym_metrics in self.metrics.values():
+            print(sym_metrics)
+            for metrics in sym_metrics.values():
+                print(metrics)
+                sym_signal = metrics['signal']
+                if sym_signal == signal:
+                    acc_pct = round(metrics['acc_pct'], 4)
+                    if acc_pct not in picks.keys():
+                        picks[acc_pct] = dict()
+                    picks[acc_pct][symbol] = dict(metrics)
+        picks = dict(sorted(picks))
+        best = dict()
+        for acc_pct, metrics in picks.items():
+            confidence = round(metrics['confidence'], 4)
+            if confidence not in best.keys():
+                best[confidence] = dict()
+            best[confidence][acc_pct] = metrics
+        best = dict(sorted(best))
+        inscribed_candles = list()
+        count = 0
+        for first_sigil in best.values():
+            for second_sigil in first_sigil.values():
+                inscribed_candles.append(second_sigil)
+                count = len(inscription)
+                if count == num:
+                    break
+        if self.verbosity > 0:
+            print(f'{self._prefix_}\n{inscribed_candles}')
+        return inscribed_candles
