@@ -1,4 +1,5 @@
 """Three blind mice to predict the future."""
+import json
 import time
 import torch
 import traceback
@@ -9,7 +10,7 @@ from torch import nn
 from torch.optim import Adagrad
 from torch.utils.data import DataLoader, TensorDataset
 from math import sqrt, inf
-from os import mkdir
+from os import listdir, mkdir
 from os.path import abspath, exists
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
@@ -29,6 +30,8 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._state_path_): mkdir(self._state_path_)
         self._epochs_path_ = abspath('./rnn/epochs')
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
+        self._sigil_path_ = abspath('./rnn/sigil')
+        if not exists(self._sigil_path_): mkdir(self._sigil_path_)
         self._constants_ = constants = {
             'batch_size': 34,
             'batch_step': 17,
@@ -82,8 +85,7 @@ class ThreeBlindMice(nn.Module):
             **self._p_tensor_,
             )
         self.epochs = 0
-        self.metrics = nn.ParameterDict()
-        self.predictions = nn.ParameterDict()
+        self.metrics = dict()
         self.verbosity = int(verbosity)
         self.to(self._device_)
         self.__manage_state__(call_type=0)
@@ -95,16 +97,16 @@ class ThreeBlindMice(nn.Module):
     def __chitchat__(self, prediction_tail, target_tail):
         """Chat with the mice about candles and things."""
         prefix = self._prefix_
-        symbol = self._symbol_
-        print(prefix, 'signal:', self.metrics[symbol]['signal'])
-        print(prefix, 'prediction tail:', prediction_tail.tolist())
-        print(prefix, 'target tail:', target_tail.tolist())
-        print(prefix, 'accuracy:', self.metrics[symbol]['acc'])
-        print(prefix, 'percent correct:', self.metrics[symbol]['acc_pct'])
-        print(prefix, 'confidence:', self.metrics[symbol]['confidence'])
-        print(prefix, 'loss:', self.metrics[symbol]['loss'])
-        print(prefix, 'epochs:', self.metrics[symbol]['epochs'])
+        for key, value in self.metrics.items():
+            if key == 'predictions':
+                continue
+            elif key in ['acc_pct', 'confidence']:
+                value = f'{value}%'
+            print(prefix, f'{key}:', value)
         print(prefix, 'total epochs:', self.epochs)
+        if self.verbosity > 1:
+            print(prefix, 'prediction tail:', prediction_tail.tolist())
+            print(prefix, 'target tail:', target_tail.tolist())
 
     def __manage_state__(self, call_type=0, singular=True):
         """Handles loading and saving of the RNN state."""
@@ -118,29 +120,18 @@ class ThreeBlindMice(nn.Module):
                 state = torch.load(state_path, map_location=self._device_type_)
                 self.load_state_dict(state['moirai'])
                 self.epochs = state['epochs']
-                for key, value in state['metrics'].items():
-                    self.metrics[key] = value
-                    print(key, value, self.metrics[key])
-                for key, value in state['predictions'].items():
-                    self.predictions[key] = value
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             except FileNotFoundError:
                 if not singular:
-                    self.metrics['epochs'] = 0
-                    self.predictions = nn.ParameterDict()
+                    self.epochs = 0
                 self.__manage_state__(call_type=1)
             except Exception as details:
                 if self.verbosity > 1:
                     print(self._prefix_, *details.args)
         elif call_type == 1:
             torch.save(
-                {
-                    'epochs': self.epochs,
-                    'metrics': self.metrics,
-                    'moirai': self.state_dict(),
-                    'predictions': self.predictions,
-                    },
+                {'epochs': self.epochs, 'moirai': self.state_dict()},
                 state_path,
                 )
             if self.verbosity > 2:
@@ -172,12 +163,15 @@ class ThreeBlindMice(nn.Module):
                 n_x += 1
             n_y += 1
         symbol = self._symbol_
-        accuracy = self.metrics[symbol]['acc']
-        epoch = self.metrics[symbol]['epochs']
-        title = f'{symbol}\n'
-        title += f'Accuracy: {accuracy}, '
-        title += f'Epochs: {epoch}, '
-        fig.suptitle(title, fontsize=13)
+        accuracy = self.metrics['acc_pct']
+        confidence = self.metrics['confidence']
+        epoch = self.epochs
+        signal = self.metrics['signal']
+        title = f'{symbol} ({signal})\n'
+        title += f'{accuracy}% correct, '
+        title += f'{confidence}% confident, '
+        title += f'{epoch} epochs.'
+        fig.suptitle(title, fontsize=11)
         plt.savefig(f'{self._epochs_path_}/{int(time.time())}.png')
         plt.clf()
         plt.close()
@@ -213,61 +207,53 @@ class ThreeBlindMice(nn.Module):
     def research(self, offering, dataframe, plot=True, keep_predictions=True):
         """Moirai research session, fully stocked with cheese and drinks."""
         symbol = self._symbol_ = str(offering).upper()
-        constants = self._constants_
         verbosity = self.verbosity
+        constants = self._constants_
         batch = constants['batch_size']
-        step = constants['batch_step']
-        batch_range = range(batch - 2)
+        data_len = len(dataframe)
+        batch_error = f'{self._prefix_} {symbol} data less than batch size.'
+        if data_len < batch:
+            if verbosity > 1:
+                print(batch_error)
+            return False
+        while data_len % batch != 0:
+            dataframe = dataframe[1:]
+            data_len = len(dataframe)
+            if data_len < batch:
+                if verbosity > 1:
+                    print(batch_error)
+                return False
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
         optimizer = self.optimizer
         p_tensor = self._p_tensor_
         research = self.__time_step__
+        step = constants['batch_step']
         tensor = torch.tensor
-        hstack = torch.hstack
         vstack = torch.vstack
-        data_len = len(dataframe)
-        if data_len < batch * 2:
-            return False
-        while data_len % batch != 0:
-            dataframe = dataframe[1:]
-            data_len = len(dataframe)
-        if symbol not in self.metrics.keys():
-            self.metrics[symbol] = {
-                'acc': [0, 0],
-                'acc_pct': 0,
-                'confidence': 0,
-                'epochs': 0,
-                'loss': 0,
-                'rank': 0,
-                'signal': 'neutral',
-                'symbol': symbol,
-                }
-        cheese = tensor(
-            dataframe.to_numpy(),
-            requires_grad=True,
-            **p_tensor,
-            )
+        self.metrics = {
+            'acc': [0, 0],
+            'acc_pct': 0,
+            'confidence': 0,
+            'loss': 0,
+            'predictions': [],
+            'signal': 'neutral',
+            'symbol': symbol,
+            }
+        cheese = tensor(dataframe.to_numpy(), requires_grad=True, **p_tensor)
         sample = TensorDataset(cheese)
         candles = DataLoader(sample, batch_size=batch)
-        self.metrics[symbol]['loss'] = 0
-        epochs = 0
+        target_tmp = tensor([0, 1, 0], **p_tensor)
         cooking = True
         t_cook = time.time()
-        target_tmp = tensor(
-            [0, 1, 0],
-            **p_tensor,
-            )
-        targets = list()
-        n_split = int(batch / 2)
         while cooking:
-            self.metrics[symbol]['acc'] = [0, 0]
+            self.metrics['acc'] = [0, 0]
             predictions = list()
             targets = list()
             for candle in iter(candles):
                 candle = candle[0]
-                target = candle[n_split:]
-                candle = candle[:n_split]
+                target = candle[step:]
+                candle = candle[:step]
                 coated_candles = research(candle, study=True)
                 target_tmp *= 0
                 cdl_mean = candle[:, :4].mean(1).mean(0)
@@ -288,70 +274,92 @@ class ThreeBlindMice(nn.Module):
                     correct = 1
                 else:
                     correct = 0
-                self.metrics[symbol]['acc'][0] += correct
-                self.metrics[symbol]['acc'][1] += 1
-                self.metrics[symbol]['loss'] += adj_loss
+                self.metrics['acc'][0] += correct
+                self.metrics['acc'][1] += 1
+                self.metrics['loss'] += adj_loss
                 if verbosity == 3:
                     self.__chitchat__(predictions[-1], targets[-1])
             self.epochs += 1
-            self.metrics[symbol]['epochs'] += 1
             if verbosity == 2:
                 self.__chitchat__(predictions[-1], targets[-1])
             if time.time() - t_cook >= cook_time:
                 cooking = False
-        predictions.append(research(cheese[-batch:], study=False))
+        predictions.append(research(cheese[-step:], study=False))
         predictions = vstack(predictions)
         targets = vstack(targets)
-        correct, epochs = self.metrics[symbol]['acc']
-        self.metrics[symbol]['acc_pct'] = 1 + (correct - epochs) / epochs
+        correct, epochs = self.metrics['acc']
+        acc_pct = 100 * (1 + (correct - epochs) / epochs)
+        self.metrics['acc_pct'] = round(acc_pct, 2)
         signal = predictions[-1].max(0)
-        self.metrics[symbol]['confidence'] = signal[0].item()
+        confidence = 100 * signal[0].item()
+        self.metrics['confidence'] = round(confidence, 2)
         signal = signal[1].item()
         if signal == 0:
-            self.metrics[symbol]['signal'] = 'buy'
+            self.metrics['signal'] = 'buy'
         elif signal == 1:
-            self.metrics[symbol]['signal'] = 'neutral'
+            self.metrics['signal'] = 'neutral'
         else:
-            self.metrics[symbol]['signal'] = 'sell'
-        self.metrics[symbol]['loss'] = self.metrics[symbol]['loss'] / epochs
+            self.metrics['signal'] = 'sell'
+        self.metrics['loss'] = self.metrics['loss'] / epochs
         if plot:
             self.__time_plot__(predictions, targets)
         if keep_predictions:
-            self.predictions[symbol] = predictions.flatten(0).tolist()
+            sigil_path = f'{self._sigil_path_}/{symbol}.sigil'
+            self.metrics['predictions'] = predictions.flatten(0).tolist()
+            with open(sigil_path, 'w+') as file_obj:
+                file_obj.write(json.dumps(self.metrics))
         if verbosity == 1:
             self.__chitchat__(predictions[-2], targets[-1])
         self.__manage_state__(call_type=1)
         return True
 
     def read_sigil(self, num=0, signal='buy'):
+        """Translate the inscribed sigils."""
+        sigil_path = self._sigil_path_
+        sigil_files = listdir(sigil_path)
         picks = dict()
-        print(self.metrics)
-        for sym_metrics in self.metrics.values():
-            print(sym_metrics)
-            for metrics in sym_metrics.values():
-                print(metrics)
-                sym_signal = metrics['signal']
+        for file_name in sigil_files:
+            if file_name[-6:] == '.sigil':
+                file_path = abspath(f'{sigil_path}/{file_name}')
+                with open(file_path, 'r') as file_obj:
+                    sigil = json.loads(file_obj.read())
+                sym_signal = sigil['signal']
                 if sym_signal == signal:
-                    acc_pct = round(metrics['acc_pct'], 4)
-                    if acc_pct not in picks.keys():
-                        picks[acc_pct] = dict()
-                    picks[acc_pct][symbol] = dict(metrics)
-        picks = dict(sorted(picks))
+                    confidence = sigil['confidence']
+                    if confidence not in picks.keys():
+                        picks[confidence] = dict()
+                    symbol = sigil['symbol']
+                    picks[confidence][symbol] = sigil
+        picks = {k: picks[k] for k in sorted(picks, reverse=True)}
         best = dict()
-        for acc_pct, metrics in picks.items():
-            confidence = round(metrics['confidence'], 4)
-            if confidence not in best.keys():
-                best[confidence] = dict()
-            best[confidence][acc_pct] = metrics
-        best = dict(sorted(best))
+        for confidence, symbols in picks.items():
+            for symbol, metrics in symbols.items():
+                acc_pct = metrics['acc_pct']
+                if acc_pct not in best.keys():
+                    best[acc_pct] = dict()
+                best[acc_pct][confidence] = metrics
+        best = {k: best[k] for k in sorted(best, reverse=True)}
         inscribed_candles = list()
         count = 0
         for first_sigil in best.values():
+            if count == num:
+                break
             for second_sigil in first_sigil.values():
                 inscribed_candles.append(second_sigil)
-                count = len(inscription)
+                count = len(inscribed_candles)
                 if count == num:
                     break
         if self.verbosity > 0:
-            print(f'{self._prefix_}\n{inscribed_candles}')
+            prefix = self._prefix_
+            count = 0
+            for inscription in inscribed_candles:
+                count += 1
+                print(prefix, f'#{count} sigil.')
+                for key, value in inscription.items():
+                    if key in ['predictions', 'signal']:
+                        continue
+                    elif key in ['acc_pct', 'confidence']:
+                        value = f'{value}%'
+                    print(prefix, f'{key}:', value)
+                print('')
         return inscribed_candles

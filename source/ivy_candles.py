@@ -522,9 +522,10 @@ class Candelabrum:
             print(self._PREFIX, format_time(elapsed, message=message))
 
     def pick_candles(self, num, signal='buy'):
+        """Get top picks from the Moirai."""
         moirai = ThreeBlindMice(verbosity=1)
-        candles = moirai.read_sigil(num=num, signal=signal)
-        return candles
+        inscribed_candles = moirai.read_sigil(num=num, signal=signal)
+        return inscribed_candles
 
     def candle_maker(self, candles):
         """Makes a candle."""
