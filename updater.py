@@ -47,7 +47,7 @@ if __name__ == '__main__':
     elif args.jazz:
         updater.Candelabrum().alpaca_jazz(attendants=34, cook_time=60, epochs=1)
     elif args.pick:
-        updater.Candelabrum().pick_candles(10)
+        updater.Candelabrum().pick_candles(5)
     elif args.study:
         updater.Candelabrum().alpaca_jazz(attendants=34, cook_time=0, epochs=1)
     else:
