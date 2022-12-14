@@ -41,13 +41,13 @@ if __name__ == '__main__':
     elif args.clean:
         updater.Candelabrum().clean_candelabrum()
     elif args.tlc:
-        updater.Candelabrum().make_offering(None, cook_time=60, epochs=4320)
+        updater.Candelabrum().make_offering(None, cook_time=60, epochs=15)
     elif args.indicators:
         updater.Candelabrum().apply_indicators()
     elif args.jazz:
         updater.Candelabrum().alpaca_jazz(attendants=34, cook_time=60, epochs=1)
     elif args.pick:
-        updater.Candelabrum().pick_candles(5)
+        updater.Candelabrum().plot_signal('buy')
     elif args.study:
         updater.Candelabrum().alpaca_jazz(attendants=34, cook_time=0, epochs=1)
     else:
