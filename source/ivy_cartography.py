@@ -20,25 +20,28 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
                 chart_size=0, min_size=90, adj='1D'):
     """Charting for IVy candles."""
     global plt
-    plt.close('all')
     if not chart_path: chart_path = './charts/active.png'
     if verbose: print(f'Cartography: creating chart for {symbol}...')
-    if chart_size == 0:
-        chart_size = len(dataframe.index) - min_size
     features = ['open', 'high', 'low', 'close', 'volume',
                 'price_wema', 'volume_wema', 'price_mid', 'volume_mid',
                 'price_dh', 'volume_dh', 'price_dl', 'volume_dl',]
-    features = dataframe[features][-chart_size:]
-    data_range = range(chart_size)
+    features = dataframe[features]
+    data_len = len(features.index)
+    if chart_size == 0:
+        chart_size = data_len - min_size
+    if data_len > chart_size:
+        features = features[-chart_size:]
+        data_len = len(features.index)
+    data_range = range(data_len)
     ts_lbls = features.index.tolist()
     moirai_metrics = ''
     if cheese:
-        metrics = ['num_epochs', 'accuracy', 'mae', 'mse', 'loss',
-                   'batch_size', 'batch_pred', 'proj_gain', 'proj_time_str']
+        metrics = ['accuracy', 'acc_pct', 'confidence',
+                   'avg_conf', 'loss', 'signal']
         for metric_label in metrics:
             m_value = cheese[metric_label]
             addendum = f'{metric_label}: {m_value}'
-            if metric_label in ['accuracy', 'proj_gain']:
+            if metric_label in ['acc_pct', 'confidence', 'avg_conf']:
                 addendum += '%'
             add_len = len(addendum)
             if add_len < 80:
@@ -46,17 +49,10 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
                     addendum += ' '
             moirai_metrics += f'{addendum}\n'
         moirai_metrics = moirai_metrics[:-2]
-        batch_size = cheese['batch_size']
-        batch_range = range(batch_size)
-        chart_size = chart_size + batch_size
-        padding = [0 for _ in batch_range]
-        predictions = padding + cheese['prediction']
-        predictions = predictions[-chart_size:]
-        data_range = range(chart_size)
-        ts_lbls += [f'prediction_{int(p + 1)}' for p in batch_range]
-    fs = (19.20, 10.80)
-    dpi = 100
-    fig = plt.figure(figsize=fs, dpi=dpi, constrained_layout=False)
+        predictions = cheese['predictions']
+        if data_len > chart_size:
+            predictions = predictions[-chart_size:]
+    fig = plt.figure(figsize=(19.20, 10.80), dpi=100, constrained_layout=False)
     sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
@@ -95,8 +91,35 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     cdl_low = features.pop('low')
     cdl_close = features.pop('close')
     cdl_vol = features.pop('volume')
-    for i in range(len(cdl_close)):
+    y_loc = [ylim_low, ylim_high]
+    label_correct = False
+    label_incorrect = False
+    x_last = data_range[-1]
+    x_pred = x_last + 1
+    x_pred = [x_pred, x_pred]
+    for i in data_range:
         x_loc = [i, i]
+        # Signal
+        cdl_signal = predictions[i]
+        if cdl_signal is not None:
+            signal_label = None
+            if cdl_signal == 1:
+                signal_color = '#FFE88E' #gouda
+                if not label_correct:
+                    signal_label = 'correct'
+                    label_correct = True
+            elif cdl_signal == 0:
+                signal_color = '#FF9600' #cheddar
+                if not label_incorrect:
+                    signal_label = 'incorrect'
+                    label_incorrect = True
+            ax1.plot(x_loc, y_loc, color=signal_color, label=signal_label,
+                     linestyle='solid', linewidth=wid_cdls, alpha=0.8)
+            if i == x_last:
+                signal_color = '#F6CA7D' #american
+                signal_label = 'prediction'
+                ax1.plot(x_pred, y_loc, color=signal_color, label=signal_label,
+                         linestyle='solid', linewidth=wid_cdls, alpha=0.8)
         # Candles
         wick_data = [cdl_low[i], cdl_high[i]]
         candle_data = [cdl_close[i], cdl_open[i]]
@@ -114,28 +137,25 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
                  linestyle='solid', linewidth=wid_cdls)
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
-    if cheese:
-        pkws['linewidth'] = wid_base * 0.55
-        pkws['color'] = '#FFE88E' # gouda
-        #pkws['color'] = '#FF9600' # cheddar
-        pkws['label'] = f'Prediction:'
-        pkws['label'] += f' {round(predictions[-1], 2)}'
-        ax1.plot(range(len(predictions)), predictions, alpha=1, **pkws)
-        pkws['linewidth'] = wid_line
     for key in features.keys():
         cdl_data = features[key]
         cdl_range = range(len(cdl_data))
         pkws['label'] = f'{key}: {round(cdl_data[-1], 2)}'
+        dev_feats = ['price_mid', 'price_dh', 'price_dl',
+                     'volume_mid', 'volume_dh', 'volume_dl']
+        pkws['label'] = None
         if key == 'price_wema':
-            pkws['color'] = (0.7, 0.7, 1, 0.7)
-        elif key == 'price_mid':
             pkws['color'] = (0.4, 0.7, 0.4, 0.8)
-        else:
-            pkws['label'] = None
-        if key == 'price_dh':
-            pkws['color'] = (0.4, 0.7, 0.4, 0.8)
+            pkws['label'] = 'money'
+        elif key in dev_feats:
             pkws['linestyle'] = 'dotted'
-            pkws['linewidth'] = wid_line * 0.67
+            if key in ['price_mid', 'volume_mid']:
+                pkws['linewidth'] = wid_line * 0.67
+                if key == 'price_mid':
+                    pkws['label'] = 'stdev'
+            else:
+                pkws['linewidth'] = wid_line * 0.87
+            pkws['color'] = (0.7, 0.7, 1, 0.7)
         if key not in ['volume_wema', 'volume_mid', 'volume_dh', 'volume_dl']:
             ax1.plot(cdl_range, cdl_data, **pkws)
         else:
@@ -143,18 +163,14 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     # Finalize
     props = dict(boxstyle='round', facecolor='0.03', alpha=0.97)
     plt.gcf().text(0.01, 0.01, moirai_metrics, fontsize=14, bbox=props)
-    last_ts = batch_size + 1
-    ts = ts_lbls[-last_ts]
     res = adj if adj else 'None'
     rnc = round(cdl_close[-1], 3)
-    t = f'[ {rnc} ]   {symbol}  @  {ts} (resample: {res}'
-    if cheese:
-        t += f', batch_size: {batch_size}'
-    t += ')'
+    t = f'[ {rnc} ]   {symbol}  @  {ts_lbls[-1]} (resample: {res})'
     fig.suptitle(t, fontsize=18)
     fig.legend(ncol=1, loc='lower right', fontsize='xx-large', fancybox=True)
-    plt.savefig(str(chart_path), dpi=dpi)
-    plt.close(fig)
+    plt.savefig(str(chart_path))
+    plt.clf()
+    plt.close()
     if verbose: print("Cartography: chart's done!")
     return False
 

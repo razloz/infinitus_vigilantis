@@ -42,7 +42,7 @@ class ThreeBlindMice(nn.Module):
             'eps': iota * 1e-6,
             'features': int(features),
             'hidden': 5 ** 3,
-            'layers': 512,
+            'layers': 75,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'momentum': phi * (phi - 1),
@@ -60,8 +60,19 @@ class ThreeBlindMice(nn.Module):
             batch_first=True,
             device=self._device_,
             )
+        self.wax = nn.Transformer(
+            d_model=constants['layers'] * 27,
+            nhead=3,
+            num_encoder_layers=3,
+            num_decoder_layers=3,
+            dim_feedforward=constants['hidden'],
+            dropout=constants['dropout'],
+            activation='gelu',
+            batch_first=False,
+            **self._p_tensor_,
+            )
         self.loss_fn = torch.nn.BCELoss(
-            reduction='sum',
+            reduction='mean',
             )
         self.melt = nn.InstanceNorm1d(
             constants['features'],
@@ -75,7 +86,7 @@ class ThreeBlindMice(nn.Module):
             lr_decay=constants['lr_decay'],
             weight_decay=constants['weight_decay'],
             eps=constants['eps'],
-            foreach=True,
+            #foreach=True,
             maximize=False,
             )
         self.stir = nn.Conv3d(
@@ -100,7 +111,7 @@ class ThreeBlindMice(nn.Module):
         for key, value in self.metrics.items():
             if key == 'predictions':
                 continue
-            elif key in ['acc_pct', 'confidence']:
+            elif key in ['acc_pct', 'confidence', 'avg_conf']:
                 value = f'{value}%'
             print(prefix, f'{key}:', value)
         print(prefix, 'total epochs:', self.epochs)
@@ -164,7 +175,7 @@ class ThreeBlindMice(nn.Module):
             n_y += 1
         symbol = self._symbol_
         accuracy = self.metrics['acc_pct']
-        confidence = self.metrics['confidence']
+        confidence = self.metrics['avg_conf']
         epoch = self.epochs
         signal = self.metrics['signal']
         title = f'{symbol} ({signal})\n'
@@ -195,12 +206,15 @@ class ThreeBlindMice(nn.Module):
         constants = self._constants_
         batch = constants['batch_step']
         dim = constants['dim']
+        layers = constants['layers']
         inscribe = torch.topk
         candles = self.melt(candles)
         bubbles = self.cauldron(candles)[1]
         bubbles = bubbles.view(bubbles.shape[0], dim, dim, dim)
-        bubbles = self.stir(bubbles)
-        candles = inscribe(bubbles, 1)[0].flatten(0)
+        bubbles = self.stir(bubbles).flatten(0).unsqueeze(0)
+        wax = self.wax(bubbles, bubbles)
+        wax = wax.view(layers, 3, 3, 3)
+        candles = inscribe(wax, 1)[0].flatten(0)
         candles = inscribe(candles, 3)[0].softmax(0)
         return candles.clone()
 
@@ -232,9 +246,10 @@ class ThreeBlindMice(nn.Module):
         tensor = torch.tensor
         vstack = torch.vstack
         self.metrics = {
-            'acc': [0, 0],
+            'accuracy': [0, 0],
             'acc_pct': 0,
             'confidence': 0,
+            'avg_conf': 0,
             'loss': 0,
             'predictions': [],
             'signal': 'neutral',
@@ -247,14 +262,13 @@ class ThreeBlindMice(nn.Module):
         cooking = True
         t_cook = time.time()
         while cooking:
-            self.metrics['acc'] = [0, 0]
+            self.metrics['accuracy'] = [0, 0]
             predictions = list()
             targets = list()
             for candle in iter(candles):
                 candle = candle[0]
                 target = candle[step:]
                 candle = candle[:step]
-                coated_candles = research(candle, study=True)
                 target_tmp *= 0
                 cdl_mean = candle[:, :4].mean(1).mean(0)
                 tgt_mean = target[:, :4].mean(1).mean(0)
@@ -264,6 +278,7 @@ class ThreeBlindMice(nn.Module):
                     target_tmp[2] += 1
                 else:
                     target_tmp[1] += 1
+                coated_candles = research(candle, study=True)
                 loss = loss_fn(coated_candles, target_tmp)
                 loss.backward()
                 optimizer.step()
@@ -274,8 +289,8 @@ class ThreeBlindMice(nn.Module):
                     correct = 1
                 else:
                     correct = 0
-                self.metrics['acc'][0] += correct
-                self.metrics['acc'][1] += 1
+                self.metrics['accuracy'][0] += correct
+                self.metrics['accuracy'][1] += 1
                 self.metrics['loss'] += adj_loss
                 if verbosity == 3:
                     self.__chitchat__(predictions[-1], targets[-1])
@@ -287,7 +302,7 @@ class ThreeBlindMice(nn.Module):
         predictions.append(research(cheese[-step:], study=False))
         predictions = vstack(predictions)
         targets = vstack(targets)
-        correct, epochs = self.metrics['acc']
+        correct, epochs = self.metrics['accuracy']
         acc_pct = 100 * (1 + (correct - epochs) / epochs)
         self.metrics['acc_pct'] = round(acc_pct, 2)
         signal = predictions[-1].max(0)
@@ -301,15 +316,26 @@ class ThreeBlindMice(nn.Module):
         else:
             self.metrics['signal'] = 'sell'
         self.metrics['loss'] = self.metrics['loss'] / epochs
-        if plot:
-            self.__time_plot__(predictions, targets)
         if keep_predictions:
             sigil_path = f'{self._sigil_path_}/{symbol}.sigil'
-            self.metrics['predictions'] = predictions.flatten(0).tolist()
+            sigils = predictions.max(1)
+            inscriptions = targets.max(1)
+            nans = [None for _ in range(step)]
+            sealed_candles = list()
+            for i in range(len(inscriptions.indices)):
+                correct = sigils.indices[i] == inscriptions.indices[i]
+                sealed_candles += nans
+                sealed_candles.append(1 if correct else 0)
+                sealed_candles += nans[:-1]
+            sealed_candles.append(sigils.values[-1].item())
+            self.metrics['avg_conf'] = round(100 * sigils[0].mean(0).item(), 2)
+            self.metrics['predictions'] = sealed_candles
             with open(sigil_path, 'w+') as file_obj:
                 file_obj.write(json.dumps(self.metrics))
         if verbosity == 1:
             self.__chitchat__(predictions[-2], targets[-1])
+        if plot:
+            self.__time_plot__(predictions, targets)
         self.__manage_state__(call_type=1)
         return True
 
@@ -325,19 +351,19 @@ class ThreeBlindMice(nn.Module):
                     sigil = json.loads(file_obj.read())
                 sym_signal = sigil['signal']
                 if sym_signal == signal:
-                    confidence = sigil['confidence']
-                    if confidence not in picks.keys():
-                        picks[confidence] = dict()
+                    avg_conf = sigil['avg_conf']
+                    if avg_conf not in picks.keys():
+                        picks[avg_conf] = dict()
                     symbol = sigil['symbol']
-                    picks[confidence][symbol] = sigil
+                    picks[avg_conf][symbol] = sigil
         picks = {k: picks[k] for k in sorted(picks, reverse=True)}
         best = dict()
-        for confidence, symbols in picks.items():
+        for acc_pct, symbols in picks.items():
             for symbol, metrics in symbols.items():
                 acc_pct = metrics['acc_pct']
                 if acc_pct not in best.keys():
                     best[acc_pct] = dict()
-                best[acc_pct][confidence] = metrics
+                best[acc_pct][avg_conf] = metrics
         best = {k: best[k] for k in sorted(best, reverse=True)}
         inscribed_candles = list()
         count = 0
@@ -358,7 +384,7 @@ class ThreeBlindMice(nn.Module):
                 for key, value in inscription.items():
                     if key in ['predictions', 'signal']:
                         continue
-                    elif key in ['acc_pct', 'confidence']:
+                    elif key in ['acc_pct', 'confidence', 'avg_conf']:
                         value = f'{value}%'
                     print(prefix, f'{key}:', value)
                 print('')

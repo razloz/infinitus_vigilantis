@@ -154,7 +154,7 @@ class Candelabrum:
             ]
         for _path in sym_path:
             if not path.exists(path.abspath(_path)):
-                mkdir(c_path)
+                mkdir(_path)
         self._PREFIX = 'Candelabrum:'
         self._TIMER = icy.TimeKeeper()
         self._exceptions_ = list()
@@ -227,7 +227,7 @@ class Candelabrum:
                         candelabrum_candles,
                         cheese=sealed_package,
                         chart_path=c_path,
-                        chart_size=400,
+                        chart_size=200,
                         )
                 elif job[0] == 'clean':
                     try:
@@ -526,6 +526,21 @@ class Candelabrum:
         moirai = ThreeBlindMice(verbosity=1)
         inscribed_candles = moirai.read_sigil(num=num, signal=signal)
         return inscribed_candles
+
+    def plot_signal(self, signal, num=10, trim=34):
+        """Queues cartography jobs from top picks."""
+        get_daily = self.get_daily_candles
+        omenize = self.apply_indicators
+        inscribed_candles = self.pick_candles(num=num, signal=signal)
+        for inscription in inscribed_candles:
+            symbol = inscription['symbol']
+            candles = get_daily(symbol)
+            omens = omenize(candles)
+            candles = candles.merge(omens, left_index=True, right_index=True)
+            candles = candles[trim:]
+            self._QUEUE.put(('cartography', symbol, candles, inscription))
+        self.join_workers()
+
 
     def candle_maker(self, candles):
         """Makes a candle."""
