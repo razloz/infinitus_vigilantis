@@ -46,6 +46,7 @@ class ThreeBlindMice(nn.Module):
             'layers': 6,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
+            'mask_prob': phi - 1,
             'momentum': phi * (phi - 1),
             'tolerance': (iota * (phi - 1)) / 3,
             'weight_decay': iota / phi,
@@ -53,15 +54,6 @@ class ThreeBlindMice(nn.Module):
         self._prefix_ = prefix = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = None
-        # self.cauldron = nn.GRU(
-            # input_size=constants['features'],
-            # hidden_size=constants['hidden'],
-            # num_layers=constants['layers'],
-            # dropout=constants['dropout'],
-            # bias=True,
-            # batch_first=True,
-            # device=self._device_,
-            # )
         self.cauldron = nn.Transformer(
             d_model=constants['hidden'],
             nhead=constants['dim'],
@@ -100,12 +92,6 @@ class ThreeBlindMice(nn.Module):
             foreach=True,
             maximize=False,
             )
-        # self.stir = nn.Conv2d(
-            # in_channels=constants['batch_size'],
-            # out_channels=constants['batch_size'],
-            # kernel_size=constants['cluster_shape'],
-            # **self._p_tensor_,
-            # )
         self.activation = nn.functional.gelu
         self.epochs = 0
         self.metrics = dict()
@@ -207,12 +193,15 @@ class ThreeBlindMice(nn.Module):
         dim = constants['dim']
         fold = constants['feature_fold']
         inscribe = torch.topk
+        mask = constants['mask_prob']
         wax = self.melt(candles)
         wax = self.wax(wax[:, :fold], wax[:, fold:])
         wax = self.activation(wax)
-        bubbles = self.cauldron(wax, wax)
+        bubbles = torch.full_like(wax, mask)
+        bubbles = torch.bernoulli(bubbles)
+        bubbles = wax * bubbles
+        bubbles = self.cauldron(bubbles, bubbles)
         bubbles = bubbles.view(bubbles.shape[0], dim, dim)
-        #bubbles = self.stir(bubbles)
         candles = inscribe(bubbles, 1)[0].flatten(0)
         candles = inscribe(candles, batch * 4)[0]
         candles = candles.view(batch, 4) ** 2
