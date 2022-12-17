@@ -34,21 +34,23 @@ if __name__ == '__main__':
     vt = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
     p.add_argument('--timing', help=f'Valid times are {vt}. Defaults to 1H.')
     args = p.parse_args()
-    print('Loading IVy Updater...')
-    import source.ivy_candles as updater
+    if args:
+        print('Loading IVy Updater...')
+        import source.ivy_candles as updater
+        candelabrum = updater.Candelabrum()
+    else:
+        raise('Missing argument.')
     if args.build:
         updater.build_historical_database()
     elif args.clean:
-        updater.Candelabrum().clean_candelabrum()
+        candelabrum.clean_candelabrum()
     elif args.tlc:
-        updater.Candelabrum().make_offering(None, cook_time=60, epochs=15)
+        candelabrum.make_offering(None, cook_time=60, epochs=15)
     elif args.indicators:
-        updater.Candelabrum().apply_indicators()
+        candelabrum.apply_indicators()
     elif args.jazz:
-        updater.Candelabrum().alpaca_jazz(attendants=34, cook_time=60, epochs=1)
+        candelabrum.alpaca_jazz(attendants=89, cook_time=142, epochs=1)
     elif args.pick:
-        updater.Candelabrum().plot_signal('buy')
+        candelabrum.plot_signal('buy')
     elif args.study:
-        updater.Candelabrum().alpaca_jazz(attendants=34, cook_time=0, epochs=1)
-    else:
-        print('Missing argument.')
+        candelabrum.alpaca_jazz(attendants=89, cook_time=0, epochs=1)
