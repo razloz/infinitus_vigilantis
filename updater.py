@@ -45,7 +45,7 @@ if __name__ == '__main__':
     elif args.clean:
         candelabrum.clean_candelabrum()
     elif args.tlc:
-        candelabrum.make_offering(None, cook_time=60, epochs=15)
+        candelabrum.make_offering(None, cook_time=900, epochs=2)
     elif args.indicators:
         candelabrum.apply_indicators()
     elif args.jazz:
