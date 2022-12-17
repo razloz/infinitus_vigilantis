@@ -17,7 +17,7 @@ verbose = False
 
 
 def cartography(symbol, dataframe, chart_path=None, cheese=None,
-                chart_size=0, min_size=90, adj='1D'):
+                chart_size=0, batch_size=34, adj='1D'):
     """Charting for IVy candles."""
     global plt
     if not chart_path: chart_path = './charts/active.png'
@@ -28,7 +28,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     features = dataframe[features]
     data_len = len(features.index)
     if chart_size == 0:
-        chart_size = data_len - min_size
+        chart_size = data_len - batch_size
     if data_len > chart_size:
         features = features[-chart_size:]
         data_len = len(features.index)
@@ -36,12 +36,11 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ts_lbls = features.index.tolist()
     moirai_metrics = ''
     if cheese:
-        metrics = ['accuracy', 'acc_pct', 'confidence',
-                   'avg_conf', 'loss', 'signal']
+        metrics = ['accuracy', 'acc_pct', 'loss', 'signal']
         for metric_label in metrics:
             m_value = cheese[metric_label]
             addendum = f'{metric_label}: {m_value}'
-            if metric_label in ['acc_pct', 'confidence', 'avg_conf']:
+            if metric_label == 'acc_pct':
                 addendum += '%'
             add_len = len(addendum)
             if add_len < 80:
@@ -50,8 +49,13 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
             moirai_metrics += f'{addendum}\n'
         moirai_metrics = moirai_metrics[:-2]
         predictions = cheese['predictions']
+        signals = cheese['signals']
         if data_len > chart_size:
-            predictions = predictions[-chart_size:]
+            x_pred = chart_size + batch_size
+            predictions = predictions[-x_pred:]
+            signals = nans + signals[-x_pred:]
+            data_len = len(predictions)
+            data_range = range(data_len)
     fig = plt.figure(figsize=(19.20, 10.80), dpi=100, constrained_layout=False)
     sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
     spec = gridspec.GridSpec(**sargs)
@@ -91,50 +95,63 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     cdl_low = features.pop('low')
     cdl_close = features.pop('close')
     cdl_vol = features.pop('volume')
+    if data_len > chart_size:
+        cdl_open += [None for _ in range(batch_size)]
     y_loc = [ylim_low, ylim_high]
-    label_correct = False
-    label_incorrect = False
-    x_last = data_range[-1]
-    x_pred = x_last + 1
-    x_pred = [x_pred, x_pred]
+    labels_set = [False, False, False]
+    cheese_color = dict(cheddar='#FF9600', gouda='#FFE88E', american='#F6CA7D')
     for i in data_range:
         x_loc = [i, i]
         # Signal
         cdl_signal = predictions[i]
         if cdl_signal is not None:
             signal_label = None
-            if cdl_signal == 1:
-                signal_color = '#FFE88E' #gouda
-                if not label_correct:
-                    signal_label = 'correct'
-                    label_correct = True
-            elif cdl_signal == 0:
-                signal_color = '#FF9600' #cheddar
-                if not label_incorrect:
-                    signal_label = 'incorrect'
-                    label_incorrect = True
+            if cdl_signal == 0:
+                signal_color = cheese_color['cheddar']
+                if labels_set[0] is False:
+                    labels_set[0] = True
+                    signal_label = 'sell'
+            elif cdl_signal == 1:
+                signal_color = cheese_color['gouda']
+                if labels_set[1] is False:
+                    labels_set[1] = True
+                    signal_label = 'buy'
+            else:
+                signal_color = cheese_color['american']
+                if labels_set[2] is False:
+                    labels_set[2] = True
+                    signal_label = 'neutral'
             ax1.plot(x_loc, y_loc, color=signal_color, label=signal_label,
-                     linestyle='solid', linewidth=wid_cdls, alpha=0.8)
-            if i == x_last:
-                signal_color = '#F6CA7D' #american
-                signal_label = 'prediction'
-                ax1.plot(x_pred, y_loc, color=signal_color, label=signal_label,
-                         linestyle='solid', linewidth=wid_cdls, alpha=0.8)
+                     linestyle='solid', linewidth=wid_cdls, alpha=0.3)
+        # Predictions
+        if predictions[i] is not None:
+            prediction = predictions[i]
+            wick_data = [prediction[1], prediction[2]]
+            candle_data = [prediction[0], prediction[3]]
+            ax1.plot(x_loc, wick_data, color='white',
+                     linestyle='solid', linewidth=wid_wick, alpha=1)
+            if candle_data[1] > candle_data[0]:
+                cdl_color=cheese_color['gouda']
+            else:
+                cdl_color=cheese_color['cheddar']
+            ax1.plot(x_loc, candle_data, color=cdl_color,
+                     linestyle='solid', linewidth=wid_cdls, alpha=1)
         # Candles
-        wick_data = [cdl_low[i], cdl_high[i]]
-        candle_data = [cdl_close[i], cdl_open[i]]
-        ax1.plot(x_loc, wick_data, color='white',
-                 linestyle='solid', linewidth=wid_wick, alpha=1)
-        if cdl_close[i] > cdl_open[i]:
-            cdl_color=(0.33, 1, 0.33, 1)
-        else:
-            cdl_color=(1, 0.33, 0.33, 1)
-        ax1.plot(x_loc, candle_data, color=cdl_color,
-                 linestyle='solid', linewidth=wid_cdls, alpha=1)
-        # Volume
-        volume_data = [0, cdl_vol[i]]
-        ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
-                 linestyle='solid', linewidth=wid_cdls)
+        if cdl_open is not None:
+            wick_data = [cdl_low[i], cdl_high[i]]
+            candle_data = [cdl_close[i], cdl_open[i]]
+            ax1.plot(x_loc, wick_data, color='white',
+                     linestyle='solid', linewidth=wid_wick, alpha=1)
+            if cdl_close[i] > cdl_open[i]:
+                cdl_color=(0.33, 1, 0.33, 1)
+            else:
+                cdl_color=(1, 0.33, 0.33, 1)
+            ax1.plot(x_loc, candle_data, color=cdl_color,
+                     linestyle='solid', linewidth=wid_cdls, alpha=1)
+            # Volume
+            volume_data = [0, cdl_vol[i]]
+            ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
+                     linestyle='solid', linewidth=wid_cdls)
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     for key in features.keys():
