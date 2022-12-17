@@ -8,7 +8,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.patches as patches
 from os import path
 from time import sleep, time
-from numpy import arange
+from numpy import arange, vstack
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -34,6 +34,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         data_len = len(features.index)
     data_range = range(data_len)
     ts_lbls = features.index.tolist()
+    ts_last = ts_lbls[-1]
     moirai_metrics = ''
     if cheese:
         metrics = ['accuracy', 'acc_pct', 'loss', 'signal']
@@ -48,27 +49,35 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
                     addendum += ' '
             moirai_metrics += f'{addendum}\n'
         moirai_metrics = moirai_metrics[:-2]
-        predictions = cheese['predictions']
+        predictions = vstack(cheese['predictions'])
         signals = cheese['signals']
-        if data_len > chart_size:
-            x_pred = chart_size + batch_size
-            predictions = predictions[-x_pred:]
-            signals = nans + signals[-x_pred:]
-            data_len = len(predictions)
-            data_range = range(data_len)
+        x_pred = chart_size + batch_size
+        predictions = predictions[-x_pred:]
+        signals = signals[-x_pred:]
+        data_len = len(predictions)
+        data_range = range(data_len)
+        nans = [None for _ in range(batch_size)]
+        ts_lbls = [*ts_lbls, *nans]
     fig = plt.figure(figsize=(19.20, 10.80), dpi=100, constrained_layout=False)
     sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
     ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
     plt.xticks(ticks=data_range, labels=ts_lbls, rotation=21, fontweight='bold')
-    plt.subplots_adjust(left=0.08, bottom=0.28, right=0.92,
+    plt.subplots_adjust(left=0.08, bottom=0.16, right=0.92,
                         top=0.95, wspace=0, hspace=0.02)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
     ax1.set_ylabel('Price', fontweight='bold')
     ax1.set_xlim(((data_range[0] - 2), (data_range[-1] + 2)))
     ylim_low = min(features['low'])
     ylim_high = max(features['high'])
+    if cheese:
+        p_min = min(predictions.min(0))
+        p_max = max(predictions.max(0))
+        if p_min < ylim_low:
+            ylim_low = p_min
+        if p_max > ylim_high:
+            ylim_high = p_max
     ax1.set_ylim((ylim_low * 0.97, ylim_high * 1.03))
     yticks_range = [round(i, 2) for i in arange(ylim_low, ylim_high, 0.5)]
     ax1.set_yticks(yticks_range)
@@ -95,49 +104,15 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     cdl_low = features.pop('low')
     cdl_close = features.pop('close')
     cdl_vol = features.pop('volume')
-    if data_len > chart_size:
-        cdl_open += [None for _ in range(batch_size)]
+    if cheese:
+        cdl_open = [*cdl_open, *nans]
     y_loc = [ylim_low, ylim_high]
     labels_set = [False, False, False]
-    cheese_color = dict(cheddar='#FF9600', gouda='#FFE88E', american='#F6CA7D')
+    cheese_color = dict(cheddar='#FF9600', gouda='#FFE88E')
     for i in data_range:
         x_loc = [i, i]
-        # Signal
-        cdl_signal = predictions[i]
-        if cdl_signal is not None:
-            signal_label = None
-            if cdl_signal == 0:
-                signal_color = cheese_color['cheddar']
-                if labels_set[0] is False:
-                    labels_set[0] = True
-                    signal_label = 'sell'
-            elif cdl_signal == 1:
-                signal_color = cheese_color['gouda']
-                if labels_set[1] is False:
-                    labels_set[1] = True
-                    signal_label = 'buy'
-            else:
-                signal_color = cheese_color['american']
-                if labels_set[2] is False:
-                    labels_set[2] = True
-                    signal_label = 'neutral'
-            ax1.plot(x_loc, y_loc, color=signal_color, label=signal_label,
-                     linestyle='solid', linewidth=wid_cdls, alpha=0.3)
-        # Predictions
-        if predictions[i] is not None:
-            prediction = predictions[i]
-            wick_data = [prediction[1], prediction[2]]
-            candle_data = [prediction[0], prediction[3]]
-            ax1.plot(x_loc, wick_data, color='white',
-                     linestyle='solid', linewidth=wid_wick, alpha=1)
-            if candle_data[1] > candle_data[0]:
-                cdl_color=cheese_color['gouda']
-            else:
-                cdl_color=cheese_color['cheddar']
-            ax1.plot(x_loc, candle_data, color=cdl_color,
-                     linestyle='solid', linewidth=wid_cdls, alpha=1)
         # Candles
-        if cdl_open is not None:
+        if cdl_open[i] is not None:
             wick_data = [cdl_low[i], cdl_high[i]]
             candle_data = [cdl_close[i], cdl_open[i]]
             ax1.plot(x_loc, wick_data, color='white',
@@ -152,6 +127,18 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
             volume_data = [0, cdl_vol[i]]
             ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
                      linestyle='solid', linewidth=wid_cdls)
+        # Predictions
+        prediction = predictions[i]
+        wick_data = [prediction[1], prediction[2]]
+        candle_data = [prediction[0], prediction[3]]
+        ax1.plot(x_loc, wick_data, color='white',
+                 linestyle='solid', linewidth=wid_wick, alpha=1)
+        if candle_data[1] > candle_data[0]:
+            cdl_color=cheese_color['gouda']
+        else:
+            cdl_color=cheese_color['cheddar']
+        ax1.plot(x_loc, candle_data, color=cdl_color,
+                 linestyle='solid', linewidth=wid_cdls, alpha=1)
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     for key in features.keys():
@@ -182,7 +169,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     plt.gcf().text(0.01, 0.01, moirai_metrics, fontsize=14, bbox=props)
     res = adj if adj else 'None'
     rnc = round(cdl_close[-1], 3)
-    t = f'[ {rnc} ]   {symbol}  @  {ts_lbls[-1]} (resample: {res})'
+    t = f'[ {rnc} ]   {symbol}  @  {ts_last} (resample: {res})'
     fig.suptitle(t, fontsize=18)
     fig.legend(ncol=1, loc='lower right', fontsize='xx-large', fancybox=True)
     plt.savefig(str(chart_path))

@@ -284,7 +284,7 @@ class ThreeBlindMice(nn.Module):
                 var_delta = (var_coated - var_target) / var_target
                 self.metrics['var_delta'] += var_delta.abs().item()
                 adj_loss = sqrt(loss.item()) / 3
-                if coated_candles[0].mean(0) > coated_candles[-1].mean(0):
+                if coated_candles[-1].mean(0) > coated_candles[0].mean(0):
                     signal = 1
                 else:
                     signal = 0
@@ -305,10 +305,8 @@ class ThreeBlindMice(nn.Module):
         signal = signals[-1]
         if signal == 1:
             self.metrics['signal'] = 'buy'
-        elif signal == 0:
-            self.metrics['signal'] = 'sell'
         else:
-            self.metrics['signal'] = 'neutral'
+            self.metrics['signal'] = 'sell'
         self.metrics['var_delta'] = self.metrics['var_delta'] / epochs
         self.metrics['var_delta'] *= 100
         self.metrics['loss'] = self.metrics['loss'] / epochs
@@ -327,51 +325,34 @@ class ThreeBlindMice(nn.Module):
 
     def read_sigil(self, num=0, signal='buy'):
         """Translate the inscribed sigils."""
+        from pandas import DataFrame
+        ignore = ['accuracy', 'predictions', 'signals']
+        inscriptions = dict()
+        sigils = list()
         sigil_path = self._sigil_path_
-        sigil_files = listdir(sigil_path)
-        picks = dict()
-        for file_name in sigil_files:
+        for file_name in listdir(sigil_path):
             if file_name[-6:] == '.sigil':
                 file_path = abspath(f'{sigil_path}/{file_name}')
                 with open(file_path, 'r') as file_obj:
-                    sigil = json.loads(file_obj.read())
-                sym_signal = sigil['signal']
-                if sym_signal == signal:
-                    var_delta = sigil['var_delta']
-                    if var_delta not in picks.keys():
-                        picks[var_delta] = dict()
-                    symbol = sigil['symbol']
-                    picks[var_delta][symbol] = sigil
-        picks = {k: picks[k] for k in sorted(picks, reverse=False)}
-        best = dict()
-        for var_delta, symbols in picks.items():
-            for symbol, metrics in symbols.items():
-                acc_pct = metrics['acc_pct']
-                if acc_pct not in best.keys():
-                    best[acc_pct] = dict()
-                best[acc_pct][var_delta] = metrics
-        best = {k: best[k] for k in sorted(best, reverse=True)}
-        inscribed_candles = list()
-        count = 0
-        for first_sigil in best.values():
-            if count == num:
-                break
-            for second_sigil in first_sigil.values():
-                inscribed_candles.append(second_sigil)
-                count = len(inscribed_candles)
-                if count == num:
-                    break
+                    sigil_data = json.loads(file_obj.read())
+                symbol = sigil_data['symbol']
+                inscriptions[symbol] = sigil_data
+                sigil = dict()
+                for key, value in sigil_data.items():
+                    if key not in ignore:
+                        sigil[key] = value
+                sigils.append(sigil)
+        sigils = DataFrame(sigils)
+        sigils.set_index('symbol', inplace=True)
+        sigils.sort_values(
+            ['signal', 'loss', 'acc_pct', 'var_delta'],
+            ascending=[True, True, False, True],
+            inplace=True,
+            )
+        best = list()
+        top_sigils = sigils.index[:num]
+        for symbol in top_sigils:
+            best.append(inscriptions[symbol])
         if self.verbosity > 0:
-            prefix = self._prefix_
-            count = 0
-            for inscription in inscribed_candles:
-                count += 1
-                print(prefix, f'#{count} sigil.')
-                for key, value in inscription.items():
-                    if key in ['predictions', 'signal']:
-                        continue
-                    elif key == 'acc_pct':
-                        value = f'{value}%'
-                    print(prefix, f'{key}:', value)
-                print('')
-        return inscribed_candles
+            print(sigils[:num])
+        return best
