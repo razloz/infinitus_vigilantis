@@ -140,7 +140,7 @@ class Candelabrum:
         self._FTYPE = str(ftype)
         self._WORKERS = list()
         self._CPU_COUNT = cpu_count()
-        self._MAX_THREADS = self._CPU_COUNT * 2 - 1
+        self._MAX_THREADS = self._CPU_COUNT * 2 - 3
         self._BENCHMARKS = ('QQQ', 'SPY')
         self._DATA_PATH = './candelabrum'
         self._ERROR_PATH = './errors'
@@ -227,7 +227,7 @@ class Candelabrum:
                         candelabrum_candles,
                         cheese=sealed_package,
                         chart_path=c_path,
-                        chart_size=200,
+                        chart_size=100,
                         )
                 elif job[0] == 'clean':
                     try:

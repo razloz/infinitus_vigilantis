@@ -242,9 +242,11 @@ def get_indicators(df, index_key='time'):
     h = df['high'].values
     l = df['low'].values
     c = df['close'].values
-    indicators['price_med'] = ((o + h + l + c) / 4).tolist()
-    indicators['delta'] = indicators['price_med'] - indicators['price_wema']
-    indicators['delta'] = indicators['delta'] / indicators['price_wema']
+    median = ((o + h + l + c) / 4).tolist()
+    wema = indicators['price_wema']
+    delta = (median - wema) / wema
+    indicators['delta'] = delta
+    indicators['price_med'] = median
     indicators.replace([inf, -inf], nan, inplace=True)
     indicators.fillna(0, inplace=True)
     return indicators.copy()

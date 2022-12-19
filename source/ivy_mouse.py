@@ -19,12 +19,11 @@ __license__ = 'GPL v3'
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, *args, cook_time=0, features=28, verbosity=0, **kwargs):
+    def __init__(self, *args, cook_time=0, features=32, verbosity=0, **kwargs):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__(*args, **kwargs)
         iota = 1 / 137
         phi = 1.618033988749894
-        features = features - 4
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self._device_ = torch.device(self._device_type_)
         self._state_path_ = abspath('./rnn')
@@ -37,12 +36,12 @@ class ThreeBlindMice(nn.Module):
             'batch_size': 34,
             'cluster_shape': 3,
             'cook_time': cook_time,
-            'dim': 32,
+            'dim': 8,
             'dropout': iota,
             'eps': iota * 1e-6,
             'features': int(features),
             'feature_fold': int(features / 2),
-            'hidden': 32 ** 2,
+            'hidden': (8 ** 3) * 2,
             'layers': 6,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
@@ -189,23 +188,23 @@ class ThreeBlindMice(nn.Module):
     def forward(self, candles):
         """**bubble*bubble**bubble**"""
         constants = self._constants_
-        batch = constants['batch_size']
+        batch_size = constants['batch_size']
         dim = constants['dim']
         fold = constants['feature_fold']
         inscribe = torch.topk
-        mask = constants['mask_prob']
+        truth = candles[:, -1].mean(0).item()
         wax = self.melt(candles)
         wax = self.wax(wax[:, :fold], wax[:, fold:])
         wax = self.activation(wax)
-        bubbles = torch.full_like(wax, mask)
-        bubbles = torch.bernoulli(bubbles)
-        bubbles = wax * bubbles
+        bubbles = torch.full_like(wax, constants['mask_prob'])
+        bubbles = wax * torch.bernoulli(bubbles)
         bubbles = self.cauldron(bubbles, bubbles)
-        bubbles = bubbles.view(bubbles.shape[0], dim, dim)
-        candles = inscribe(bubbles, 1)[0].flatten(0)
-        candles = inscribe(candles, batch * 4)[0]
-        candles = candles.view(batch, 4) ** 2
-        return candles.clone()
+        bubbles = bubbles.view(bubbles.shape[0], dim, dim, dim, 2)
+        sigil = inscribe(bubbles.sum(4), 4)[0].flatten(0)
+        sigil = inscribe(sigil ** 2, batch_size * 4)[0]
+        coated_candles = sigil.view(batch_size, 4)
+        coated_candles = truth * coated_candles
+        return coated_candles.clone()
 
     def research(self, offering, dataframe, plot=True, keep_predictions=True):
         """Moirai research session, fully stocked with cheese and drinks."""
@@ -247,7 +246,7 @@ class ThreeBlindMice(nn.Module):
             dataframe.to_numpy(),
             requires_grad=True,
             **p_tensor,
-            )[:, 4:]
+            )
         aged_cheese = tensor(
             dataframe.to_numpy(),
             **p_tensor,
@@ -255,7 +254,7 @@ class ThreeBlindMice(nn.Module):
         sample = TensorDataset(fresh_cheese[:-batch], aged_cheese)
         candles = DataLoader(sample, batch_size=batch)
         cooking = True
-        tolerance = aged_cheese.mean(1).mean(0) * constants['tolerance']
+        tolerance = constants['tolerance'] * aged_cheese.mean(1).mean(0)
         n_targets = batch * 4
         t_cook = time.time()
         while cooking:
@@ -266,24 +265,23 @@ class ThreeBlindMice(nn.Module):
                 coated_candles = research(candle, study=True)
                 loss = loss_fn(coated_candles, target)
                 loss.backward()
-                optimizer.step()
                 predictions.append(coated_candles)
                 var_coated = coated_candles.var()
                 var_target = target.var()
                 var_delta = (var_coated - var_target) / var_target
                 self.metrics['var_delta'] += var_delta.abs().item()
-                adj_loss = sqrt(loss.item()) / 3
                 if coated_candles[-1].mean(0) > coated_candles[0].mean(0):
                     signal = 1
                 else:
                     signal = 0
                 signals.append(signal)
                 correct = (coated_candles - target).abs()
-                correct = correct[correct <= tolerance].sum()
-                self.metrics['accuracy'][0] += correct.item()
+                correct = correct[correct <= tolerance].shape[0]
+                self.metrics['accuracy'][0] += correct
                 self.metrics['accuracy'][1] += n_targets
-                self.metrics['loss'] += adj_loss
+                self.metrics['loss'] += loss.item()
             self.epochs += 1
+            optimizer.step()
             if time.time() - t_cook >= cook_time:
                 cooking = False
         predictions.append(research(fresh_cheese[-batch:], study=False))
@@ -298,7 +296,7 @@ class ThreeBlindMice(nn.Module):
             self.metrics['signal'] = 'sell'
         self.metrics['var_delta'] = self.metrics['var_delta'] / epochs
         self.metrics['var_delta'] *= 100
-        self.metrics['loss'] = self.metrics['loss'] / epochs
+        self.metrics['loss'] = sqrt(self.metrics['loss']) / epochs
         if keep_predictions:
             sigil_path = f'{self._sigil_path_}/{symbol}.sigil'
             self.metrics['signals'] = signals
@@ -334,8 +332,8 @@ class ThreeBlindMice(nn.Module):
         sigils = DataFrame(sigils)
         sigils.set_index('symbol', inplace=True)
         sigils.sort_values(
-            ['signal', 'loss', 'acc_pct', 'var_delta'],
-            ascending=[True, True, False, True],
+            ['acc_pct', 'loss', 'var_delta', 'signal'],
+            ascending=[False, True, True, True],
             inplace=True,
             )
         best = list()
