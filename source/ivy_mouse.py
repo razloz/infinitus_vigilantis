@@ -17,6 +17,40 @@ __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
 
 
+def read_sigil(num=0, signal='buy'):
+    """Translate the inscribed sigils."""
+    from pandas import DataFrame
+    ignore = ['accuracy', 'predictions', 'signals']
+    inscriptions = dict()
+    sigils = list()
+    sigil_path = abspath('./rnn/sigil')
+    for file_name in listdir(sigil_path):
+        if file_name[-6:] == '.sigil':
+            file_path = abspath(f'{sigil_path}/{file_name}')
+            with open(file_path, 'r') as file_obj:
+                sigil_data = json.loads(file_obj.read())
+            symbol = sigil_data['symbol']
+            inscriptions[symbol] = sigil_data
+            sigil = dict()
+            for key, value in sigil_data.items():
+                if key not in ignore:
+                    sigil[key] = value
+            sigils.append(sigil)
+    sigils = DataFrame(sigils)
+    sigils.set_index('symbol', inplace=True)
+    sigils.sort_values(
+        ['signal', 'acc_pct', 'loss', 'var_delta'],
+        ascending=[True, False, True, True],
+        inplace=True,
+        )
+    best = list()
+    top_sigils = sigils.index[:num]
+    for symbol in top_sigils:
+        best.append(inscriptions[symbol])
+    print(sigils[:num])
+    return best
+
+
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
     def __init__(self, *args, cook_time=0, features=32, verbosity=0, **kwargs):
@@ -34,20 +68,20 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._sigil_path_): mkdir(self._sigil_path_)
         self._constants_ = constants = {
             'batch_size': 34,
-            'cluster_shape': 3,
             'cook_time': cook_time,
-            'dim': 8,
             'dropout': iota,
             'eps': iota * 1e-6,
             'features': int(features),
             'feature_fold': int(features / 2),
-            'hidden': (8 ** 3) * 2,
-            'layers': 6,
+            'heads': 13,
+            'hidden': 2600,
+            'layers': 3,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'mask_prob': phi - 1,
             'momentum': phi * (phi - 1),
             'tolerance': (iota * (phi - 1)) / 3,
+            'truth': (34 * 2600) / 3,
             'weight_decay': iota / phi,
             }
         self._prefix_ = prefix = 'Moirai:'
@@ -55,7 +89,7 @@ class ThreeBlindMice(nn.Module):
         self._symbol_ = None
         self.cauldron = nn.Transformer(
             d_model=constants['hidden'],
-            nhead=constants['dim'],
+            nhead=constants['heads'],
             num_encoder_layers=constants['layers'],
             num_decoder_layers=constants['layers'],
             dim_feedforward=constants['hidden'],
@@ -66,15 +100,14 @@ class ThreeBlindMice(nn.Module):
             norm_first=True,
             **self._p_tensor_,
             )
-        self.wax = nn.Bilinear(
-            in1_features=constants['feature_fold'],
-            in2_features=constants['feature_fold'],
+        self.wax = nn.Linear(
+            in_features=constants['features'],
             out_features=constants['hidden'],
-            bias=True,
+            bias=False,
             **self._p_tensor_,
             )
         self.loss_fn = nn.HuberLoss(
-            reduction='mean',
+            reduction='sum',
             )
         self.melt = nn.InstanceNorm1d(
             constants['features'],
@@ -139,7 +172,10 @@ class ThreeBlindMice(nn.Module):
                     print(self._prefix_, *details.args)
         elif call_type == 1:
             torch.save(
-                {'epochs': self.epochs, 'moirai': self.state_dict()},
+                {
+                    'epochs': self.epochs,
+                    'moirai': self.state_dict(),
+                    },
                 state_path,
                 )
             if self.verbosity > 2:
@@ -148,15 +184,14 @@ class ThreeBlindMice(nn.Module):
     def __time_plot__(self, predictions, targets):
         batch = self._constants_['batch_size']
         metrics = self.metrics
-        nans = [[None, None, None, None] for _ in range(batch)]
         fig = plt.figure(figsize=(5.12, 3.84), dpi=100)
         ax = fig.add_subplot()
         ax.grid(True, color=(0.6, 0.6, 0.6))
         ax.set_ylabel('Probability', fontweight='bold')
         ax.set_xlabel('Batch', fontweight='bold')
-        y_p = predictions.detach().cpu().numpy()
-        y_t = targets.detach().cpu().numpy()
-        y_t = np.vstack([y_t, nans])
+        y_p = predictions.detach().cpu().tolist()
+        y_t = targets.detach().cpu().tolist()
+        y_t += [None for _ in range(batch)]
         ax.plot(y_t, color='#FF9600') #cheddar
         ax.plot(y_p, color='#FFE88E') #gouda
         symbol = self._symbol_
@@ -189,22 +224,22 @@ class ThreeBlindMice(nn.Module):
         """**bubble*bubble**bubble**"""
         constants = self._constants_
         batch_size = constants['batch_size']
-        dim = constants['dim']
         fold = constants['feature_fold']
-        inscribe = torch.topk
-        truth = candles[:, -1].mean(0).item()
-        wax = self.melt(candles)
-        wax = self.wax(wax[:, :fold], wax[:, fold:])
-        wax = self.activation(wax)
-        bubbles = torch.full_like(wax, constants['mask_prob'])
-        bubbles = wax * torch.bernoulli(bubbles)
+        truth = candles[:, -1]
+        candles = self.activation(self.wax(self.melt(candles)))
+        bubbles = torch.full_like(candles, constants['mask_prob'])
+        bubbles = candles * torch.bernoulli(bubbles)
         bubbles = self.cauldron(bubbles, bubbles)
-        bubbles = bubbles.view(bubbles.shape[0], dim, dim, dim, 2)
-        sigil = inscribe(bubbles.sum(4), 4)[0].flatten(0)
-        sigil = inscribe(sigil ** 2, batch_size * 4)[0]
-        coated_candles = sigil.view(batch_size, 4)
-        coated_candles = truth * coated_candles
-        return coated_candles.clone()
+        sigil = bubbles.flatten(0).softmax(0)
+        sigil = torch.topk(sigil, batch_size, sorted=False)
+        sigil = truth * reversed(sigil[1] / constants['truth'])
+        print(sigil)
+        return sigil.view(batch_size, 1).clone()
+
+    def create_sigil(dataframe, sigil_type='weather'):
+        """Translate dataframe into an arcane sigil."""
+        if sigil_type == 'weather':
+            self.summon_storm(dataframe)
 
     def research(self, offering, dataframe, plot=True, keep_predictions=True):
         """Moirai research session, fully stocked with cheese and drinks."""
@@ -242,20 +277,16 @@ class ThreeBlindMice(nn.Module):
             'symbol': symbol,
             'var_delta': 0,
             }
-        fresh_cheese = tensor(
-            dataframe.to_numpy(),
-            requires_grad=True,
-            **p_tensor,
-            )
-        aged_cheese = tensor(
-            dataframe.to_numpy(),
-            **p_tensor,
-            )[:, :4][batch:]
+        dataframe = dataframe.to_numpy()
+        fresh_cheese = tensor(dataframe, requires_grad=True, **p_tensor)
+        aged_cheese = tensor(dataframe, **p_tensor)[:, -1][batch:]
         sample = TensorDataset(fresh_cheese[:-batch], aged_cheese)
         candles = DataLoader(sample, batch_size=batch)
         cooking = True
-        tolerance = constants['tolerance'] * aged_cheese.mean(1).mean(0)
-        n_targets = batch * 4
+        tolerance = constants['tolerance'] * aged_cheese.mean(0)
+        batch_range = range(batch)
+        buy_signals = [1 for _ in batch_range]
+        sell_signals = [0 for _ in batch_range]
         t_cook = time.time()
         while cooking:
             self.metrics['accuracy'] = [0, 0]
@@ -263,25 +294,25 @@ class ThreeBlindMice(nn.Module):
             signals = list()
             for candle, target in iter(candles):
                 coated_candles = research(candle, study=True)
+                target = target.unsqueeze(0).H
                 loss = loss_fn(coated_candles, target)
                 loss.backward()
+                optimizer.step()
                 predictions.append(coated_candles)
                 var_coated = coated_candles.var()
                 var_target = target.var()
                 var_delta = (var_coated - var_target) / var_target
                 self.metrics['var_delta'] += var_delta.abs().item()
-                if coated_candles[-1].mean(0) > coated_candles[0].mean(0):
-                    signal = 1
+                if coated_candles[-1] > coated_candles[0]:
+                    signals += buy_signals
                 else:
-                    signal = 0
-                signals.append(signal)
+                    signals += sell_signals
                 correct = (coated_candles - target).abs()
                 correct = correct[correct <= tolerance].shape[0]
                 self.metrics['accuracy'][0] += correct
-                self.metrics['accuracy'][1] += n_targets
+                self.metrics['accuracy'][1] += batch
                 self.metrics['loss'] += loss.item()
             self.epochs += 1
-            optimizer.step()
             if time.time() - t_cook >= cook_time:
                 cooking = False
         predictions.append(research(fresh_cheese[-batch:], study=False))
@@ -310,36 +341,6 @@ class ThreeBlindMice(nn.Module):
         self.__manage_state__(call_type=1)
         return True
 
-    def read_sigil(self, num=0, signal='buy'):
-        """Translate the inscribed sigils."""
-        from pandas import DataFrame
-        ignore = ['accuracy', 'predictions', 'signals']
-        inscriptions = dict()
-        sigils = list()
-        sigil_path = self._sigil_path_
-        for file_name in listdir(sigil_path):
-            if file_name[-6:] == '.sigil':
-                file_path = abspath(f'{sigil_path}/{file_name}')
-                with open(file_path, 'r') as file_obj:
-                    sigil_data = json.loads(file_obj.read())
-                symbol = sigil_data['symbol']
-                inscriptions[symbol] = sigil_data
-                sigil = dict()
-                for key, value in sigil_data.items():
-                    if key not in ignore:
-                        sigil[key] = value
-                sigils.append(sigil)
-        sigils = DataFrame(sigils)
-        sigils.set_index('symbol', inplace=True)
-        sigils.sort_values(
-            ['acc_pct', 'loss', 'var_delta', 'signal'],
-            ascending=[False, True, True, True],
-            inplace=True,
-            )
-        best = list()
-        top_sigils = sigils.index[:num]
-        for symbol in top_sigils:
-            best.append(inscriptions[symbol])
-        if self.verbosity > 0:
-            print(sigils[:num])
-        return best
+    def summon_storm(sigil):
+        """The clouds gather to the sounds of song."""
+        pass

@@ -69,16 +69,10 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ax1.grid(True, color=(0.3, 0.3, 0.3))
     ax1.set_ylabel('Price', fontweight='bold')
     ax1.set_xlim(((data_range[0] - 2), (data_range[-1] + 2)))
-    ylim_low = min(features['low'])
-    ylim_high = max(features['high'])
-    if cheese:
-        p_min = min(predictions.min(0))
-        p_max = max(predictions.max(0))
-        if p_min < ylim_low:
-            ylim_low = p_min
-        if p_max > ylim_high:
-            ylim_high = p_max
-    ax1.set_ylim((ylim_low * 0.97, ylim_high * 1.03))
+    ohlc = features[['open', 'high', 'low', 'close']]
+    ylim_low = min([min(ohlc.min()), predictions.min(0)])
+    ylim_high = max([max(ohlc.max()), predictions.max(0)])
+    ax1.set_ylim((ylim_low * 0.99, ylim_high * 1.01))
     yticks_range = [round(i, 2) for i in arange(ylim_low, ylim_high, 0.5)]
     ax1.set_yticks(yticks_range)
     ax1.set_yticklabels(yticks_range)
@@ -107,8 +101,9 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     if cheese:
         cdl_open = [*cdl_open, *nans]
     y_loc = [ylim_low, ylim_high]
-    labels_set = [False, False, False]
+    labels_set = [False, False]
     cheese_color = dict(cheddar='#FF9600', gouda='#FFE88E')
+    data_end = data_range[-1]
     for i in data_range:
         x_loc = [i, i]
         # Candles
@@ -128,17 +123,23 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
             ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
                      linestyle='solid', linewidth=wid_cdls)
         # Predictions
-        prediction = predictions[i]
-        wick_data = [prediction[1], prediction[2]]
-        candle_data = [prediction[0], prediction[3]]
-        ax1.plot(x_loc, wick_data, color='white',
-                 linestyle='solid', linewidth=wid_wick, alpha=1)
-        if candle_data[1] > candle_data[0]:
-            cdl_color=cheese_color['gouda']
-        else:
-            cdl_color=cheese_color['cheddar']
-        ax1.plot(x_loc, candle_data, color=cdl_color,
-                 linestyle='solid', linewidth=wid_cdls, alpha=1)
+        if i != data_end:
+            x_loc = [i, i + 1]
+            line_data = [predictions[x_loc[0]], predictions[x_loc[1]]]
+            signal = signals[x_loc[0]]
+            cdl_label = None
+            if signal == 1:
+                cdl_color=cheese_color['gouda']
+                if labels_set[0] is False:
+                    cdl_label = 'Buy Signal'
+                    labels_set[0] = True
+            else:
+                cdl_color=cheese_color['cheddar']
+                if labels_set[1] is False:
+                    cdl_label = 'Sell Signal'
+                    labels_set[1] = True
+            ax1.plot(x_loc, line_data, color=cdl_color, alpha=1,
+                     linestyle='solid', linewidth=wid_line, label=cdl_label)
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     for key in features.keys():

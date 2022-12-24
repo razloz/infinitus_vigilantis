@@ -523,8 +523,8 @@ class Candelabrum:
 
     def pick_candles(self, num, signal='buy'):
         """Get top picks from the Moirai."""
-        moirai = ThreeBlindMice(verbosity=1)
-        inscribed_candles = moirai.read_sigil(num=num, signal=signal)
+        from source.ivy_mouse import read_sigil
+        inscribed_candles = read_sigil(num=num, signal=signal)
         return inscribed_candles
 
     def plot_signal(self, signal, num=10, trim=34):
