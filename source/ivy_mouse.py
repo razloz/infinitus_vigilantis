@@ -72,16 +72,15 @@ class ThreeBlindMice(nn.Module):
             'dropout': iota,
             'eps': iota * 1e-6,
             'features': int(features),
-            'feature_fold': int(features / 2),
             'heads': 13,
-            'hidden': 2600,
+            'hidden': 1950,
             'layers': 3,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'mask_prob': phi - 1,
             'momentum': phi * (phi - 1),
             'tolerance': (iota * (phi - 1)) / 3,
-            'truth': (34 * 2600) / 3,
+            'truth': (34 * 1950) / 3,
             'weight_decay': iota / phi,
             }
         self._prefix_ = prefix = 'Moirai:'
@@ -146,8 +145,11 @@ class ThreeBlindMice(nn.Module):
             print(prefix, f'{key}:', value)
         print(prefix, 'total epochs:', self.epochs)
         if self.verbosity > 1:
-            print(prefix, 'prediction tail:', prediction_tail.tolist())
-            print(prefix, 'target tail:', target_tail.tolist())
+            batch_size = self._constants_['batch_size']
+            prediction_tail = prediction_tail[-batch_size:].tolist()
+            target_tail = target_tail[-batch_size:].tolist()
+            print(prefix, 'prediction tail:', f'\n{prediction_tail}')
+            print(prefix, 'target tail:', f'\n{target_tail}')
 
     def __manage_state__(self, call_type=0, singular=True):
         """Handles loading and saving of the RNN state."""
@@ -164,6 +166,8 @@ class ThreeBlindMice(nn.Module):
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             except FileNotFoundError:
+                if self.verbosity > 2:
+                    print(self._prefix_, 'No state found, creating default.')
                 if not singular:
                     self.epochs = 0
                 self.__manage_state__(call_type=1)
@@ -224,7 +228,6 @@ class ThreeBlindMice(nn.Module):
         """**bubble*bubble**bubble**"""
         constants = self._constants_
         batch_size = constants['batch_size']
-        fold = constants['feature_fold']
         truth = candles[:, -1]
         candles = self.activation(self.wax(self.melt(candles)))
         bubbles = torch.full_like(candles, constants['mask_prob'])
@@ -233,7 +236,6 @@ class ThreeBlindMice(nn.Module):
         sigil = bubbles.flatten(0).softmax(0)
         sigil = torch.topk(sigil, batch_size, sorted=False)
         sigil = truth * reversed(sigil[1] / constants['truth'])
-        print(sigil)
         return sigil.view(batch_size, 1).clone()
 
     def create_sigil(dataframe, sigil_type='weather'):
@@ -334,7 +336,7 @@ class ThreeBlindMice(nn.Module):
             self.metrics['predictions'] = predictions.tolist()
             with open(sigil_path, 'w+') as file_obj:
                 file_obj.write(json.dumps(self.metrics))
-        if verbosity == 1:
+        if verbosity >= 1:
             self.__chitchat__(predictions, aged_cheese)
         if plot:
             self.__time_plot__(predictions, aged_cheese)

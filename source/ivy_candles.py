@@ -502,7 +502,7 @@ class Candelabrum:
         moirai = ThreeBlindMice(
             cook_time=cook_time,
             features=features,
-            verbosity=1,
+            verbosity=3,
             )
         loop_start = time.time()
         while aeternalis:
