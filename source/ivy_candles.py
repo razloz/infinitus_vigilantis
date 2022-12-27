@@ -490,15 +490,24 @@ class Candelabrum:
             paterae = ivy_watchlist
         epoch = 0
         aeternalis = True
-        paterae = {s: get_daily(s) for s in paterae}
-        for offering, candles in paterae.items():
-            paterae[offering] = candles.merge(
-                omenize(candles),
-                left_index=True,
-                right_index=True,
-                )[trim:]
-        features = list(paterae.keys())[0]
-        features = len(paterae[features].keys())
+        offerings = dict()
+        prefix = self._PREFIX
+        for symbol in paterae:
+            print(prefix, f'Gathering daily candles for {symbol}')
+            daily = get_daily(symbol)
+            if len(daily) > trim:
+                try:
+                    offerings[symbol] = daily.merge(
+                        omenize(daily),
+                        left_index=True,
+                        right_index=True,
+                        )[trim:]
+                except Exception as details:
+                    print(type(details), details.args)
+                finally:
+                    print(prefix, f'{len(offerings.keys())} total offerings.')
+        features = list(offerings.keys())[0]
+        features = len(offerings[features].keys())
         moirai = ThreeBlindMice(
             cook_time=cook_time,
             features=features,
@@ -506,20 +515,20 @@ class Candelabrum:
             )
         loop_start = time.time()
         while aeternalis:
-            for offering, candles in paterae.items():
-                print(self._PREFIX, f'Research of {offering} has started.')
+            for offering, candles in offerings.items():
+                print(prefix, f'Research of {offering} has started.')
                 offering_start = time.time()
                 predictions = moirai.research(offering, candles)
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
                 message = format_time(elapsed, message=message)
-                print(self._PREFIX, f'{message}.\n')
+                print(prefix, f'{message}.\n')
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
             elapsed = time.time() - loop_start
             message = f'({epoch}) Aeternalis elapsed time is'
-            print(self._PREFIX, format_time(elapsed, message=message))
+            print(prefix, format_time(elapsed, message=message))
 
     def pick_candles(self, num, signal='buy'):
         """Get top picks from the Moirai."""

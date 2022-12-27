@@ -99,8 +99,9 @@ class ThreeBlindMice(nn.Module):
             norm_first=True,
             **self._p_tensor_,
             )
-        self.wax = nn.Linear(
-            in_features=constants['features'],
+        self.wax = nn.Bilinear(
+            in1_features=constants['features'],
+            in2_features=constants['features'],
             out_features=constants['hidden'],
             bias=False,
             **self._p_tensor_,
@@ -120,15 +121,14 @@ class ThreeBlindMice(nn.Module):
             lr_decay=constants['lr_decay'],
             weight_decay=constants['weight_decay'],
             eps=constants['eps'],
-            foreach=True,
-            maximize=False,
+            foreach=False,
+            maximize=True,
             )
         self.activation = nn.functional.gelu
         self.epochs = 0
         self.metrics = dict()
         self.verbosity = int(verbosity)
         self.to(self._device_)
-        self.__manage_state__(call_type=0)
         if self.verbosity > 1:
             for key, value in constants.items():
                 print(prefix, f'set {key} to {value}')
@@ -151,7 +151,7 @@ class ThreeBlindMice(nn.Module):
             print(prefix, 'prediction tail:', f'\n{prediction_tail}')
             print(prefix, 'target tail:', f'\n{target_tail}')
 
-    def __manage_state__(self, call_type=0, singular=True):
+    def __manage_state__(self, call_type=0, singular=False):
         """Handles loading and saving of the RNN state."""
         state_path = f'{self._state_path_}/'
         if singular:
@@ -229,13 +229,15 @@ class ThreeBlindMice(nn.Module):
         constants = self._constants_
         batch_size = constants['batch_size']
         truth = candles[:, -1]
-        candles = self.activation(self.wax(self.melt(candles)))
+        candles = self.melt(candles)
+        candles = self.wax(candles, reversed(candles))
+        candles = self.activation(candles)
         bubbles = torch.full_like(candles, constants['mask_prob'])
         bubbles = candles * torch.bernoulli(bubbles)
         bubbles = self.cauldron(bubbles, bubbles)
-        sigil = bubbles.flatten(0).softmax(0)
-        sigil = torch.topk(sigil, batch_size, sorted=False)
-        sigil = truth * reversed(sigil[1] / constants['truth'])
+        sigil = bubbles.flatten(0).log_softmax(0)
+        sigil = torch.topk(sigil, batch_size, sorted=False, largest=False)
+        sigil = truth * (sigil[1] / constants['truth'])
         return sigil.view(batch_size, 1).clone()
 
     def create_sigil(dataframe, sigil_type='weather'):
@@ -262,6 +264,7 @@ class ThreeBlindMice(nn.Module):
                 if verbosity > 1:
                     print(batch_error)
                 return False
+        self.__manage_state__(call_type=0)
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
         optimizer = self.optimizer
