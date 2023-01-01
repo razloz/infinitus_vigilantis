@@ -486,12 +486,28 @@ class Candelabrum:
         """Spend time with the Norn researching candles."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
+        prefix = self._PREFIX
         if type(paterae) not in [list, tuple]:
             paterae = ivy_watchlist
+            if not path.exists(path.abspath('./rnn/.SPY.state')):
+                print(prefix, 'Initial training detected.')
+                print(prefix, 'Starting index saturation.')
+                for offering in ['SPY', 'QQQ']:
+                    daily = get_daily(offering)
+                    candles = daily.merge(
+                        omenize(daily),
+                        left_index=True,
+                        right_index=True,
+                        )[trim:]
+                    moirai = ThreeBlindMice(
+                        cook_time=21600,
+                        features=len(candles.keys()),
+                        verbosity=3,
+                        )
+                    moirai.research(offering, candles)
         epoch = 0
         aeternalis = True
         offerings = dict()
-        prefix = self._PREFIX
         for symbol in paterae:
             print(prefix, f'Gathering daily candles for {symbol}')
             daily = get_daily(symbol)

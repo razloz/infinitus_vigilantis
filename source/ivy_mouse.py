@@ -69,18 +69,20 @@ class ThreeBlindMice(nn.Module):
         self._constants_ = constants = {
             'batch_size': 34,
             'cook_time': cook_time,
+            'dim': 11,
             'dropout': iota,
             'eps': iota * 1e-6,
             'features': int(features),
-            'heads': 13,
-            'hidden': 1950,
+            'heads': 11,
+            'hidden': 11 ** 3,
             'layers': 3,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'mask_prob': phi - 1,
+            'max_ndx': (34 * 11 ** 3) - 1,
             'momentum': phi * (phi - 1),
             'tolerance': (iota * (phi - 1)) / 3,
-            'truth': (34 * 1950) / 3,
+            'truth': 6561 / 3,
             'weight_decay': iota / phi,
             }
         self._prefix_ = prefix = 'Moirai:'
@@ -106,7 +108,7 @@ class ThreeBlindMice(nn.Module):
             bias=False,
             **self._p_tensor_,
             )
-        self.loss_fn = nn.HuberLoss(
+        self.loss_fn = nn.CrossEntropyLoss(
             reduction='sum',
             )
         self.melt = nn.InstanceNorm1d(
@@ -121,8 +123,20 @@ class ThreeBlindMice(nn.Module):
             lr_decay=constants['lr_decay'],
             weight_decay=constants['weight_decay'],
             eps=constants['eps'],
-            foreach=False,
-            maximize=True,
+            foreach=True,
+            maximize=False,
+            )
+        self.stir = nn.Conv3d(
+            in_channels=constants['batch_size'],
+            out_channels=constants['batch_size'],
+            kernel_size=3,
+            stride=1,
+            padding=0,
+            dilation=1,
+            groups=1,
+            bias=True,
+            padding_mode='zeros',
+            **self._p_tensor_,
             )
         self.activation = nn.functional.gelu
         self.epochs = 0
@@ -193,8 +207,8 @@ class ThreeBlindMice(nn.Module):
         ax.grid(True, color=(0.6, 0.6, 0.6))
         ax.set_ylabel('Probability', fontweight='bold')
         ax.set_xlabel('Batch', fontweight='bold')
-        y_p = predictions.detach().cpu().tolist()
-        y_t = targets.detach().cpu().tolist()
+        y_p = predictions.tolist()
+        y_t = targets.tolist()
         y_t += [None for _ in range(batch)]
         ax.plot(y_t, color='#FF9600') #cheddar
         ax.plot(y_p, color='#FFE88E') #gouda
@@ -228,6 +242,8 @@ class ThreeBlindMice(nn.Module):
         """**bubble*bubble**bubble**"""
         constants = self._constants_
         batch_size = constants['batch_size']
+        dim = constants['dim']
+        topk = torch.topk
         truth = candles[:, -1]
         candles = self.melt(candles)
         candles = self.wax(candles, reversed(candles))
@@ -235,10 +251,13 @@ class ThreeBlindMice(nn.Module):
         bubbles = torch.full_like(candles, constants['mask_prob'])
         bubbles = candles * torch.bernoulli(bubbles)
         bubbles = self.cauldron(bubbles, bubbles)
-        sigil = bubbles.flatten(0).log_softmax(0)
-        sigil = torch.topk(sigil, batch_size, sorted=False, largest=False)
-        sigil = truth * (sigil[1] / constants['truth'])
-        return sigil.view(batch_size, 1).clone()
+        coating = self.stir(bubbles.view(batch_size, dim, dim, dim))
+        wax = coating.sum(3).mean(2).softmax(1).argmax(0)
+        wax = coating[wax].flatten(0)
+        sigil = topk(wax, batch_size, sorted=False, largest=True).indices
+        sigil = truth * (sigil / constants['truth'])
+        sigil = sigil.view(batch_size, 1).clone()
+        return sigil, bubbles.flatten(0)
 
     def create_sigil(dataframe, sigil_type='weather'):
         """Translate dataframe into an arcane sigil."""
@@ -292,15 +311,24 @@ class ThreeBlindMice(nn.Module):
         batch_range = range(batch)
         buy_signals = [1 for _ in batch_range]
         sell_signals = [0 for _ in batch_range]
+        max_ndx = constants['max_ndx']
+        truth = constants['truth']
+        binary_target = torch.zeros(max_ndx + 1, **p_tensor)
         t_cook = time.time()
         while cooking:
             self.metrics['accuracy'] = [0, 0]
             predictions = list()
             signals = list()
             for candle, target in iter(candles):
-                coated_candles = research(candle, study=True)
-                target = target.unsqueeze(0).H
-                loss = loss_fn(coated_candles, target)
+                coated_candles, inscription = research(candle, study=True)
+                binary_ndx = truth * (target / candle[:, :4].mean(1))
+                binary_target *= 0
+                for ndx in binary_ndx.split(1):
+                    ndx = int(round(ndx.item(), 0))
+                    if ndx > max_ndx:
+                        ndx = max_ndx
+                    binary_target[ndx] = 1
+                loss = loss_fn(inscription, binary_target)
                 loss.backward()
                 optimizer.step()
                 predictions.append(coated_candles)
@@ -320,7 +348,7 @@ class ThreeBlindMice(nn.Module):
             self.epochs += 1
             if time.time() - t_cook >= cook_time:
                 cooking = False
-        predictions.append(research(fresh_cheese[-batch:], study=False))
+        predictions.append(research(fresh_cheese[-batch:], study=False)[0])
         predictions = vstack(predictions)
         correct, epochs = self.metrics['accuracy']
         acc_pct = 100 * (1 + (correct - epochs) / epochs)
