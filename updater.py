@@ -53,4 +53,4 @@ if __name__ == '__main__':
     elif args.pick:
         candelabrum.plot_signal('buy')
     elif args.study:
-        candelabrum.make_offering(None, cook_time=0, epochs=1)
+        candelabrum.make_offering(None, cook_time=180, epochs=1)
