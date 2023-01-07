@@ -69,20 +69,18 @@ class ThreeBlindMice(nn.Module):
         self._constants_ = constants = {
             'batch_size': 34,
             'cook_time': cook_time,
-            'dim': 11,
+            'dim': 9,
             'dropout': iota,
             'eps': iota * 1e-6,
             'features': int(features),
-            'heads': 11,
-            'hidden': 11 ** 3,
-            'layers': 3,
+            'heads': 27,
+            'hidden': 9 ** 3,
+            'layers': 9,
             'lr_decay': iota / (phi - 1),
             'lr_init': iota ** (phi - 1),
             'mask_prob': phi - 1,
-            'max_ndx': (34 * 11 ** 3) - 1,
             'momentum': phi * (phi - 1),
             'tolerance': (iota * (phi - 1)) / 3,
-            'truth': 6561 / 3,
             'weight_decay': iota / phi,
             }
         self._prefix_ = prefix = 'Moirai:'
@@ -105,11 +103,12 @@ class ThreeBlindMice(nn.Module):
             in1_features=constants['features'],
             in2_features=constants['features'],
             out_features=constants['hidden'],
-            bias=False,
+            bias=True,
             **self._p_tensor_,
             )
-        self.loss_fn = nn.CrossEntropyLoss(
-            reduction='sum',
+        self.loss_fn = nn.HuberLoss(
+            reduction='mean',
+            delta=1.0,
             )
         self.melt = nn.InstanceNorm1d(
             constants['features'],
@@ -130,16 +129,14 @@ class ThreeBlindMice(nn.Module):
             in_channels=constants['batch_size'],
             out_channels=constants['batch_size'],
             kernel_size=3,
-            stride=1,
-            padding=0,
+            stride=2,
             dilation=1,
-            groups=1,
             bias=True,
-            padding_mode='zeros',
             **self._p_tensor_,
             )
         self.activation = nn.functional.gelu
         self.epochs = 0
+        self.fed = True
         self.metrics = dict()
         self.verbosity = int(verbosity)
         self.to(self._device_)
@@ -180,10 +177,11 @@ class ThreeBlindMice(nn.Module):
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             except FileNotFoundError:
-                if self.verbosity > 2:
-                    print(self._prefix_, 'No state found, creating default.')
+                self.fed = False
                 if not singular:
                     self.epochs = 0
+                if self.verbosity > 2:
+                    print(self._prefix_, 'No state found, creating default.')
                 self.__manage_state__(call_type=1)
             except Exception as details:
                 if self.verbosity > 1:
@@ -220,7 +218,7 @@ class ThreeBlindMice(nn.Module):
         title += f'{accuracy}% correct, '
         title += f'{epoch} epochs.'
         fig.suptitle(title, fontsize=11)
-        plt.savefig(f'{self._epochs_path_}/{int(time.time())}.png')
+        plt.savefig(f'{self._epochs_path_}/{symbol}.png')
         plt.clf()
         plt.close()
 
@@ -243,35 +241,31 @@ class ThreeBlindMice(nn.Module):
         constants = self._constants_
         batch_size = constants['batch_size']
         dim = constants['dim']
-        topk = torch.topk
-        truth = candles[:, -1]
         candles = self.melt(candles)
         candles = self.wax(candles, reversed(candles))
         candles = self.activation(candles)
         bubbles = torch.full_like(candles, constants['mask_prob'])
         bubbles = candles * torch.bernoulli(bubbles)
         bubbles = self.cauldron(bubbles, bubbles)
-        coating = self.stir(bubbles.view(batch_size, dim, dim, dim))
-        wax = coating.sum(3).mean(2).softmax(1).argmax(0)
-        wax = coating[wax].flatten(0)
-        sigil = topk(wax, batch_size, sorted=False, largest=True).indices
-        sigil = truth * (sigil / constants['truth'])
-        sigil = sigil.view(batch_size, 1).clone()
-        return sigil, bubbles.flatten(0)
+        sigil = self.stir(bubbles.view(batch_size, dim, dim, dim)).flatten(0)
+        sigil = torch.topk(sigil, batch_size, sorted=False, largest=True)
+        sigil = (sigil.values ** 2).view(batch_size, 1)
+        return sigil.clone()
 
     def create_sigil(dataframe, sigil_type='weather'):
         """Translate dataframe into an arcane sigil."""
         if sigil_type == 'weather':
             self.summon_storm(dataframe)
 
-    def research(self, offering, dataframe, plot=True, keep_predictions=True):
+    def research(self, offering, dataframe):
         """Moirai research session, fully stocked with cheese and drinks."""
         symbol = self._symbol_ = str(offering).upper()
         verbosity = self.verbosity
         constants = self._constants_
         batch = constants['batch_size']
         data_len = len(dataframe)
-        batch_error = f'{self._prefix_} {symbol} data less than batch size.'
+        prefix = self._prefix_
+        batch_error = f'{prefix} {symbol} data less than batch size.'
         if data_len < batch:
             if verbosity > 1:
                 print(batch_error)
@@ -284,6 +278,7 @@ class ThreeBlindMice(nn.Module):
                     print(batch_error)
                 return False
         self.__manage_state__(call_type=0)
+        fed = self.fed
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
         optimizer = self.optimizer
@@ -306,29 +301,25 @@ class ThreeBlindMice(nn.Module):
         aged_cheese = tensor(dataframe, **p_tensor)[:, -1][batch:]
         sample = TensorDataset(fresh_cheese[:-batch], aged_cheese)
         candles = DataLoader(sample, batch_size=batch)
-        cooking = True
         tolerance = constants['tolerance'] * aged_cheese.mean(0)
         batch_range = range(batch)
         buy_signals = [1 for _ in batch_range]
         sell_signals = [0 for _ in batch_range]
-        max_ndx = constants['max_ndx']
-        truth = constants['truth']
-        binary_target = torch.zeros(max_ndx + 1, **p_tensor)
+        reheat_count = 0
+        reheat_last = inf
+        reheat_max = 100
+        cooking = True
         t_cook = time.time()
         while cooking:
             self.metrics['accuracy'] = [0, 0]
+            self.metrics['loss'] = 0
             predictions = list()
             signals = list()
+            n_cook = 0
             for candle, target in iter(candles):
-                coated_candles, inscription = research(candle, study=True)
-                binary_ndx = truth * (target / candle[:, :4].mean(1))
-                binary_target *= 0
-                for ndx in binary_ndx.split(1):
-                    ndx = int(round(ndx.item(), 0))
-                    if ndx > max_ndx:
-                        ndx = max_ndx
-                    binary_target[ndx] = 1
-                loss = loss_fn(inscription, binary_target)
+                coated_candles = research(candle, study=True)
+                target = target.unsqueeze(0).H
+                loss = loss_fn(coated_candles, target)
                 loss.backward()
                 optimizer.step()
                 predictions.append(coated_candles)
@@ -345,8 +336,31 @@ class ThreeBlindMice(nn.Module):
                 self.metrics['accuracy'][0] += correct
                 self.metrics['accuracy'][1] += batch
                 self.metrics['loss'] += loss.item()
+                n_cook += 1
+                if verbosity > 2:
+                    tail_t = target[-5:].view(5).tolist()
+                    tail_t = [round(i, 3) for i in tail_t]
+                    tail_c = coated_candles[-5:].view(5).tolist()
+                    tail_c = [round(i, 3) for i in tail_c]
+                    print(prefix, f'target tail: {tail_t}')
+                    print(prefix, f'coated tail: {tail_c}')
+                    print(prefix, f'Loss: {loss.item()}')
+                    print('')
             self.epochs += 1
-            if time.time() - t_cook >= cook_time:
+            self.metrics['loss'] = self.metrics['loss'] / n_cook
+            if not fed:
+                heat = self.metrics['loss']
+                if heat < 1:
+                    cooking = False
+                else:
+                    if heat < reheat_last:
+                        reheat_last = heat
+                        reheat_count = 0
+                    else:
+                        reheat_count += 1
+                        if reheat_count > reheat_max:
+                            cooking = False
+            elif time.time() - t_cook >= cook_time:
                 cooking = False
         predictions.append(research(fresh_cheese[-batch:], study=False)[0])
         predictions = vstack(predictions)
@@ -360,18 +374,15 @@ class ThreeBlindMice(nn.Module):
             self.metrics['signal'] = 'sell'
         self.metrics['var_delta'] = self.metrics['var_delta'] / epochs
         self.metrics['var_delta'] *= 100
-        self.metrics['loss'] = sqrt(self.metrics['loss']) / epochs
-        if keep_predictions:
-            sigil_path = f'{self._sigil_path_}/{symbol}.sigil'
-            self.metrics['signals'] = signals
-            self.metrics['predictions'] = predictions.tolist()
-            with open(sigil_path, 'w+') as file_obj:
-                file_obj.write(json.dumps(self.metrics))
-        if verbosity >= 1:
-            self.__chitchat__(predictions, aged_cheese)
-        if plot:
-            self.__time_plot__(predictions, aged_cheese)
+        sigil_path = f'{self._sigil_path_}/{symbol}.sigil'
+        self.metrics['signals'] = signals
+        self.metrics['predictions'] = predictions.tolist()
+        with open(sigil_path, 'w+') as file_obj:
+            file_obj.write(json.dumps(self.metrics))
         self.__manage_state__(call_type=1)
+        if verbosity > 0:
+            self.__chitchat__(predictions, aged_cheese)
+            self.__time_plot__(predictions, aged_cheese)
         return True
 
     def summon_storm(sigil):
