@@ -49,7 +49,7 @@ if __name__ == '__main__':
     elif args.indicators:
         candelabrum.apply_indicators()
     elif args.jazz:
-        candelabrum.alpaca_jazz(attendants=10, cook_time=147, epochs=1)
+        candelabrum.alpaca_jazz(attendants=13, cook_time=147, epochs=1)
     elif args.pick:
         candelabrum.plot_signal('buy')
     elif args.study:
