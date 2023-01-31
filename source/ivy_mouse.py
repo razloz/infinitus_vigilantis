@@ -95,7 +95,7 @@ class ThreeBlindMice(nn.Module):
             dropout=constants['dropout'],
             activation='gelu',
             layer_norm_eps=constants['eps'],
-            batch_first=True,
+            batch_first=False,
             norm_first=True,
             **self._p_tensor_,
             )
@@ -103,18 +103,12 @@ class ThreeBlindMice(nn.Module):
             in1_features=constants['features'],
             in2_features=constants['features'],
             out_features=constants['hidden'],
-            bias=True,
+            bias=False,
             **self._p_tensor_,
             )
         self.loss_fn = nn.HuberLoss(
             reduction='mean',
             delta=1.0,
-            )
-        self.melt = nn.InstanceNorm1d(
-            constants['features'],
-            momentum=constants['momentum'],
-            eps=constants['eps'],
-            **self._p_tensor_,
             )
         self.optimizer = Adagrad(
             self.parameters(),
@@ -123,20 +117,9 @@ class ThreeBlindMice(nn.Module):
             weight_decay=constants['weight_decay'],
             eps=constants['eps'],
             foreach=True,
-            maximize=False,
+            maximize=True,
             )
-        self.stir = nn.Conv3d(
-            in_channels=constants['batch_size'],
-            out_channels=constants['batch_size'],
-            kernel_size=3,
-            stride=2,
-            dilation=1,
-            bias=True,
-            **self._p_tensor_,
-            )
-        self.activation = nn.functional.gelu
         self.epochs = 0
-        self.fed = True
         self.metrics = dict()
         self.verbosity = int(verbosity)
         self.to(self._device_)
@@ -144,25 +127,9 @@ class ThreeBlindMice(nn.Module):
             for key, value in constants.items():
                 print(prefix, f'set {key} to {value}')
             print('')
+        self.__manage_state__(call_type=0)
 
-    def __chitchat__(self, prediction_tail, target_tail):
-        """Chat with the mice about candles and things."""
-        prefix = self._prefix_
-        for key, value in self.metrics.items():
-            if key in ['predictions', 'signals']:
-                continue
-            elif key == 'acc_pct':
-                value = f'{value}%'
-            print(prefix, f'{key}:', value)
-        print(prefix, 'total epochs:', self.epochs)
-        if self.verbosity > 1:
-            batch_size = self._constants_['batch_size']
-            prediction_tail = prediction_tail[-batch_size:].tolist()
-            target_tail = target_tail[-batch_size:].tolist()
-            print(prefix, 'prediction tail:', f'\n{prediction_tail}')
-            print(prefix, 'target tail:', f'\n{target_tail}')
-
-    def __manage_state__(self, call_type=0, singular=False):
+    def __manage_state__(self, call_type=0, singular=True):
         """Handles loading and saving of the RNN state."""
         state_path = f'{self._state_path_}/'
         if singular:
@@ -177,7 +144,6 @@ class ThreeBlindMice(nn.Module):
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             except FileNotFoundError:
-                self.fed = False
                 if not singular:
                     self.epochs = 0
                 if self.verbosity > 2:
@@ -197,32 +163,7 @@ class ThreeBlindMice(nn.Module):
             if self.verbosity > 2:
                 print(self._prefix_, 'Saved RNN state.')
 
-    def __time_plot__(self, predictions, targets):
-        batch = self._constants_['batch_size']
-        metrics = self.metrics
-        fig = plt.figure(figsize=(5.12, 3.84), dpi=100)
-        ax = fig.add_subplot()
-        ax.grid(True, color=(0.6, 0.6, 0.6))
-        ax.set_ylabel('Probability', fontweight='bold')
-        ax.set_xlabel('Batch', fontweight='bold')
-        y_p = predictions.tolist()
-        y_t = targets.tolist()
-        y_t += [None for _ in range(batch)]
-        ax.plot(y_t, color='#FF9600') #cheddar
-        ax.plot(y_p, color='#FFE88E') #gouda
-        symbol = self._symbol_
-        accuracy = metrics['acc_pct']
-        epoch = self.epochs
-        signal = metrics['signal']
-        title = f'{symbol} ({signal})\n'
-        title += f'{accuracy}% correct, '
-        title += f'{epoch} epochs.'
-        fig.suptitle(title, fontsize=11)
-        plt.savefig(f'{self._epochs_path_}/{symbol}.png')
-        plt.clf()
-        plt.close()
-
-    def __time_step__(self, candles, study=False):
+    def __time_step__(self, candle, study=False):
         """Let Clotho mold the candles
            Let Lachesis measure the candles
            Let Atropos seal the candles
@@ -230,26 +171,19 @@ class ThreeBlindMice(nn.Module):
         if study:
             self.train()
             self.optimizer.zero_grad()
-            return self.forward(candles)
+            return self.forward(candle)
         else:
             self.eval()
             with torch.no_grad():
-                return self.forward(candles)
+                return self.forward(candle)
 
-    def forward(self, candles):
+    def forward(self, candle):
         """**bubble*bubble**bubble**"""
-        constants = self._constants_
-        batch_size = constants['batch_size']
-        dim = constants['dim']
-        candles = self.melt(candles)
-        candles = self.wax(candles, reversed(candles))
-        candles = self.activation(candles)
-        bubbles = torch.full_like(candles, constants['mask_prob'])
-        bubbles = candles * torch.bernoulli(bubbles)
+        candle = self.wax(candle, candle)
+        bubbles = torch.full_like(candle, self._constants_['mask_prob'])
+        bubbles = (candle * torch.bernoulli(bubbles)).unsqueeze(0)
         bubbles = self.cauldron(bubbles, bubbles)
-        sigil = self.stir(bubbles.view(batch_size, dim, dim, dim)).flatten(0)
-        sigil = torch.topk(sigil, batch_size, sorted=False, largest=True)
-        sigil = (sigil.values ** 2).view(batch_size, 1)
+        sigil = bubbles.squeeze(0).tanh().mean(0)
         return sigil.clone()
 
     def create_sigil(dataframe, sigil_type='weather'):
@@ -262,127 +196,98 @@ class ThreeBlindMice(nn.Module):
         symbol = self._symbol_ = str(offering).upper()
         verbosity = self.verbosity
         constants = self._constants_
-        batch = constants['batch_size']
         data_len = len(dataframe)
         prefix = self._prefix_
-        batch_error = f'{prefix} {symbol} data less than batch size.'
-        if data_len < batch:
-            if verbosity > 1:
-                print(batch_error)
-            return False
-        while data_len % batch != 0:
-            dataframe = dataframe[1:]
-            data_len = len(dataframe)
-            if data_len < batch:
-                if verbosity > 1:
-                    print(batch_error)
-                return False
-        self.__manage_state__(call_type=0)
-        fed = self.fed
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
         optimizer = self.optimizer
-        p_tensor = self._p_tensor_
         research = self.__time_step__
+        p_tensor = self._p_tensor_
         tensor = torch.tensor
-        vstack = torch.vstack
-        self.metrics = {
-            'accuracy': [0, 0],
-            'acc_pct': 0,
-            'loss': 0,
-            'predictions': [],
-            'signal': 'neutral',
-            'signals': [],
-            'symbol': symbol,
-            'var_delta': 0,
-            }
-        dataframe = dataframe.to_numpy()
-        fresh_cheese = tensor(dataframe, requires_grad=True, **p_tensor)
-        aged_cheese = tensor(dataframe, **p_tensor)[:, -1][batch:]
-        sample = TensorDataset(fresh_cheese[:-batch], aged_cheese)
-        candles = DataLoader(sample, batch_size=batch)
-        tolerance = constants['tolerance'] * aged_cheese.mean(0)
-        batch_range = range(batch)
-        buy_signals = [1 for _ in batch_range]
-        sell_signals = [0 for _ in batch_range]
-        reheat_count = 0
-        reheat_last = inf
-        reheat_max = 100
+        fresh_cheese = tensor(
+            dataframe.to_numpy(),
+            requires_grad=True,
+            **p_tensor,
+            )
+        no_trade = tensor(float(0), requires_grad=True, **p_tensor)
+        max_trade = tensor(float('inf'), **p_tensor)
+        candle_range = range(fresh_cheese.shape[0])
+        msg = 'trade at {} with a sentiment of {}'
         cooking = True
         t_cook = time.time()
         while cooking:
-            self.metrics['accuracy'] = [0, 0]
-            self.metrics['loss'] = 0
-            predictions = list()
-            signals = list()
-            n_cook = 0
-            for candle, target in iter(candles):
-                coated_candles = research(candle, study=True)
-                target = target.unsqueeze(0).H
-                loss = loss_fn(coated_candles, target)
+            compass = list()
+            trades = list()
+            trading = False
+            entry = float(0)
+            trade_days = 0
+            trade_count = 0
+            net_gains = 0
+            for day in candle_range:
+                candle = fresh_cheese[day]
+                sentiment = research(candle, study=True).item()
+                compass.append(sentiment)
+                if verbosity > 3:
+                    print(prefix, 'sentiment', sentiment)
+                trade = no_trade.clone()
+                if trading:
+                    trade_days += 1
+                    if sentiment < -0.00382:
+                        if trading and trade_days > 3:
+                            trading = False
+                            day_avg = candle[-1]
+                            trade = (day_avg - entry) / entry
+                            entry = float(0)
+                            net_gains += trade.item()
+                            trade_count += 1
+                            if verbosity > 1:
+                                details = msg.format(day_avg, sentiment)
+                                print(prefix, 'exited', details)
+                                print(prefix, 'trade_days', trade_days)
+                                print(prefix, 'trade', trade.item())
+                                print(prefix, 'net_gains', net_gains)
+                                print(prefix, 'trade_count', trade_count)
+                else:
+                    if sentiment > 0.00618:
+                        trading = True
+                        trade_days = 0
+                        entry = float(candle[-1].item())
+                        if verbosity > 1:
+                            details = msg.format(entry, sentiment)
+                            print('')
+                            print(prefix, 'entered', details)
+                loss = loss_fn(trade, max_trade)
                 loss.backward()
                 optimizer.step()
-                predictions.append(coated_candles)
-                var_coated = coated_candles.var()
-                var_target = target.var()
-                var_delta = (var_coated - var_target) / var_target
-                self.metrics['var_delta'] += var_delta.abs().item()
-                if coated_candles[-1] > coated_candles[0]:
-                    signals += buy_signals
-                else:
-                    signals += sell_signals
-                correct = (coated_candles - target).abs()
-                correct = correct[correct <= tolerance].shape[0]
-                self.metrics['accuracy'][0] += correct
-                self.metrics['accuracy'][1] += batch
-                self.metrics['loss'] += loss.item()
-                n_cook += 1
-                if verbosity > 2:
-                    tail_t = target[-5:].view(5).tolist()
-                    tail_t = [round(i, 3) for i in tail_t]
-                    tail_c = coated_candles[-5:].view(5).tolist()
-                    tail_c = [round(i, 3) for i in tail_c]
-                    print(prefix, f'target tail: {tail_t}')
-                    print(prefix, f'coated tail: {tail_c}')
-                    print(prefix, f'Loss: {loss.item()}')
-                    print('')
+                trades.append(trade.item())
             self.epochs += 1
-            self.metrics['loss'] = self.metrics['loss'] / n_cook
-            if not fed:
-                heat = self.metrics['loss']
-                if heat < 1:
-                    cooking = False
-                else:
-                    if heat < reheat_last:
-                        reheat_last = heat
-                        reheat_count = 0
-                    else:
-                        reheat_count += 1
-                        if reheat_count > reheat_max:
-                            cooking = False
-            elif time.time() - t_cook >= cook_time:
+            elapsed = time.time() - t_cook
+            if elapsed >= cook_time:
                 cooking = False
-        predictions.append(research(fresh_cheese[-batch:], study=False)[0])
-        predictions = vstack(predictions)
-        correct, epochs = self.metrics['accuracy']
-        acc_pct = 100 * (1 + (correct - epochs) / epochs)
-        self.metrics['acc_pct'] = round(acc_pct, 2)
-        signal = signals[-1]
-        if signal == 1:
-            self.metrics['signal'] = 'buy'
-        else:
-            self.metrics['signal'] = 'sell'
-        self.metrics['var_delta'] = self.metrics['var_delta'] / epochs
-        self.metrics['var_delta'] *= 100
-        sigil_path = f'{self._sigil_path_}/{symbol}.sigil'
-        self.metrics['signals'] = signals
-        self.metrics['predictions'] = predictions.tolist()
-        with open(sigil_path, 'w+') as file_obj:
-            file_obj.write(json.dumps(self.metrics))
+                sigil_path = f'{self._sigil_path_}/{symbol}.sigil'
+                with open(sigil_path, 'w+') as file_obj:
+                    file_obj.write(json.dumps({
+                        'symbol': symbol,
+                        'sentiment': sentiment,
+                        'net_gains': net_gains,
+                        'trade_count': trade_count,
+                        'trading': trading,
+                        'entry': entry,
+                        'trade_days': trade_days,
+                        'compass': compass,
+                        'trades': trades,
+                        }))
+                if verbosity > 1:
+                    print('***************************************************')
+                    print(prefix, 'symbol', symbol)
+                    print(prefix, 'sentiment', sentiment)
+                    print(prefix, 'net_gains', net_gains)
+                    print(prefix, 'trade_count', trade_count)
+                    print(prefix, 'trading', trading)
+                    print(prefix, 'entry', entry)
+                    print(prefix, 'trade_days', trade_days)
+                    print('***************************************************')
         self.__manage_state__(call_type=1)
-        if verbosity > 0:
-            self.__chitchat__(predictions, aged_cheese)
-            self.__time_plot__(predictions, aged_cheese)
         return True
 
     def summon_storm(sigil):
