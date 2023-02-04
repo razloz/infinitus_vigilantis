@@ -36,44 +36,38 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ts_lbls = features.index.tolist()
     ts_last = ts_lbls[-1]
     moirai_metrics = ''
+    blank_space = ''.join(' ' for i in range(40))
     if cheese:
-        metrics = ['accuracy', 'acc_pct', 'loss', 'signal']
-        for metric_label in metrics:
-            m_value = cheese[metric_label]
-            addendum = f'{metric_label}: {m_value}'
-            if metric_label == 'acc_pct':
-                addendum += '%'
-            add_len = len(addendum)
-            if add_len < 80:
-                for _ in range(80 - add_len - 1):
-                    addendum += ' '
-            moirai_metrics += f'{addendum}\n'
+        stack_next = False
+        ignore_keys = ['symbol', 'compass', 'trades', 'signals']
+        for key in cheese.keys():
+            if key not in ignore_keys:
+                addendum = f'{key}: {cheese[key]}'
+                moirai_metrics += str(addendum + blank_space[len(addendum):])
+                moirai_metrics += f'\n'
         moirai_metrics = moirai_metrics[:-2]
-        predictions = vstack(cheese['predictions'])
-        signals = cheese['signals']
-        x_pred = chart_size + batch_size
-        predictions = predictions[-x_pred:]
-        signals = signals[-x_pred:]
-        data_len = len(predictions)
-        data_range = range(data_len)
-        nans = [None for _ in range(batch_size)]
-        ts_lbls = [*ts_lbls, *nans]
+        compass = vstack(cheese['compass'])[-chart_size:]
+        trades = vstack(cheese['trades'])[-chart_size:]
+        signals = vstack(cheese['signals'])[-chart_size:]
     fig = plt.figure(figsize=(19.20, 10.80), dpi=100, constrained_layout=False)
-    sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
+    sargs = dict(ncols=1, nrows=4, figure=fig, height_ratios=[5,1,1,1])
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
-    ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
+    ax2 = fig.add_subplot(spec[3, 0], sharex=ax1)
+    ax3 = fig.add_subplot(spec[1, 0], sharex=ax1)
+    ax4 = fig.add_subplot(spec[2, 0], sharex=ax1)
     plt.xticks(ticks=data_range, labels=ts_lbls, rotation=21, fontweight='bold')
-    plt.subplots_adjust(left=0.08, bottom=0.16, right=0.92,
-                        top=0.95, wspace=0, hspace=0.02)
+    plt.subplots_adjust(left=0.08, bottom=0.08, right=0.77,
+                        top=0.92, wspace=0, hspace=0.01)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
     ax1.set_ylabel('Price', fontweight='bold')
     ax1.set_xlim(((data_range[0] - 2), (data_range[-1] + 2)))
     ohlc = features[['open', 'high', 'low', 'close']]
-    ylim_low = min([min(ohlc.min()), predictions.min(0)])
-    ylim_high = max([max(ohlc.max()), predictions.max(0)])
+    ylim_low = min(ohlc.min())
+    ylim_high = max(ohlc.max())
     ax1.set_ylim((ylim_low * 0.99, ylim_high * 1.01))
-    yticks_range = [round(i, 2) for i in arange(ylim_low, ylim_high, 0.5)]
+    ytick_step = 0.01 * ylim_high
+    yticks_range = [round(i,2) for i in arange(ylim_low, ylim_high, ytick_step)]
     ax1.set_yticks(yticks_range)
     ax1.set_yticklabels(yticks_range)
     ax1.yaxis.set_major_locator(mticker.AutoLocator())
@@ -83,8 +77,20 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ax2.set_ylabel('Volume', fontweight='bold')
     ax2.yaxis.set_major_locator(mticker.AutoLocator())
     ax2.yaxis.set_major_formatter(mticker.EngFormatter())
+    ax3.set_ylim((compass.min(), compass.max()))
+    ax3.grid(True, color=(0.3, 0.3, 0.3))
+    ax3.set_ylabel('Sentiment', fontweight='bold')
+    ax3.yaxis.set_major_locator(mticker.AutoLocator())
+    ax3.yaxis.set_major_formatter(mticker.EngFormatter())
+    ax4.set_ylim((trades.min(), trades.max()))
+    ax4.grid(True, color=(0.3, 0.3, 0.3))
+    ax4.set_ylabel('Trades', fontweight='bold')
+    ax4.yaxis.set_major_locator(mticker.AutoLocator())
+    ax4.yaxis.set_major_formatter(mticker.EngFormatter())
     xticks = ax1.xaxis.get_ticklabels()
     plt.setp(xticks[:], visible=False)
+    plt.setp(ax3.xaxis.get_ticklabels(), visible=False)
+    plt.setp(ax4.xaxis.get_ticklabels(), visible=False)
     # Dynamic width stuff
     tbb = ax1.get_tightbbox(fig.canvas.get_renderer()).get_points()
     xb = tbb[1][0] - tbb[0][0]
@@ -98,8 +104,6 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     cdl_low = features.pop('low')
     cdl_close = features.pop('close')
     cdl_vol = features.pop('volume')
-    if cheese:
-        cdl_open = [*cdl_open, *nans]
     y_loc = [ylim_low, ylim_high]
     labels_set = [False, False]
     cheese_color = dict(cheddar='#FF9600', gouda='#FFE88E')
@@ -108,6 +112,14 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         x_loc = [i, i]
         # Candles
         if cdl_open[i] is not None:
+            if cheese:
+                signal = signals[i]
+                if signal == 0:
+                    ax1.plot(x_loc, y_loc, color=(0.33, 1, 0.33, 0.5),
+                             linestyle='solid', linewidth=wid_cdls)
+                elif signal == 2:
+                    ax1.plot(x_loc, y_loc, color=(1, 0.33, 0.33, 0.5),
+                             linestyle='solid', linewidth=wid_cdls)
             wick_data = [cdl_low[i], cdl_high[i]]
             candle_data = [cdl_close[i], cdl_open[i]]
             ax1.plot(x_loc, wick_data, color='white',
@@ -122,24 +134,6 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
             volume_data = [0, cdl_vol[i]]
             ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
                      linestyle='solid', linewidth=wid_cdls)
-        # Predictions
-        if i != data_end:
-            x_loc = [i, i + 1]
-            line_data = [predictions[x_loc[0]], predictions[x_loc[1]]]
-            signal = signals[x_loc[0]]
-            cdl_label = None
-            if signal == 1:
-                cdl_color=cheese_color['gouda']
-                if labels_set[0] is False:
-                    cdl_label = 'Buy Signal'
-                    labels_set[0] = True
-            else:
-                cdl_color=cheese_color['cheddar']
-                if labels_set[1] is False:
-                    cdl_label = 'Sell Signal'
-                    labels_set[1] = True
-            ax1.plot(x_loc, line_data, color=cdl_color, alpha=1,
-                     linestyle='solid', linewidth=wid_line, label=cdl_label)
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     for key in features.keys():
@@ -151,13 +145,13 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         pkws['label'] = None
         if key == 'price_wema':
             pkws['color'] = (0.4, 0.7, 0.4, 0.8)
-            pkws['label'] = 'money'
+            pkws['label'] = f'Money: {round(cdl_data[-1], 3)}'
         elif key in dev_feats:
             pkws['linestyle'] = 'dotted'
             if key in ['price_mid', 'volume_mid']:
                 pkws['linewidth'] = wid_line * 0.67
                 if key == 'price_mid':
-                    pkws['label'] = 'stdev'
+                    pkws['label'] = f'Dev/Mid: {round(cdl_data[-1], 3)}'
             else:
                 pkws['linewidth'] = wid_line * 0.87
             pkws['color'] = (0.7, 0.7, 1, 0.7)
@@ -165,9 +159,11 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
             ax1.plot(cdl_range, cdl_data, **pkws)
         else:
             ax2.plot(cdl_range, cdl_data, **pkws)
+    ax3.plot(compass)
+    ax4.plot(trades)
     # Finalize
     props = dict(boxstyle='round', facecolor='0.03', alpha=0.97)
-    plt.gcf().text(0.01, 0.01, moirai_metrics, fontsize=14, bbox=props)
+    plt.gcf().text(0.79, 0.77, moirai_metrics, fontsize=14, bbox=props)
     res = adj if adj else 'None'
     rnc = round(cdl_close[-1], 3)
     t = f'[ {rnc} ]   {symbol}  @  {ts_last} (resample: {res})'

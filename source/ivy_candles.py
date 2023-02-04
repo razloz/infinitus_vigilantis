@@ -508,13 +508,13 @@ class Candelabrum:
                     print(prefix, f'{len(offerings.keys())} total offerings.')
         keys = list(offerings.keys())[0]
         keys = len(offerings[keys].keys())
-        moirai = ThreeBlindMice(cook_time=cook_time, features=keys, verbosity=3)
+        moirai = ThreeBlindMice(cook_time=cook_time, features=keys, verbosity=2)
         loop_start = time.time()
         while aeternalis:
             for offering, candles in offerings.items():
                 print(prefix, f'Research of {offering} has started.')
                 offering_start = time.time()
-                predictions = moirai.research(offering, candles)
+                complete = moirai.research(offering, candles)
                 elapsed = time.time() - offering_start
                 message = f'Research of {offering} complete after'
                 message = format_time(elapsed, message=message)
@@ -526,17 +526,13 @@ class Candelabrum:
             message = f'({epoch}) Aeternalis elapsed time is'
             print(prefix, format_time(elapsed, message=message))
 
-    def pick_candles(self, num, signal='buy'):
+    def pick_candles(self, num, trim=34):
         """Get top picks from the Moirai."""
+        import source.ivy_navigator as navigator
         from source.ivy_mouse import read_sigil
-        inscribed_candles = read_sigil(num=num, signal=signal)
-        return inscribed_candles
-
-    def plot_signal(self, signal, num=10, trim=34):
-        """Queues cartography jobs from top picks."""
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
-        inscribed_candles = self.pick_candles(num=num, signal=signal)
+        inscribed_candles = read_sigil(num)
         for inscription in inscribed_candles:
             symbol = inscription['symbol']
             candles = get_daily(symbol)
@@ -545,7 +541,7 @@ class Candelabrum:
             candles = candles[trim:]
             self._QUEUE.put(('cartography', symbol, candles, inscription))
         self.join_workers()
-
+        navigator.make_all(inscribed_candles)
 
     def candle_maker(self, candles):
         """Makes a candle."""
