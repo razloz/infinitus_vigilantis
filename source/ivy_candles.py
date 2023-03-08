@@ -484,28 +484,28 @@ class Candelabrum:
 
     def make_offering(self, paterae, cook_time=0, epochs=-1, trim=34):
         """Spend time with the Norn researching candles."""
+        from torch import load
+        abspath = path.abspath
+        data_path = self._DATA_PATH
         get_daily = self.get_daily_candles
         omenize = self.apply_indicators
         prefix = self._PREFIX
         if type(paterae) not in [list, tuple]:
             paterae = ivy_watchlist
+            #paterae = random.sample(paterae, k=len(paterae))
         epoch = 0
         aeternalis = True
         offerings = dict()
         for symbol in paterae:
             print(prefix, f'Gathering daily candles for {symbol}')
-            daily = get_daily(symbol)
-            if len(daily) > trim:
-                try:
-                    offerings[symbol] = daily.merge(
-                        omenize(daily),
-                        left_index=True,
-                        right_index=True,
-                        )[trim:]
-                except Exception as details:
-                    print(type(details), details.args)
-                finally:
-                    print(prefix, f'{len(offerings.keys())} total offerings.')
+            try:
+                candle_path = abspath(f'{data_path}/{symbol}.candles')
+                offerings[symbol] = load(candle_path)[trim:]
+            except Exception as details:
+                print(type(details), details.args)
+            finally:
+                continue
+        print(prefix, f'{len(offerings.keys())} total offerings.')
         keys = list(offerings.keys())[0]
         keys = len(offerings[keys].keys())
         moirai = ThreeBlindMice(cook_time=cook_time, features=keys, verbosity=2)
@@ -590,6 +590,39 @@ class Candelabrum:
         print(self._PREFIX, 'Smallest volume:', self._min_volume_)
         print(self._PREFIX, 'Corruption removed:', len(self._exceptions_))
 
+    def light_candles(self, candle_names):
+        """Takes pandas data and converts to torch tensors."""
+        from torch import cuda, device, save, tensor, float
+        abspath = path.abspath
+        dev = device('cuda:0' if cuda.is_available() else 'cpu')
+        get_daily = self.get_daily_candles
+        omenize = self.apply_indicators
+        data_path = self._DATA_PATH
+        prefix = self._PREFIX
+        print(prefix, f'Lighting {len(candle_names)} candles.')
+        candles_lit = 0
+        for symbol in candle_names:
+            try:
+                candles = get_daily(symbol)
+                candles = candles.merge(
+                    omenize(candles),
+                    left_index=True,
+                    right_index=True,
+                    )
+                candles = tensor(
+                    candles.to_numpy(),
+                    device=dev,
+                    dtype=float,
+                    )
+                save(candles, abspath(f'{data_path}/{symbol}.candles'))
+                candles_lit += 1
+            except Exception as details:
+                print(type(details), details.args)
+            finally:
+                continue
+        print(prefix, f'{candles_lit} candles were successfully lit.')
+        return True
+
 
 def make_utc(time_string):
     """Liberation from the chains of Daylight Savings."""
@@ -644,4 +677,5 @@ def build_historical_database(starting_year=2019):
         if batch_count > 0:
             cdlm.do_update(symbols, **uargs)
     cdlm.join_workers()
+    cdlm.light_candles([s[0] for s in ivy_ndx])
     print(msg.format(f'completed after {keeper.final}.'))
