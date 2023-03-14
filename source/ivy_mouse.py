@@ -62,43 +62,31 @@ def boil_wax(num):
 def golden_brew():
     """Care for a spot of tea?"""
     from math import pi
+    from torch import stack, tensor
+    from torch.fft import rfft, irfft, rfftfreq
     def transform(brew):
-        from matplotlib import pyplot
-        from torch import stack, tensor
-        from torch.fft import rfft, irfft, rfftfreq
         t = list()
-        pyplot.clf()
         for f, b in brew.items():
             input_signal = tensor(b, dtype=torch.float)
             freq_domain = rfft(input_signal)
             harmonic_mean = stack([freq_domain.real, freq_domain.imag])
             harmonic_mean = (1 / harmonic_mean).mean(0) ** -1
-            #time_domain = irfft(harmonic_mean, n=input_signal.shape[0])
-            pyplot.plot(harmonic_mean.numpy())
-            #pyplot.plot(time_domain.numpy(), label=f)
-            #pyplot.plot(input_signal.numpy(), label=f'{f} input')
+            if harmonic_mean.shape[0] > 25:
+                harmonic_mean = harmonic_mean[:25]
             t.append(harmonic_mean)
-        pyplot.savefig(f'./transformed_brew.png')
-        pyplot.close()
         return t
-    print('pi ratio:', pi)
-    print('pi reduction:', boil_wax(pi))
     fib_seq = icy.FibonacciSequencer()
     fib_seq.skip(100000)
     f1, f2 = fib_seq.next(2)
     phi = f2 / f1
-    print('golden ratio:', phi)
-    print('golden reduction:', boil_wax(phi))
-    golden_string = f'{(f2 / f1):.100}'.replace('.', '')
-    pi_string = f'{pi:.100}'.replace('.', '')
-    print('golden_string:', golden_string)
-    print('pi_string:', pi_string)
-    golden_raw = [int(n) for n in golden_string]
-    pi_raw = [int(n) for n in pi_string]
+    golden_string = f'{(f2 / f1):.50}'.replace('.', '')
+    pi_string = f'{pi:.50}'.replace('.', '')
+    golden_r = [int(n) for n in golden_string]
+    pi_r = [int(n) for n in pi_string]
     golden_brew = list()
     pi_brew = list()
     l = 0
-    for i in range(deci):
+    for i in range(50):
         g = golden_string[:i+1]
         p = pi_string[:i+1]
         m = len(g)
@@ -108,22 +96,16 @@ def golden_brew():
             break
         golden_brew.append(boil_wax(g))
         pi_brew.append(boil_wax(p))
-    print('sequence length:', len(golden_brew))
-    print('golden reduced sequence:', golden_brew)
-    print('pi reduced sequence:', pi_brew)
-    return transform({
-        'fib': golden_brew,
-        'pi': pi_brew,
-        'fib_raw': golden_raw,
-        'pi_raw': pi_raw,
-        })
+    t = {'fib': golden_brew, 'pi': pi_brew, 'fib_raw': golden_r, 'pi_raw': pi_r}
+    brew = (1 / stack(transform(t), dim=0)).mean(0) ** -1
+    return brew.clone()
 
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, *args, cook_time=0, n_syms=6113, verbosity=0, **kwargs):
+    def __init__(self, symbols, offerings, cook_time=0, verbosity=0):
         """Beckon the Norn."""
-        super(ThreeBlindMice, self).__init__(*args, **kwargs)
+        super(ThreeBlindMice, self).__init__()
         iota = 1 / 137
         phi = 1.618033988749894
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -134,20 +116,22 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._epochs_path_): mkdir(self._epochs_path_)
         self._sigil_path_ = abspath('./rnn/sigil')
         if not exists(self._sigil_path_): mkdir(self._sigil_path_)
-        self._constants_ = constants = {
-            'cook_time': cook_time,
-            'dropout': iota,
-            'eps': iota * 1e-6,
-            'n_syms': int(n_syms),
-            'hidden':int(n_syms),
-            'layers': 9,
-            'lr_decay': iota / (phi - 1),
-            'lr_init': iota ** (phi - 1),
-            'mask_prob': phi - 1,
-            'momentum': phi * (phi - 1),
-            'tolerance': (iota * (phi - 1)) / 3,
-            'weight_decay': iota / phi,
-            }
+        self.symbols = list(symbols)
+        self.offerings = offerings.clone()
+        constants = {}
+        constants['cook_time'] = cook_time
+        constants['dropout'] = iota
+        constants['eps'] = iota * 1e-6
+        constants['n_syms'] = len(self.symbols)
+        constants['hidden'] = constants['n_syms']
+        constants['layers'] = 2
+        constants['lr_decay'] = iota / (phi - 1)
+        constants['lr_init'] = iota ** (phi - 1)
+        constants['mask_prob'] = phi - 1
+        constants['momentum'] = phi * (phi - 1)
+        constants['tolerance'] = (iota * (phi - 1)) / 3
+        constants['weight_decay'] = iota / phi
+        self._constants_ = dict(constants)
         self._prefix_ = prefix = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = None
@@ -156,7 +140,7 @@ class ThreeBlindMice(nn.Module):
             hidden_size=constants['hidden'],
             num_layers=constants['layers'],
             bias=True,
-            batch_first=True,
+            batch_first=False,
             dropout=constants['dropout'],
             bidirectional=False,
             **self._p_tensor_,
@@ -177,12 +161,19 @@ class ThreeBlindMice(nn.Module):
         self.epochs = 0
         self.metrics = dict()
         self.candelabrum = torch.bernoulli(torch.full(
-            [
-                constants['n_syms'],
-                constants['layers'],
-                ],
+            [int(constants['n_syms'])],
             constants['mask_prob'],
-            )).softmax(1).requires_grad_(True)
+            **self._p_tensor_,
+            ))
+        brewing_tea = golden_brew().tolist()
+        while len(brewing_tea) <= self.candelabrum.shape[0]:
+            brewing_tea += brewing_tea
+        self.tea = torch.tensor(
+            brewing_tea[:self.candelabrum.shape[0]],
+            **self._p_tensor_,
+            )
+        self.candelabrum *= self.tea
+        self.candelabrum = self.candelabrum.softmax(0).requires_grad_(True)
         self.verbosity = int(verbosity)
         self.to(self._device_)
         if self.verbosity > 1:
@@ -239,12 +230,14 @@ class ThreeBlindMice(nn.Module):
             with torch.no_grad():
                 return self.forward(candle)
 
-    def forward(self, candle):
+    def forward(self):
         """**bubble*bubble**bubble**"""
         candles = self.candelabrum
-        bubbles = self.cauldron(bubbles, bubbles)
-        sigil = bubbles.view(3, self._constants_['trine']).sum(1)
-        return torch.topk(sigil, 1, dim=0, largest=True, sorted=False)
+        bubbles = candles.view(1, candles.shape[0])
+        bubbles = self.cauldron(bubbles)[1].softmax(0)
+        print(bubbles.shape)
+        sigil = torch.topk(bubbles, 13, dim=0, largest=True)
+        return sigil
 
     def create_sigil(dataframe, sigil_type='weather'):
         """Translate dataframe into an arcane sigil."""
