@@ -117,7 +117,7 @@ class ThreeBlindMice(nn.Module):
         self._sigil_path_ = abspath('./rnn/sigil')
         if not exists(self._sigil_path_): mkdir(self._sigil_path_)
         self.symbols = list(symbols)
-        self.offerings = offerings.clone()
+        self.offerings = offerings.clone().detach()
         constants = {}
         constants['cook_time'] = cook_time
         constants['dropout'] = iota
@@ -244,8 +244,9 @@ class ThreeBlindMice(nn.Module):
         if sigil_type == 'weather':
             self.summon_storm(dataframe)
 
-    def research(self, offering, tensor_candles):
+    def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
+
         verbosity = self.verbosity
         constants = self._constants_
         prefix = self._prefix_

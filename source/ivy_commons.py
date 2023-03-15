@@ -236,7 +236,7 @@ def get_indicators(df, index_key='time'):
         DataFrame(money_v)
         ]
     for dataframe in dfs:
-        for c, s in dataframe.iteritems():
+        for c, s in dataframe.items():
             indicators[c] = s.tolist()
     o = df['open'].values
     h = df['high'].values

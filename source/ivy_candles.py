@@ -195,9 +195,16 @@ class Candelabrum:
 
     def __worker__(self):
         """Get jobs and do work."""
+        from torch import cuda, device, save, tensor
+        from torch import float as dtype
+        abspath = path.abspath
+        dev = device('cuda:0' if cuda.is_available() else 'cpu')
+        get_daily = self.get_daily_candles
+        omenize = self.apply_indicators
+        data_path = self._DATA_PATH
         csv_params = dict(self._CSV_PARAMS)
-        candelabrum_path = path.abspath(self._DATA_PATH)
-        chart_path = path.abspath(self._CHART_PATH)
+        candelabrum_path = abspath(self._DATA_PATH)
+        chart_path = abspath(self._CHART_PATH)
         candle_keys = ('utc_ts','open','high','low','close',
                        'volume','num_trades','vol_wma_price')
         ohlc = ('open','high','low','close')
@@ -264,6 +271,20 @@ class Candelabrum:
                         remove(candle_path)
                     finally:
                         continue
+                elif job[0] == 'light':
+                    symbol = job[1]
+                    candles = get_daily(symbol)
+                    candles = candles.merge(
+                        omenize(candles),
+                        left_index=True,
+                        right_index=True,
+                        )
+                    candles = tensor(
+                        candles.to_numpy(),
+                        device=dev,
+                        dtype=dtype,
+                        )
+                    save(candles, abspath(f'{data_path}/{symbol}.candles'))
                 else:
                     data = json.loads(job[0])
                     bars = data['bars']
@@ -299,6 +320,7 @@ class Candelabrum:
                     err_file.write(err_msg)
                 print(self._PREFIX, f'Worker Thread: {err_msg}')
                 traceback.print_exc()
+                continue
         if candle_max > self._max_price_:
             self._max_price_ = float(candle_max)
         if candle_min < self._min_price_:
@@ -485,6 +507,7 @@ class Candelabrum:
     def make_offering(self, paterae, cook_time=0, epochs=-1, trim=34):
         """Spend time with the Norn researching candles."""
         from torch import load
+        from torch.nn.utils.rnn import pad_sequence
         abspath = path.abspath
         data_path = self._DATA_PATH
         get_daily = self.get_daily_candles
@@ -505,26 +528,25 @@ class Candelabrum:
                 print(type(details), details.args)
             finally:
                 continue
-        print(prefix, f'{len(offerings.keys())} total offerings.')
-        keys = list(offerings.keys())[0]
-        keys = len(offerings[keys].keys())
-        moirai = ThreeBlindMice(cook_time=cook_time, features=keys, verbosity=2)
+        keys = list(offerings.keys())
+        print(keys)
+        print(prefix, f'{len(keys)} total offerings.')
+        print(offerings.values())
+        offerings = pad_sequence(
+            [t.flip(0) for t in offerings.values()],
+            ).transpose(0, 1).flip(2)
+        print(offerings)
+        print(offerings.shape)
+        moirai = ThreeBlindMice(keys, offerings, verbosity=2)
         loop_start = time.time()
         while aeternalis:
-            for offering, candles in offerings.items():
-                print(prefix, f'Research of {offering} has started.')
-                offering_start = time.time()
-                complete = moirai.research(offering, candles)
-                elapsed = time.time() - offering_start
-                message = f'Research of {offering} complete after'
-                message = format_time(elapsed, message=message)
-                print(prefix, f'{message}.\n')
+            session = moirai.research()
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
-            elapsed = time.time() - loop_start
-            message = f'({epoch}) Aeternalis elapsed time is'
-            print(prefix, format_time(elapsed, message=message))
+        elapsed = time.time() - loop_start
+        message = f'({epoch}) Aeternalis elapsed time is'
+        print(prefix, format_time(elapsed, message=message))
 
     def pick_candles(self, num, trim=34):
         """Get top picks from the Moirai."""
@@ -569,7 +591,7 @@ class Candelabrum:
         c.dropna(inplace=True)
         return c.copy()
 
-    def clean_candelabrum(self):
+    def clean_candelabrum(self, join_workers=False):
         """Gets min/max price and volume from candles.
            If features don't match, removes the file."""
         candelabrum = path.abspath(self._DATA_PATH)
@@ -580,47 +602,26 @@ class Candelabrum:
         for candle_name in candles:
             if candle_name[-4:] == '.ivy':
                 self._QUEUE.put(('clean', candle_name))
-        self.join_workers()
         elapsed = time.time() - start_time
-        message = format_time(elapsed, message='Finished cleaning after')
-        print(self._PREFIX, message)
-        print(self._PREFIX, 'Largest price:', self._max_price_)
-        print(self._PREFIX, 'Smallest price:', self._min_price_)
-        print(self._PREFIX, 'Largest volume:', self._max_volume_)
-        print(self._PREFIX, 'Smallest volume:', self._min_volume_)
-        print(self._PREFIX, 'Corruption removed:', len(self._exceptions_))
+        if join_workers:
+            self.join_workers()
+            message = format_time(elapsed, message='Finished cleaning after')
+            print(self._PREFIX, message)
+            print(self._PREFIX, 'Largest price:', self._max_price_)
+            print(self._PREFIX, 'Smallest price:', self._min_price_)
+            print(self._PREFIX, 'Largest volume:', self._max_volume_)
+            print(self._PREFIX, 'Smallest volume:', self._min_volume_)
+            print(self._PREFIX, 'Corruption removed:', len(self._exceptions_))
+        return True
 
-    def light_candles(self, candle_names):
+    def light_candles(self, candle_names, join_workers=False):
         """Takes pandas data and converts to torch tensors."""
-        from torch import cuda, device, save, tensor, float
-        abspath = path.abspath
-        dev = device('cuda:0' if cuda.is_available() else 'cpu')
-        get_daily = self.get_daily_candles
-        omenize = self.apply_indicators
-        data_path = self._DATA_PATH
         prefix = self._PREFIX
-        print(prefix, f'Lighting {len(candle_names)} candles.')
-        candles_lit = 0
-        for symbol in candle_names:
-            try:
-                candles = get_daily(symbol)
-                candles = candles.merge(
-                    omenize(candles),
-                    left_index=True,
-                    right_index=True,
-                    )
-                candles = tensor(
-                    candles.to_numpy(),
-                    device=dev,
-                    dtype=float,
-                    )
-                save(candles, abspath(f'{data_path}/{symbol}.candles'))
-                candles_lit += 1
-            except Exception as details:
-                print(type(details), details.args)
-            finally:
-                continue
-        print(prefix, f'{candles_lit} candles were successfully lit.')
+        print(self._PREFIX, f'Lighting {len(candle_names)} candles.')
+        for candle_name in candle_names:
+            self._QUEUE.put(('light', candle_name))
+        if join_workers:
+            self.join_workers()
         return True
 
 
@@ -633,11 +634,14 @@ def make_utc(time_string):
     return time.mktime(third_annoyance)
 
 
-def build_historical_database(starting_year=2019):
+def build_historical_database(starting_year=2019, use_index=False):
     """Cycle through calendar and update data accordingly."""
     calendar = market_calendar()
     calendar_dates = calendar.index.tolist()
-    ivy_ndx = composite_index()
+    if use_index:
+        ivy_ndx = composite_index()
+    else:
+        ivy_ndx = ivy_watchlist
     today = time.strftime('%Y-%m-%d', time.localtime())
     local_year = int(today[0:4])
     local_month = int(today[5:7])
@@ -668,7 +672,10 @@ def build_historical_database(starting_year=2019):
         symbols = list()
         batch_count = 0
         for s in ivy_ndx:
-            symbols.append(s[0])
+            if use_index:
+                symbols.append(s[0])
+            else:
+                symbols.append(s)
             batch_count += 1
             if batch_count == batch_limit:
                 cdlm.do_update(symbols, **uargs)
@@ -676,6 +683,10 @@ def build_historical_database(starting_year=2019):
                 batch_count = 0
         if batch_count > 0:
             cdlm.do_update(symbols, **uargs)
+    cdlm.clean_candelabrum()
+    if use_index:
+        cdlm.light_candles([s[0] for s in ivy_ndx])
+    else:
+        cdlm.light_candles(ivy_ndx)
     cdlm.join_workers()
-    cdlm.light_candles([s[0] for s in ivy_ndx])
     print(msg.format(f'completed after {keeper.final}.'))
