@@ -124,7 +124,8 @@ class ThreeBlindMice(nn.Module):
         constants['eps'] = iota * 1e-6
         constants['n_syms'] = len(self.symbols)
         constants['hidden'] = constants['n_syms']
-        constants['layers'] = 2
+        constants['layers'] = 3
+        constants['proj_size'] = constants['n_syms']
         constants['lr_decay'] = iota / (phi - 1)
         constants['lr_init'] = iota ** (phi - 1)
         constants['mask_prob'] = phi - 1
@@ -135,12 +136,13 @@ class ThreeBlindMice(nn.Module):
         self._prefix_ = prefix = 'Moirai:'
         self._p_tensor_ = dict(device=self._device_, dtype=torch.float)
         self._symbol_ = None
-        self.cauldron = nn.GRU(
-            input_size=constants['n_syms'],
+        self.cauldron = nn.LSTM(
+            input_size=1,
             hidden_size=constants['hidden'],
             num_layers=constants['layers'],
+            proj_size=1,
             bias=True,
-            batch_first=False,
+            batch_first=True,
             dropout=constants['dropout'],
             bidirectional=False,
             **self._p_tensor_,
@@ -161,7 +163,7 @@ class ThreeBlindMice(nn.Module):
         self.epochs = 0
         self.metrics = dict()
         self.candelabrum = torch.bernoulli(torch.full(
-            [int(constants['n_syms'])],
+            [constants['n_syms']],
             constants['mask_prob'],
             **self._p_tensor_,
             ))
@@ -173,7 +175,8 @@ class ThreeBlindMice(nn.Module):
             **self._p_tensor_,
             )
         self.candelabrum *= self.tea
-        self.candelabrum = self.candelabrum.softmax(0).requires_grad_(True)
+        self.candelabrum = self.candelabrum.softmax(0).unsqueeze(0).H
+        self.candelabrum.requires_grad_(True)
         self.verbosity = int(verbosity)
         self.to(self._device_)
         if self.verbosity > 1:
@@ -232,10 +235,7 @@ class ThreeBlindMice(nn.Module):
 
     def forward(self):
         """**bubble*bubble**bubble**"""
-        candles = self.candelabrum
-        bubbles = candles.view(1, candles.shape[0])
-        bubbles = self.cauldron(bubbles)[1].softmax(0)
-        print(bubbles.shape)
+        bubbles = self.cauldron(self.candelabrum)[0].softmax(0)
         sigil = torch.topk(bubbles, 13, dim=0, largest=True)
         return sigil
 
