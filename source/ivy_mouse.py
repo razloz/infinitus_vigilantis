@@ -124,7 +124,7 @@ class ThreeBlindMice(nn.Module):
         constants['eps'] = iota * 1e-6
         constants['n_syms'] = len(self.symbols)
         constants['hidden'] = constants['n_syms']
-        constants['layers'] = 3
+        constants['layers'] = 256
         constants['proj_size'] = constants['n_syms']
         constants['lr_decay'] = iota / (phi - 1)
         constants['lr_init'] = iota ** (phi - 1)
@@ -233,9 +233,27 @@ class ThreeBlindMice(nn.Module):
             with torch.no_grad():
                 return self.forward()
 
+    def __layer_wax__(self):
+        """More bubbles, because...bubbles."""
+        constants = self._constants_
+        if self.candelabrum.grad is None:
+            return False
+        grad = self.candelabrum.grad.clone().detach()
+        self.candelabrum = torch.bernoulli(torch.full(
+            [constants['n_syms']],
+            constants['mask_prob'],
+            **self._p_tensor_,
+            ))
+        self.candelabrum *= self.tea
+        self.candelabrum = self.candelabrum.softmax(0).unsqueeze(0).H
+        self.candelabrum.requires_grad_(True)
+        self.candelabrum.grad = grad
+        return True
+
     def forward(self):
         """**bubble*bubble**bubble**"""
-        return self.cauldron(self.candelabrum)[0].softmax(0)
+        bubbles = self.__layer_wax__()
+        return self.cauldron(self.candelabrum)[0].log_softmax(0).squeeze(1)
 
     def create_sigil(dataframe, sigil_type='weather'):
         """Translate dataframe into an arcane sigil."""
@@ -244,6 +262,7 @@ class ThreeBlindMice(nn.Module):
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
+        banner = ''.join(['*' for _ in range(80)])
         constants = self._constants_
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
@@ -254,34 +273,38 @@ class ThreeBlindMice(nn.Module):
         pt_stack = torch.stack
         pt_tensor = torch.tensor
         verbosity = self.verbosity
-        symbol_range, time_range, feature_range = offerings.shape
-        symbol_range = range(symbol_range)
-        time_range = range(time_range)
-        feature_range = range(feature_range)
+        symbol_range = range(offerings.shape[0])
+        time_range = range(offerings.shape[1])
         cooking = True
         t_cook = time.time()
-        change_stack = list()
-        for day in time_range:
-            changes = list()
-            for sym in symbol_range:
-                chg_pct = offerings[sym, day, -1]
-                changes.append(chg_pct)
-            changes = pt_stack(changes, dim=0).squeeze(0)
-            change_stack.append(changes)
-        change_stack = torch.cat(change_stack).view(time_range[-1], symbol_range[-1])
-        print(change_stack.shape)
+        change_stack = (1 - (offerings[: , :, -1].H * 0.01)).tanh().softmax(1)
+        losses = 0
+        loss_retry = 0
+        loss_timeout = 50
         while cooking:
+            loss_avg = 0
             for day in time_range:
                 candles = sealed_candles(study=True)
-                changes = change_stack[day]
-                loss = loss_fn(candles.squeeze(0), change_stack)
+                changes = change_stack[day, :]
+                loss = loss_fn(candles, changes)
                 loss.backward()
                 optimizer.step()
+                loss_avg += loss.item()
+            loss_avg = loss_avg / (time_range[-1] + 1)
             self.epochs += 1
-            if self.epochs % 100 == 0:
-                print(candles)
-                print(candles.shape)
-                print(loss.item())
+            if loss_avg != losses:
+                loss_poll = 0
+                losses = loss_avg
+                print(banner)
+                for i in symbol_range:
+                    print(prefix, symbols[i], candles[i])
+                print(prefix, 'loss', loss_avg)
+                print(banner)
+            else:
+                loss_poll += 1
+                if loss_poll == loss_timeout:
+                    print(prefix, 'losses', losses)
+                    cooking = False
             elapsed = time.time() - t_cook
             if elapsed >= cook_time:
                 cooking = False

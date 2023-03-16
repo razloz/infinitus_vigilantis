@@ -537,14 +537,9 @@ class Candelabrum:
             finally:
                 continue
         keys = list(offerings.keys())
-        print(keys)
-        print(prefix, f'{len(keys)} total offerings.')
-        print(offerings.values())
         offerings = pad_sequence(
             [t.flip(0) for t in offerings.values()],
             ).transpose(0, 1).flip(2)
-        print(offerings)
-        print(offerings.shape)
         moirai = ThreeBlindMice(keys, offerings, verbosity=2)
         loop_start = time.time()
         while aeternalis:
