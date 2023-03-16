@@ -244,113 +244,47 @@ class ThreeBlindMice(nn.Module):
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
-        verbosity = self.verbosity
         constants = self._constants_
-        prefix = self._prefix_
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
+        offerings = self.offerings
         optimizer = self.optimizer
+        prefix = self._prefix_
         sealed_candles = self.__sealed_candles__
+        pt_stack = torch.stack
+        pt_tensor = torch.tensor
+        verbosity = self.verbosity
+        symbol_range, time_range, feature_range = offerings.shape
+        symbol_range = range(symbol_range)
+        time_range = range(time_range)
+        feature_range = range(feature_range)
         cooking = True
         t_cook = time.time()
+        change_stack = list()
+        for day in time_range:
+            changes = list()
+            for sym in symbol_range:
+                chg_pct = offerings[sym, day, -1]
+                changes.append(chg_pct)
+            changes = pt_stack(changes, dim=0).squeeze(0)
+            change_stack.append(changes)
+        change_stack = torch.cat(change_stack).view(time_range[-1], symbol_range[-1])
+        print(change_stack.shape)
         while cooking:
-            compass = list()
-            trades = list()
-            signals = list()
-            trading = False
-            entry = float(0)
-            trade_days = 0
-            trade_count = 0
-            trade_span = 0
-            avg_span = 0
-            avg_gain = 0
-            net_gains = 0
-            correct = 0
-            accuracy = 0
-            for day in candle_range:
-                add_signal = False
+            for day in time_range:
                 candles = sealed_candles(study=True)
-                sentiment = candles
-                signal = sigil.indices.item()
-                compass.append(sentiment)
-                trade = no_trade.clone()
-                if trading:
-                    trade_days += 1
-                    if signal == 2 and trade_days >= 3:
-                        trading = False
-                        add_signal = True
-                        day_avg = candle[-1]
-                        trade = (day_avg - entry) / entry
-                        if trade > 0:
-                            correct += 1
-                        entry = float(0)
-                        net_gains += trade.item()
-                        trade_span += trade_days
-                        trade_count += 1
-                        accuracy = correct / trade_count
-                        avg_span = trade_span / trade_count
-                        avg_gain = net_gains / trade_count
-                        if verbosity > 2:
-                            details = msg.format(day_avg, sentiment)
-                            print(prefix, 'exited', details)
-                            print(prefix, 'trade_days', trade_days)
-                            print(prefix, 'trade', trade.item())
-                            print(prefix, 'net_gains', net_gains)
-                            print(prefix, 'trade_count', trade_count)
-                else:
-                    if signal == 0:
-                        trading = True
-                        add_signal = True
-                        trade_days = 0
-                        entry = float(candle[-1].item())
-                        if verbosity > 2:
-                            details = msg.format(entry, sentiment)
-                            print('')
-                            print(prefix, 'entered', details)
-                loss = loss_fn(trade, max_trade)
+                changes = change_stack[day]
+                loss = loss_fn(candles.squeeze(0), change_stack)
                 loss.backward()
                 optimizer.step()
-                trades.append(trade.item())
-                if add_signal:
-                    signals.append(signal)
-                else:
-                    signals.append(0)
             self.epochs += 1
+            if self.epochs % 100 == 0:
+                print(candles)
+                print(candles.shape)
+                print(loss.item())
             elapsed = time.time() - t_cook
             if elapsed >= cook_time:
                 cooking = False
-                sigil_path = f'{self._sigil_path_}/{symbol}.sigil'
-                with open(sigil_path, 'w+') as file_obj:
-                    file_obj.write(json.dumps({
-                        'symbol': symbol,
-                        'signal': signals[-1],
-                        'sentiment': sentiment,
-                        'net_gains': net_gains,
-                        'trade_count': trade_count,
-                        'trading': trading,
-                        'entry': entry,
-                        'trade_days': trade_days,
-                        'avg_span': avg_span,
-                        'avg_gain': avg_gain,
-                        'accuracy': accuracy,
-                        'compass': compass,
-                        'trades': trades,
-                        'signals': signals,
-                        }))
-                if verbosity > 1:
-                    print('***************************************************')
-                    print(prefix, 'symbol', symbol)
-                    print(prefix, 'signal', signals[-1])
-                    print(prefix, 'sentiment', sentiment)
-                    print(prefix, 'net_gains', net_gains)
-                    print(prefix, 'trade_count', trade_count)
-                    print(prefix, 'trading', trading)
-                    print(prefix, 'entry', entry)
-                    print(prefix, 'trade_days', trade_days)
-                    print(prefix, 'avg_span', avg_span)
-                    print(prefix, 'avg_gain', avg_gain)
-                    print(prefix, 'accuracy', accuracy)
-                    print('***************************************************')
         self.__manage_state__(call_type=1)
         return True
 
