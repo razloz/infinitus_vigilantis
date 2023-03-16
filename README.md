@@ -15,9 +15,7 @@ Dependencies:
 
 Usage:
   - with IVY as an absolute path to infinitus vigilantis folder
-  - $IVY/updater.py --build
-  - $IVY/updater.py --clean
-  - $IVY/updater.py --study
+  - cd $IVY && $IVY/updater.py --build && $IVY/updater.py --study
 
 Systemd Daemon:
   - Shell script, timer, and service located in daemon folder.
