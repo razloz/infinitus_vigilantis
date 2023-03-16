@@ -366,7 +366,7 @@ class Candelabrum:
         """=^.^="""
         data_path = self.__get_path__(symbol, date_string)
         if not path.exists(data_path):
-            return pd.DataFrame()
+            return None
         with open(data_path) as pth:
             df = pd.read_csv(pth, **self._CSV_PARAMS)
         return df.copy()
@@ -433,7 +433,7 @@ class Candelabrum:
             if day_obj > dates[1]: break
             try:
                 day_data = self.load_candles(symbol, ts)
-                if daily and day_data is not None:
+                if daily:
                     yield ts, day_data
                 elif candles is None:
                     candles = day_data.copy()
@@ -459,14 +459,22 @@ class Candelabrum:
         daily_data = gather_data(symbol, start_time, end_time, daily=True)
         for ts, day_data in daily_data:
             candle = make_candle(day_data)
-            if candle is not None:
-                candles.append(candle)
-                timestamps.append(ts)
+            timestamps.append(ts)
+            candles.append(candle)
         return pd.DataFrame(candles, index=timestamps)
 
     def daily_candle(self, day_data):
         """Takes minute data and converts it into a daily candle."""
-        if len(day_data) == 0: return None
+        if day_data is None or len(day_data) == 0:
+            return {
+                'open': 0.0,
+                'high': 0.0,
+                'low': 0.0,
+                'close': 0.0,
+                'volume': 0.0,
+                'num_trades': 0.0,
+                'vol_wma_price': 0.0,
+                }
         ohlc = day_data[['open', 'high', 'low', 'close']]
         return {
             'open': float(ohlc['open'][0]),

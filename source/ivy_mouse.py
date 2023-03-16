@@ -219,7 +219,7 @@ class ThreeBlindMice(nn.Module):
             if self.verbosity > 2:
                 print(self._prefix_, 'Saved RNN state.')
 
-    def __time_step__(self, candle, study=False):
+    def __sealed_candles__(self, study=False):
         """Let Clotho mold the candles
            Let Lachesis measure the candles
            Let Atropos seal the candles
@@ -227,17 +227,15 @@ class ThreeBlindMice(nn.Module):
         if study:
             self.train()
             self.optimizer.zero_grad()
-            return self.forward(candle)
+            return self.forward()
         else:
             self.eval()
             with torch.no_grad():
-                return self.forward(candle)
+                return self.forward()
 
     def forward(self):
         """**bubble*bubble**bubble**"""
-        bubbles = self.cauldron(self.candelabrum)[0].softmax(0)
-        sigil = torch.topk(bubbles, 13, dim=0, largest=True)
-        return sigil
+        return self.cauldron(self.candelabrum)[0].softmax(0)
 
     def create_sigil(dataframe, sigil_type='weather'):
         """Translate dataframe into an arcane sigil."""
@@ -246,14 +244,13 @@ class ThreeBlindMice(nn.Module):
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
-
         verbosity = self.verbosity
         constants = self._constants_
         prefix = self._prefix_
         cook_time = constants['cook_time']
         loss_fn = self.loss_fn
         optimizer = self.optimizer
-        research = self.__time_step__
+        sealed_candles = self.__sealed_candles__
         cooking = True
         t_cook = time.time()
         while cooking:
@@ -272,9 +269,8 @@ class ThreeBlindMice(nn.Module):
             accuracy = 0
             for day in candle_range:
                 add_signal = False
-                candle = fresh_cheese[day]
-                sigil = research(candle, study=True)
-                sentiment = sigil.values.item()
+                candles = sealed_candles(study=True)
+                sentiment = candles
                 signal = sigil.indices.item()
                 compass.append(sentiment)
                 trade = no_trade.clone()

@@ -247,8 +247,11 @@ def get_indicators(df, index_key='time'):
     delta = (median - wema) / wema
     indicators['delta'] = delta
     indicators['price_med'] = median
+    indicators['pct_chg'] = indicators['price_med'].pct_change(periods=5)
     indicators.replace([inf, -inf], nan, inplace=True)
     indicators.fillna(0, inplace=True)
+    print(indicators.tail())
+    print(indicators['pct_chg'])
     return indicators.copy()
 
 
