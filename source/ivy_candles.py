@@ -512,7 +512,7 @@ class Candelabrum:
             print(prefix, f'{message}.')
         print(prefix, 'The recital comes to an end.')
 
-    def make_offering(self, paterae, cook_time=0, epochs=-1, trim=34):
+    def make_offering(self, paterae, cook_time=None, epochs=-1, trim=34):
         """Spend time with the Norn researching candles."""
         from torch import load
         from torch.nn.utils.rnn import pad_sequence
@@ -540,7 +540,10 @@ class Candelabrum:
         offerings = pad_sequence(
             [t.flip(0) for t in offerings.values()],
             ).transpose(0, 1).flip(2)
-        moirai = ThreeBlindMice(keys, offerings, cook_time=cook_time)
+        if cook_time:
+            moirai = ThreeBlindMice(keys, offerings, cook_time=cook_time)
+        else:
+            moirai = ThreeBlindMice(keys, offerings)
         loop_start = time.time()
         while aeternalis:
             session = moirai.research()
