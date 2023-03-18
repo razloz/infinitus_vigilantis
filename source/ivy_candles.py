@@ -540,7 +540,7 @@ class Candelabrum:
         offerings = pad_sequence(
             [t.flip(0) for t in offerings.values()],
             ).transpose(0, 1).flip(2)
-        moirai = ThreeBlindMice(keys, offerings, verbosity=2)
+        moirai = ThreeBlindMice(keys, offerings, cook_time=cook_time)
         loop_start = time.time()
         while aeternalis:
             session = moirai.research()

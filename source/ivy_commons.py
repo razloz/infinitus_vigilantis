@@ -330,6 +330,7 @@ class UpdateSchedule(object):
 
 
 class FibonacciSequencer():
+    """Get the next N sequence of numbers."""
     def __init__(self):
         self.n = 0
         self.previous = 0
@@ -352,3 +353,88 @@ class FibonacciSequencer():
         for _ in self.__seq_gen__(steps=n):
             pass
         return self
+
+
+def read_sigil(num):
+    """Translate the inscribed sigils."""
+    from pandas import DataFrame
+    inscriptions = dict()
+    sigils = list()
+    sigil_path = abspath('./rnn/sigil')
+    keys = ['signal', 'accuracy', 'avg_gain', 'net_gains', 'sentiment']
+    ascending = [True, False, False, False, False]
+    for file_name in listdir(sigil_path):
+        if file_name[-6:] == '.sigil':
+            file_path = abspath(f'{sigil_path}/{file_name}')
+            with open(file_path, 'r') as file_obj:
+                sigil_data = json.loads(file_obj.read())
+            symbol = sigil_data['symbol']
+            inscriptions[symbol] = sigil_data
+            sigil = {'symbol': symbol}
+            for key, value in sigil_data.items():
+                if key in keys:
+                    sigil[key] = value
+            sigils.append(sigil)
+    sigils = DataFrame(sigils)
+    sigils.set_index('symbol', inplace=True)
+    sigils.sort_values(keys, ascending=ascending, inplace=True)
+    best = list()
+    top_sigils = sigils.index[:num]
+    for symbol in top_sigils:
+        best.append(inscriptions[symbol])
+    print(sigils[:num])
+    return best
+
+
+def boil_wax(num):
+    """Full reduction numerology."""
+    if type(num) != str:
+        num = str(num)
+    if '.' in num:
+        num = num.replace('.', '')
+    while len(num) > 1:
+        num = str(sum([int(i) for i in num]))
+    return int(num)
+
+
+def golden_brew():
+    """Care for a spot of tea?"""
+    from math import pi
+    from torch import stack, tensor
+    from torch.fft import rfft, irfft, rfftfreq
+    def transform(brew):
+        t = list()
+        for f, b in brew.items():
+            input_signal = tensor(b, dtype=torch.float)
+            freq_domain = rfft(input_signal)
+            harmonic_mean = stack([freq_domain.real, freq_domain.imag])
+            harmonic_mean = (1 / harmonic_mean).mean(0) ** -1
+            if harmonic_mean.shape[0] > 25:
+                harmonic_mean = harmonic_mean[:25]
+            t.append(harmonic_mean)
+        return t
+    fib_seq = icy.FibonacciSequencer()
+    fib_seq.skip(100000)
+    f1, f2 = fib_seq.next(2)
+    phi = f2 / f1
+    golden_string = f'{(f2 / f1):.50}'.replace('.', '')
+    pi_string = f'{pi:.50}'.replace('.', '')
+    golden_r = [int(n) for n in golden_string]
+    pi_r = [int(n) for n in pi_string]
+    golden_brew = list()
+    pi_brew = list()
+    l = 0
+    for i in range(50):
+        g = golden_string[:i+1]
+        p = pi_string[:i+1]
+        m = len(g)
+        if m > l:
+            l = m
+        else:
+            break
+        golden_brew.append(boil_wax(g))
+        pi_brew.append(boil_wax(p))
+    t = {'fib': golden_brew, 'pi': pi_brew, 'fib_raw': golden_r, 'pi_raw': pi_r}
+    brew = (1 / stack(transform(t), dim=0)).mean(0) ** -1
+    return brew.clone()
+
