@@ -1,5 +1,7 @@
 """Three blind mice to predict the future."""
 import json
+import hashlib
+import io
 import time
 import torch
 import traceback
@@ -7,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import source.ivy_commons as icy
 from torch import bernoulli, fft, full_like, nn, stack
-from torch.optim import Adagrad
+from torch.optim import RMSprop
 from torch.utils.data import DataLoader, TensorDataset
 from math import sqrt, inf
 from os import listdir, mkdir
@@ -22,10 +24,12 @@ class ThreeBlindMice(nn.Module):
     def __init__(self, symbols, offerings, cook_time=inf, verbosity=2):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__()
-        iota = 1 / 137
-        phi = 0.618033988749894
+        torch.autograd.set_detect_anomaly(True)
+        self.iota = iota = 1 / 137
+        self.phi = phi = 0.618033988749894
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self._device_ = dev = torch.device(self._device_type_)
+        self.to(dev)
         self._state_path_ = abspath('./rnn')
         if not exists(self._state_path_): mkdir(self._state_path_)
         self._epochs_path_ = abspath('./rnn/epochs')
@@ -33,57 +37,69 @@ class ThreeBlindMice(nn.Module):
         self._sigil_path_ = abspath('./rnn/sigil')
         if not exists(self._sigil_path_): mkdir(self._sigil_path_)
         self.symbols = list(symbols)
-        self.offerings = offerings.clone().detach().transpose(0, 1)
+        offerings = offerings.to(dev)
         constants = {}
         constants['cook_time'] = cook_time
-        constants['eps'] = iota * 1e-6
         constants['hidden'] = 2048
-        constants['lr_decay'] = iota / phi
-        constants['lr_init'] = iota ** phi
-        constants['n_features'] = int(self.offerings.shape[2])
-        constants['n_sample'] = 34
-        constants['n_symbols'] = int(self.offerings.shape[1])
-        constants['n_time'] = int(self.offerings.shape[0])
-        constants['n_time'] -= constants['n_sample']
-        constants['weight_decay'] = iota / (1 + phi)
+        constants['n_features'] = 1
+        constants['n_sample'] = n_sample = 34
+        constants['n_symbols'] = len(self.symbols)
+        constants['n_time'] = int(offerings.shape[0] - n_sample)
         self._constants_ = dict(constants)
-        self.change_stack = (offerings[: , :, -1] * 0.01).clone().detach().H
-        self.change_stack = self.change_stack[constants['n_sample']:].softmax(1)
-        self.offerings = self.offerings[:-constants['n_sample']]
-        self.offerings.requires_grad_(True)
         self._prefix_ = prefix = 'Moirai:'
         tfloat = torch.float
         self.mask_p = lambda t: full_like(t, phi, device=dev, dtype=tfloat)
         self.mask = lambda t: t * bernoulli(self.mask_p(t))
-        self.inscription = fft.rfft
-        self.gate = nn.GLU()
-        self.leaky = nn.LeakyReLU()
-        self.wax_layer = nn.Bilinear(
+        self.rfft = fft.rfft
+        self.signals = offerings[:, :, 0].clone().detach()
+        self.signals.requires_grad_(True)
+        self.targets = offerings[:, :, 1].clone().detach()
+        self.candles = offerings[:, :, 2].clone().detach()
+        self.candelabrum = TensorDataset(
+            self.signals[:-n_sample],
+            self.targets[n_sample:],
+            self.candles[:-n_sample],
+            )
+        self.cauldron = DataLoader(self.candelabrum, batch_size=n_sample)
+        self.bilinear = nn.Bilinear(
             in1_features=constants['n_features'],
             in2_features=constants['n_features'],
             out_features=9,
-            bias=True,
+            bias=False,
             device=dev,
             dtype=tfloat,
             )
-        self.cauldron = nn.LSTMCell(
+        self.input_cell = nn.LSTMCell(
             input_size=constants['n_symbols'],
             hidden_size=constants['hidden'],
             bias=True,
             device=dev,
             dtype=tfloat,
         )
-        self.wax_coat = nn.LSTMCell(
+        self.output_cell = nn.LSTMCell(
             input_size=constants['hidden'],
             hidden_size=constants['hidden'],
             bias=True,
             device=dev,
             dtype=tfloat,
         )
-        self.wax_seal = nn.Linear(
-            in_features=int(constants['hidden'] / 2),
+        self.linear = nn.Linear(
+            in_features=constants['hidden'],
             out_features=constants['n_symbols'],
+            bias=False,
+            device=dev,
+            dtype=tfloat,
+            )
+        self.conv1d = nn.Conv1d(
+            in_channels=2,
+            out_channels=2,
+            kernel_size=3,
+            stride=1,
+            padding=0,
+            dilation=2,
+            groups=1,
             bias=True,
+            padding_mode='zeros',
             device=dev,
             dtype=tfloat,
             )
@@ -91,24 +107,13 @@ class ThreeBlindMice(nn.Module):
             reduction='mean',
             delta=1.0,
             )
-        self.optimizer = Adagrad(
+        self.optimizer = RMSprop(
             self.parameters(),
-            lr=constants['lr_init'],
-            lr_decay=constants['lr_decay'],
-            weight_decay=constants['weight_decay'],
-            eps=constants['eps'],
-            foreach=False,
-            maximize=False,
-            )
-        self.zero_loss = torch.zeros(
-            constants['n_symbols'],
-            device=dev,
-            dtype=tfloat,
+            foreach=True,
             )
         self.epochs = 0
         self.metrics = dict()
         self.verbosity = int(verbosity)
-        self.to(self._device_)
         if self.verbosity > 1:
             for key, value in constants.items():
                 print(prefix, f'set {key} to {value}')
@@ -158,60 +163,100 @@ class ThreeBlindMice(nn.Module):
             self.train()
         else:
             self.eval()
+        iota = self.iota
+        phi = self.phi
         mask = self.mask
         optimizer = self.optimizer
         optimizer.zero_grad()
-        bubbles = self.wax_layer(candles, candles)
-        bubbles = self.inscription(bubbles)
-        bubbles = stack([bubbles.real, bubbles.imag]).mean(2).mean(0)
-        bubbles = mask(bubbles).softmax(0)
-        bubbles = mask(self.cauldron(bubbles)[0]).softmax(0)
-        bubbles = self.wax_coat(bubbles)[0]
-        bubbles = self.gate(bubbles).tanh()
-        bubbles = self.wax_seal(bubbles).softmax(0)
+        print(candles)
+        print('candles', candles.shape)
+        bubbles = (self.bilinear(candles, candles) ** 2) + iota
+        print(bubbles)
+        print('wax layer', bubbles.shape)
+        bubbles = self.rfft(bubbles)
+        print(bubbles)
+        print('inscription', bubbles.shape)
+        bubbles = (bubbles.real.sum(1) + bubbles.imag.sum(1)) / bubbles.shape[1]
+        print(bubbles)
+        print('real imag sum', bubbles.shape)
+        bubbles = phi ** bubbles
+        print(bubbles)
+        print('phi power', bubbles.shape)
+        bubbles = self.conv1d(bubbles)
+        print(bubbles)
+        print('meld', bubbles.shape)
+        bubbles = mask(bubbles) + iota
+        print(bubbles)
+        print('first mask', bubbles.shape)
+        bubbles = mask(self.input_cell(bubbles)[0]) + iota
+        print(bubbles)
+        print('final mask', bubbles.shape)
+        bubbles = self.output_cell(bubbles)[0]
+        print(bubbles)
+        print('wax coat', bubbles.shape)
+        bubbles = (self.linear(bubbles) ** 2).softmax(0)
+        print(bubbles)
+        print('softmax', bubbles.shape)
         if study:
-            abs_loss = (bubbles - changes).abs()
-            loss = self.loss_fn(abs_loss, self.zero_loss)
+            loss = self.loss_fn(bubbles, changes)
             loss.backward()
             optimizer.step()
-            return bubbles, loss.item()
+            return bubbles.clone(), loss.item()
         else:
-            return bubbles
+            return bubbles.clone()
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
-        torch.autograd.set_detect_anomaly(True)
         banner = ''.join(['*' for _ in range(80)])
         constants = self._constants_
         cook_time = constants['cook_time']
         inscribe_sigil = self.inscribe_sigil
-        offerings = self.offerings
-        changes = self.change_stack
         prefix = self._prefix_
         symbols = self.symbols
         verbosity = self.verbosity
+        n_time = constants['n_time']
         symbol_range = range(constants['n_symbols'])
-        time_range = range(constants['n_time'])
+        last_batch = self.signals[-constants['n_sample']:]
+        last_range = range(last_batch.shape[0])
         cooking = True
         t_cook = time.time()
-        losses = 0
+        losses = inf
         loss_retry = 0
         loss_timeout = 13
         while cooking:
             loss_avg = 0
-            for day in time_range:
-                candles, loss = inscribe_sigil(offerings[day], changes[day])
+            for signal, target, candle in iter(self.cauldron):
+                print(signal)
+                print('signal', signal.shape)
+                print(target)
+                print('target', target.shape)
+                print(candle)
+                print('candle', candle.shape)
+                candles, loss = inscribe_sigil(signal, target)
                 loss_avg += loss
-            loss_avg = loss_avg / constants['n_time']
+                print(candles)
+                print(candles.shape)
+                print(loss)
+            loss_avg = loss_avg / n_time
             self.epochs += 1
-            if loss_avg != losses:
+            print(prefix, f'epoch({self.epochs}), loss_avg({loss_avg})')
+            if loss_avg < losses:
                 loss_retry = 0
                 losses = loss_avg
-                print(prefix, 'loss_avg', loss_avg)
             else:
                 loss_retry += 1
                 if loss_retry == loss_timeout:
-                    candles = inscribe_sigil(offerings, None, study=False)
+                    sigil = list()
+                    for day in last_range:
+                        candles = inscribe_sigil(
+                            last_batch[day],
+                            None,
+                            study=False,
+                            )
+                        sigil.append(candles.clone())
+                    sigil = stack(sigil)
+                    print(sigil)
+                    print('sigil', sigil.shape)
                     print(banner)
                     for i in symbol_range:
                         print(prefix, symbols[i], candles[i])
@@ -221,5 +266,5 @@ class ThreeBlindMice(nn.Module):
             elapsed = time.time() - t_cook
             if elapsed >= cook_time:
                 cooking = False
-        self.__manage_state__(call_type=1)
+            self.__manage_state__(call_type=1)
         return True

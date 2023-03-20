@@ -208,6 +208,7 @@ class Candelabrum:
         candle_keys = ('utc_ts','open','high','low','close',
                        'volume','num_trades','vol_wma_price')
         ohlc = ('open','high','low','close')
+        offering_keys = ['price_wema', 'delta', 'price_med']
         candle_max = 0
         candle_min = 1e30
         volume_max = 0
@@ -278,7 +279,7 @@ class Candelabrum:
                         omenize(candles),
                         left_index=True,
                         right_index=True,
-                        )
+                        )[offering_keys]
                     candles = tensor(
                         candles.to_numpy(),
                         device=dev,
@@ -514,8 +515,7 @@ class Candelabrum:
 
     def make_offering(self, paterae, cook_time=None, epochs=-1, trim=34):
         """Spend time with the Norn researching candles."""
-        from torch import load
-        from torch.nn.utils.rnn import pad_sequence
+        from torch import load, stack
         abspath = path.abspath
         data_path = self._DATA_PATH
         get_daily = self.get_daily_candles
@@ -526,20 +526,20 @@ class Candelabrum:
             #paterae = random.sample(paterae, k=len(paterae))
         epoch = 0
         aeternalis = True
-        offerings = dict()
+        offerings = list()
+        keys = list()
         for symbol in paterae:
             print(prefix, f'Gathering daily candles for {symbol}')
             try:
                 candle_path = abspath(f'{data_path}/{symbol}.candles')
-                offerings[symbol] = load(candle_path)[trim:]
+                candles = load(candle_path)
+                offerings.append(candles)
+                keys.append(symbol)
             except Exception as details:
                 print(type(details), details.args)
             finally:
                 continue
-        keys = list(offerings.keys())
-        offerings = pad_sequence(
-            [t.flip(0) for t in offerings.values()],
-            ).transpose(0, 1).flip(2)
+        offerings = stack(offerings, dim=1)
         if cook_time:
             moirai = ThreeBlindMice(keys, offerings, cook_time=cook_time)
         else:
