@@ -37,7 +37,8 @@ if __name__ == '__main__':
     if args:
         print('Loading IVy Updater...')
         import source.ivy_candles as updater
-        candelabrum = updater.Candelabrum()
+        if not args.build:
+            candelabrum = updater.Candelabrum()
     else:
         raise('Missing argument.')
     if args.build:
