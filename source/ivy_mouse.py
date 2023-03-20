@@ -48,6 +48,9 @@ class ThreeBlindMice(nn.Module):
         constants['n_lin_in'] = n_lin_in = 18
         constants['n_lin_out'] = n_lin_out = 9
         constants['output_dims'] = [n_sample, n_symbols, n_lin_out]
+        while constants['n_time'] % n_sample != 0:
+            constants['n_time'] -= 1
+        offerings = offerings[-constants['n_time']:]
         self._constants_ = dict(constants)
         self._prefix_ = prefix = 'Moirai:'
         tfloat = torch.float
@@ -57,6 +60,7 @@ class ThreeBlindMice(nn.Module):
         self.signals = offerings[:, :, 0].clone().detach()
         self.signals.requires_grad_(True)
         self.targets = offerings[:, :, 1].clone().detach()
+        self.targets = (self.targets + iota).softmax(1)
         self.candles = offerings[:, :, 2].clone().detach()
         self.candelabrum = TensorDataset(
             self.signals[:-n_sample],
@@ -90,6 +94,15 @@ class ThreeBlindMice(nn.Module):
             in_features=constants['hidden'],
             out_features=constants['n_output'],
             bias=True,
+            device=dev,
+            dtype=tfloat,
+            )
+        self.normalizer = nn.InstanceNorm1d(
+            num_features=constants['n_symbols'],
+            eps=1e-09,
+            momentum=0.1,
+            affine=False,
+            track_running_stats=False,
             device=dev,
             dtype=tfloat,
             )
@@ -151,13 +164,23 @@ class ThreeBlindMice(nn.Module):
             Let Atropos seal the candles
             Let Awen contain the wax
         """
-        bubbles = self.rfft(signal.transpose(0, 1))
-        bubbles = self.bilinear(bubbles.real, bubbles.imag)
-        bubbles = self.mask(bubbles.transpose(0, 1))
-        bubbles = self.mask(self.input_cell(bubbles)[0])
+        iota = self.iota
+        mask = self.mask
+        bubbles = self.normalizer(signal.transpose(0, 1))
+        bubbles = self.rfft(bubbles)
+        bubbles = torch.nan_to_num(
+            (bubbles.real * bubbles.imag),
+            nan=iota,
+            posinf=1.0,
+            neginf=iota,
+            ).sigmoid().softmax(1)
+        bubbles = self.bilinear(bubbles, bubbles)
+        bubbles = mask(bubbles.transpose(0, 1))
+        bubbles = mask(self.input_cell(bubbles)[0])
         bubbles = self.output_cell(bubbles)[0]
         bubbles = self.linear(bubbles).view(self._constants_['output_dims'])
-        return bubbles.sum(2).softmax(1).clone()
+        bubbles = self.normalizer(bubbles.sum(2)).softmax(1)
+        return bubbles.clone()
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
@@ -170,30 +193,23 @@ class ThreeBlindMice(nn.Module):
         prefix = self._prefix_
         symbols = self.symbols
         verbosity = self.verbosity
+        n_sample = constants['n_sample']
         n_time = constants['n_time']
-        symbol_range = range(constants['n_symbols'])
-        last_batch = self.signals[-constants['n_sample']:]
-        last_range = range(last_batch.shape[0])
         cooking = True
         t_cook = time.time()
         losses = inf
         loss_retry = 0
-        loss_timeout = 13
+        loss_timeout = 137
         self.train()
         while cooking:
             loss_avg = 0
             for signal, target, candle in iter(self.cauldron):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(signal)
-                print(sigil)
-                print('sigil', sigil.shape)
                 loss = loss_fn(sigil, target)
                 loss.backward()
                 optimizer.step()
                 loss_avg += loss.item()
-                print(candles)
-                print(candles.shape)
-                print(loss)
             loss_avg = loss_avg / n_time
             self.epochs += 1
             print(prefix, f'epoch({self.epochs}), loss_avg({loss_avg})')
@@ -209,20 +225,15 @@ class ThreeBlindMice(nn.Module):
                 cooking = False
             self.__manage_state__(call_type=1)
         self.eval()
-        sigil = list()
-        for day in last_range:
-            candles = inscribe_sigil(
-                last_batch[day],
-                None,
-                study=False,
-                )
-            sigil.append(candles.clone())
-        sigil = stack(sigil)
+        sigil = inscribe_sigil(self.signals[-n_sample:])
         print(sigil)
         print('sigil', sigil.shape)
         print(banner)
-        for i in symbol_range:
-            print(prefix, symbols[i], candles[i])
+        for t in range(sigil.shape[0]):
+            for i in range(sigil.shape[1]):
+                prob = sigil[t, i].item()
+                if prob > 0:
+                    print(prefix, f'day({t})', symbols[i], prob)
         print(prefix, 'losses', losses)
         print(banner)
         return True
