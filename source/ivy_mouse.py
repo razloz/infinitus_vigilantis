@@ -41,15 +41,18 @@ class ThreeBlindMice(nn.Module):
         constants = {}
         constants['cook_time'] = cook_time
         constants['hidden'] = 2048
-        constants['n_features'] = 1
         constants['n_sample'] = n_sample = 34
-        constants['n_symbols'] = len(self.symbols)
+        constants['n_symbols'] = n_symbols = len(self.symbols)
+        constants['n_output'] = n_sample * n_symbols
         constants['n_time'] = int(offerings.shape[0] - n_sample)
+        constants['n_lin_in'] = n_lin_in = 18
+        constants['n_lin_out'] = n_lin_out = 9
+        constants['output_dims'] = [n_sample, n_symbols, n_lin_out]
         self._constants_ = dict(constants)
         self._prefix_ = prefix = 'Moirai:'
         tfloat = torch.float
         self.mask_p = lambda t: full_like(t, phi, device=dev, dtype=tfloat)
-        self.mask = lambda t: t * bernoulli(self.mask_p(t))
+        self.mask = lambda t: self.iota + (t * bernoulli(self.mask_p(t)))
         self.rfft = fft.rfft
         self.signals = offerings[:, :, 0].clone().detach()
         self.signals.requires_grad_(True)
@@ -62,10 +65,10 @@ class ThreeBlindMice(nn.Module):
             )
         self.cauldron = DataLoader(self.candelabrum, batch_size=n_sample)
         self.bilinear = nn.Bilinear(
-            in1_features=constants['n_features'],
-            in2_features=constants['n_features'],
-            out_features=9,
-            bias=False,
+            in1_features=n_lin_in,
+            in2_features=n_lin_in,
+            out_features=n_lin_out,
+            bias=True,
             device=dev,
             dtype=tfloat,
             )
@@ -85,21 +88,8 @@ class ThreeBlindMice(nn.Module):
         )
         self.linear = nn.Linear(
             in_features=constants['hidden'],
-            out_features=constants['n_symbols'],
-            bias=False,
-            device=dev,
-            dtype=tfloat,
-            )
-        self.conv1d = nn.Conv1d(
-            in_channels=2,
-            out_channels=2,
-            kernel_size=3,
-            stride=1,
-            padding=0,
-            dilation=2,
-            groups=1,
+            out_features=constants['n_output'],
             bias=True,
-            padding_mode='zeros',
             device=dev,
             dtype=tfloat,
             )
@@ -154,56 +144,20 @@ class ThreeBlindMice(nn.Module):
             if self.verbosity > 2:
                 print(self._prefix_, 'Saved RNN state.')
 
-    def inscribe_sigil(self, candles, changes, study=True):
-        """Let Clotho mold the candles
-           Let Lachesis measure the candles
-           Let Atropos seal the candles
-           Let Awen contain the wax"""
-        if study:
-            self.train()
-        else:
-            self.eval()
-        iota = self.iota
-        phi = self.phi
-        mask = self.mask
-        optimizer = self.optimizer
-        optimizer.zero_grad()
-        print(candles)
-        print('candles', candles.shape)
-        bubbles = (self.bilinear(candles, candles) ** 2) + iota
-        print(bubbles)
-        print('wax layer', bubbles.shape)
-        bubbles = self.rfft(bubbles)
-        print(bubbles)
-        print('inscription', bubbles.shape)
-        bubbles = (bubbles.real.sum(1) + bubbles.imag.sum(1)) / bubbles.shape[1]
-        print(bubbles)
-        print('real imag sum', bubbles.shape)
-        bubbles = phi ** bubbles
-        print(bubbles)
-        print('phi power', bubbles.shape)
-        bubbles = self.conv1d(bubbles)
-        print(bubbles)
-        print('meld', bubbles.shape)
-        bubbles = mask(bubbles) + iota
-        print(bubbles)
-        print('first mask', bubbles.shape)
-        bubbles = mask(self.input_cell(bubbles)[0]) + iota
-        print(bubbles)
-        print('final mask', bubbles.shape)
+    def inscribe_sigil(self, signal):
+        """
+            Let Clotho mold the candles
+            Let Lachesis measure the candles
+            Let Atropos seal the candles
+            Let Awen contain the wax
+        """
+        bubbles = self.rfft(signal.transpose(0, 1))
+        bubbles = self.bilinear(bubbles.real, bubbles.imag)
+        bubbles = self.mask(bubbles.transpose(0, 1))
+        bubbles = self.mask(self.input_cell(bubbles)[0])
         bubbles = self.output_cell(bubbles)[0]
-        print(bubbles)
-        print('wax coat', bubbles.shape)
-        bubbles = (self.linear(bubbles) ** 2).softmax(0)
-        print(bubbles)
-        print('softmax', bubbles.shape)
-        if study:
-            loss = self.loss_fn(bubbles, changes)
-            loss.backward()
-            optimizer.step()
-            return bubbles.clone(), loss.item()
-        else:
-            return bubbles.clone()
+        bubbles = self.linear(bubbles).view(self._constants_['output_dims'])
+        return bubbles.sum(2).softmax(1).clone()
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
@@ -211,6 +165,8 @@ class ThreeBlindMice(nn.Module):
         constants = self._constants_
         cook_time = constants['cook_time']
         inscribe_sigil = self.inscribe_sigil
+        loss_fn = self.loss_fn
+        optimizer = self.optimizer
         prefix = self._prefix_
         symbols = self.symbols
         verbosity = self.verbosity
@@ -223,17 +179,18 @@ class ThreeBlindMice(nn.Module):
         losses = inf
         loss_retry = 0
         loss_timeout = 13
+        self.train()
         while cooking:
             loss_avg = 0
             for signal, target, candle in iter(self.cauldron):
-                print(signal)
-                print('signal', signal.shape)
-                print(target)
-                print('target', target.shape)
-                print(candle)
-                print('candle', candle.shape)
-                candles, loss = inscribe_sigil(signal, target)
-                loss_avg += loss
+                optimizer.zero_grad()
+                sigil = inscribe_sigil(signal)
+                print(sigil)
+                print('sigil', sigil.shape)
+                loss = loss_fn(sigil, target)
+                loss.backward()
+                optimizer.step()
+                loss_avg += loss.item()
                 print(candles)
                 print(candles.shape)
                 print(loss)
@@ -246,25 +203,26 @@ class ThreeBlindMice(nn.Module):
             else:
                 loss_retry += 1
                 if loss_retry == loss_timeout:
-                    sigil = list()
-                    for day in last_range:
-                        candles = inscribe_sigil(
-                            last_batch[day],
-                            None,
-                            study=False,
-                            )
-                        sigil.append(candles.clone())
-                    sigil = stack(sigil)
-                    print(sigil)
-                    print('sigil', sigil.shape)
-                    print(banner)
-                    for i in symbol_range:
-                        print(prefix, symbols[i], candles[i])
-                    print(prefix, 'losses', losses)
-                    print(banner)
                     cooking = False
             elapsed = time.time() - t_cook
             if elapsed >= cook_time:
                 cooking = False
             self.__manage_state__(call_type=1)
+        self.eval()
+        sigil = list()
+        for day in last_range:
+            candles = inscribe_sigil(
+                last_batch[day],
+                None,
+                study=False,
+                )
+            sigil.append(candles.clone())
+        sigil = stack(sigil)
+        print(sigil)
+        print('sigil', sigil.shape)
+        print(banner)
+        for i in symbol_range:
+            print(prefix, symbols[i], candles[i])
+        print(prefix, 'losses', losses)
+        print(banner)
         return True
