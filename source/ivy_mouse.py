@@ -40,7 +40,7 @@ class ThreeBlindMice(nn.Module):
         offerings = offerings.to(dev)
         constants = {}
         constants['cook_time'] = cook_time
-        constants['hidden'] = 3072
+        constants['hidden'] = 2048
         constants['n_sample'] = n_sample = 5
         constants['n_symbols'] = n_symbols = len(self.symbols)
         constants['n_output'] = n_sample * n_symbols
@@ -49,6 +49,7 @@ class ThreeBlindMice(nn.Module):
         constants['n_lin_out'] = n_lin_out = 9
         constants['max_trades'] = 3
         constants['output_dims'] = [n_sample, n_symbols, n_lin_out]
+        constants['trade_adj'] = n_sample * constants['max_trades']
         while constants['n_time'] % n_sample != 0:
             constants['n_time'] -= 1
         offerings = offerings[-constants['n_time']:]
@@ -62,7 +63,11 @@ class ThreeBlindMice(nn.Module):
         self.signals.requires_grad_(True)
         self.targets = offerings[:, :, 1].clone().detach()
         self.targets = (self.targets + iota).softmax(1)
-        self.target_rating = torch.tensor(3333.33333, device=dev, dtype=tfloat)
+        self.target_rating = torch.tensor(
+            constants['n_time'] * (n_sample + constants['trade_adj']),
+            device=dev,
+            dtype=tfloat,
+            )
         self.candles = offerings[:, :, 2].clone().detach()
         self.candles.requires_grad_(True)
         self.candelabrum = TensorDataset(
@@ -116,6 +121,7 @@ class ThreeBlindMice(nn.Module):
         self.optimizer = RMSprop(
             self.parameters(),
             foreach=True,
+            maximize=False,
             )
         self.epochs = 0
         self.metrics = dict()
@@ -203,13 +209,14 @@ class ThreeBlindMice(nn.Module):
         n_time = constants['n_time']
         sample_range = range(n_sample)
         trade_range = range(max_trades)
+        trade_adj = constants['trade_adj']
         target_rating = self.target_rating
         best_rating = -inf
         cooking = True
         t_cook = time.time()
         loss_retry = 0
-        loss_timeout = 137
-        msg = '{} epoch({}), rating({}), net_gain({})'
+        loss_timeout = 13
+        msg = '{} epoch({}), loss({}), rating({}), net_gain({})'
         self.train()
         while cooking:
             net_gain = 0
@@ -220,7 +227,7 @@ class ThreeBlindMice(nn.Module):
             for signal, target, candle in iter(self.cauldron):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(signal)
-                abs_loss += (sigil - target).abs().sum() * -1
+                abs_loss += n_sample - (sigil - target).abs().sum()
                 for day in sample_range:
                     trade = topk(sigil[day], max_trades).indices
                     day_avg = candle[day]
@@ -237,17 +244,18 @@ class ThreeBlindMice(nn.Module):
                             _prev = prev_avg[i]
                             if _day > 0 < _prev:
                                 gain = (_day - _prev) / _prev
-                            abs_loss += gain - target_rating
+                            abs_loss += trade_adj * gain
                             gains.append(gain)
                             net_gain += gain
                             net_hist.append(net_gain)
                     trades.append((trade, day_avg[trade]))
-            rating = 0.5 * (abs_loss / n_time)
-            loss = loss_fn(rating, self.target_rating)
+            rating = abs_loss / n_time
+            loss = loss_fn(rating, target_rating)
             loss.backward()
             optimizer.step()
             self.epochs += 1
-            print(msg.format(prefix, self.epochs, rating, net_gain))
+            loss = loss.item()
+            print(msg.format(prefix, self.epochs, loss, rating, net_gain))
             if rating > best_rating:
                 loss_retry = 0
                 best_rating = rating
@@ -258,7 +266,7 @@ class ThreeBlindMice(nn.Module):
             elapsed = time.time() - t_cook
             if elapsed >= cook_time:
                 cooking = False
-            self.__manage_state__(call_type=1)
+        self.__manage_state__(call_type=1)
         self.eval()
         sigil = inscribe_sigil(self.signals[-n_sample:])
         print(banner)
