@@ -40,13 +40,14 @@ class ThreeBlindMice(nn.Module):
         offerings = offerings.to(dev)
         constants = {}
         constants['cook_time'] = cook_time
-        constants['hidden'] = 2048
-        constants['n_sample'] = n_sample = 34
+        constants['hidden'] = 3072
+        constants['n_sample'] = n_sample = 5
         constants['n_symbols'] = n_symbols = len(self.symbols)
         constants['n_output'] = n_sample * n_symbols
         constants['n_time'] = int(offerings.shape[0] - n_sample)
-        constants['n_lin_in'] = n_lin_in = 18
+        constants['n_lin_in'] = n_lin_in = 3
         constants['n_lin_out'] = n_lin_out = 9
+        constants['max_trades'] = 3
         constants['output_dims'] = [n_sample, n_symbols, n_lin_out]
         while constants['n_time'] % n_sample != 0:
             constants['n_time'] -= 1
@@ -61,7 +62,9 @@ class ThreeBlindMice(nn.Module):
         self.signals.requires_grad_(True)
         self.targets = offerings[:, :, 1].clone().detach()
         self.targets = (self.targets + iota).softmax(1)
+        self.target_rating = torch.tensor(3333.33333, device=dev, dtype=tfloat)
         self.candles = offerings[:, :, 2].clone().detach()
+        self.candles.requires_grad_(True)
         self.candelabrum = TensorDataset(
             self.signals[:-n_sample],
             self.targets[n_sample:],
@@ -184,38 +187,70 @@ class ThreeBlindMice(nn.Module):
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
+        prefix = self._prefix_
+        print(prefix, 'Research started.')
         banner = ''.join(['*' for _ in range(80)])
         constants = self._constants_
         cook_time = constants['cook_time']
         inscribe_sigil = self.inscribe_sigil
         loss_fn = self.loss_fn
         optimizer = self.optimizer
-        prefix = self._prefix_
         symbols = self.symbols
+        topk = torch.topk
         verbosity = self.verbosity
+        max_trades = constants['max_trades']
         n_sample = constants['n_sample']
         n_time = constants['n_time']
+        sample_range = range(n_sample)
+        trade_range = range(max_trades)
+        target_rating = self.target_rating
+        best_rating = -inf
         cooking = True
         t_cook = time.time()
-        losses = inf
         loss_retry = 0
         loss_timeout = 137
+        msg = '{} epoch({}), rating({}), net_gain({})'
         self.train()
         while cooking:
-            loss_avg = 0
+            net_gain = 0
+            trades = list()
+            gains = list()
+            net_hist = list()
+            abs_loss = 0
             for signal, target, candle in iter(self.cauldron):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(signal)
-                loss = loss_fn(sigil, target)
-                loss.backward()
-                optimizer.step()
-                loss_avg += loss.item()
-            loss_avg = loss_avg / n_time
+                abs_loss += (sigil - target).abs().sum() * -1
+                for day in sample_range:
+                    trade = topk(sigil[day], max_trades).indices
+                    day_avg = candle[day]
+                    gain = 0
+                    prev_avg = 0
+                    if len(trades) > 0:
+                        prev_trade = trades[-1]
+                        prev_sym = prev_trade[0]
+                        prev_avg = prev_trade[1]
+                        trade_avg = day_avg[prev_sym]
+                        for i in trade_range:
+                            gain = 0
+                            _day = trade_avg[i]
+                            _prev = prev_avg[i]
+                            if _day > 0 < _prev:
+                                gain = (_day - _prev) / _prev
+                            abs_loss += gain - target_rating
+                            gains.append(gain)
+                            net_gain += gain
+                            net_hist.append(net_gain)
+                    trades.append((trade, day_avg[trade]))
+            rating = 0.5 * (abs_loss / n_time)
+            loss = loss_fn(rating, self.target_rating)
+            loss.backward()
+            optimizer.step()
             self.epochs += 1
-            print(prefix, f'epoch({self.epochs}), loss_avg({loss_avg})')
-            if loss_avg < losses:
+            print(msg.format(prefix, self.epochs, rating, net_gain))
+            if rating > best_rating:
                 loss_retry = 0
-                losses = loss_avg
+                best_rating = rating
             else:
                 loss_retry += 1
                 if loss_retry == loss_timeout:
@@ -226,14 +261,13 @@ class ThreeBlindMice(nn.Module):
             self.__manage_state__(call_type=1)
         self.eval()
         sigil = inscribe_sigil(self.signals[-n_sample:])
-        print(sigil)
-        print('sigil', sigil.shape)
         print(banner)
         for t in range(sigil.shape[0]):
-            for i in range(sigil.shape[1]):
-                prob = sigil[t, i].item()
-                if prob > 0:
-                    print(prefix, f'day({t})', symbols[i], prob)
-        print(prefix, 'losses', losses)
+            inscriptions = topk(sigil[t], 3)
+            for i in range(max_trades):
+                s = symbols[inscriptions.indices[i]]
+                v = inscriptions.values[i]
+                print(f'{prefix} day({t}) {s} {v} prob')
+        print(prefix, 'net_gain', net_gain)
         print(banner)
         return True

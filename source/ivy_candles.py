@@ -528,8 +528,8 @@ class Candelabrum:
         aeternalis = True
         offerings = list()
         keys = list()
+        print(prefix, f'Gathering daily candles.')
         for symbol in paterae:
-            print(prefix, f'Gathering daily candles for {symbol}')
             try:
                 candle_path = abspath(f'{data_path}/{symbol}.candles')
                 candles = load(candle_path)
@@ -541,9 +541,14 @@ class Candelabrum:
                 continue
         offerings = stack(offerings, dim=1)
         if cook_time:
-            moirai = ThreeBlindMice(keys, offerings, cook_time=cook_time)
+            moirai = ThreeBlindMice(
+                keys,
+                offerings,
+                cook_time=cook_time,
+                verbosity=1,
+                )
         else:
-            moirai = ThreeBlindMice(keys, offerings)
+            moirai = ThreeBlindMice(keys, offerings, verbosity=1)
         loop_start = time.time()
         while aeternalis:
             session = moirai.research()
