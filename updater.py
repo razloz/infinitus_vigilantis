@@ -54,4 +54,4 @@ if __name__ == '__main__':
     elif args.pick:
         candelabrum.pick_candles(25)
     elif args.study:
-        candelabrum.make_offering(None, epochs=1)
+        candelabrum.make_offering(None, epochs=9001)
