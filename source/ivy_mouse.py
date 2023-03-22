@@ -189,6 +189,13 @@ class ThreeBlindMice(nn.Module):
         bubbles = self.output_cell(bubbles)[0]
         bubbles = self.linear(bubbles).view(self._constants_['output_dims'])
         bubbles = self.normalizer(bubbles.sum(2)).softmax(1)
+        # def bayesian_inference():
+            # hypothesis =
+            # prior_probability =
+            # evidence =
+            # posterior_probability =
+            # likelihood =
+            # model_evidence =
         return bubbles.clone()
 
     def research(self):
@@ -215,7 +222,7 @@ class ThreeBlindMice(nn.Module):
         cooking = True
         t_cook = time.time()
         loss_retry = 0
-        loss_timeout = 13
+        loss_timeout = 137
         msg = '{} epoch({}), loss({}), rating({}), net_gain({})'
         self.train()
         while cooking:
@@ -249,8 +256,8 @@ class ThreeBlindMice(nn.Module):
                             net_gain += gain
                             net_hist.append(net_gain)
                     trades.append((trade, day_avg[trade]))
-            rating = abs_loss / n_time
-            loss = loss_fn(rating, target_rating)
+            rating = (abs_loss / n_time) / target_rating
+            loss = loss_fn(rating, 1 / target_rating)
             loss.backward()
             optimizer.step()
             self.epochs += 1
