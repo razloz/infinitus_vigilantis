@@ -8,10 +8,10 @@ import traceback
 import matplotlib.pyplot as plt
 import numpy as np
 import source.ivy_commons as icy
-from torch import bernoulli, fft, full_like, nn, stack
+from torch import bernoulli, fft, full_like, nan_to_num, nn, stack
 from torch.optim import RMSprop
 from torch.utils.data import DataLoader, TensorDataset
-from math import sqrt, inf
+from math import inf
 from os import listdir, mkdir
 from os.path import abspath, exists
 __author__ = 'Daniel Ward'
@@ -49,9 +49,9 @@ class ThreeBlindMice(nn.Module):
         constants['n_lin_out'] = n_lin_out = 9
         constants['max_trades'] = 3
         constants['output_dims'] = [n_sample, n_symbols, n_lin_out]
-        constants['trade_adj'] = n_sample * constants['max_trades']
         while constants['n_time'] % n_sample != 0:
             constants['n_time'] -= 1
+        constants['max_rating'] = constants['n_time'] * (1 + (n_sample * 33))
         offerings = offerings[-constants['n_time']:]
         self._constants_ = dict(constants)
         self._prefix_ = prefix = 'Moirai:'
@@ -64,7 +64,7 @@ class ThreeBlindMice(nn.Module):
         self.targets = offerings[:, :, 1].clone().detach()
         self.targets = (self.targets + iota).softmax(1)
         self.target_rating = torch.tensor(
-            constants['n_time'] * (n_sample + constants['trade_adj']),
+            constants['max_rating'],
             device=dev,
             dtype=tfloat,
             )
@@ -177,25 +177,15 @@ class ThreeBlindMice(nn.Module):
         mask = self.mask
         bubbles = self.normalizer(signal.transpose(0, 1))
         bubbles = self.rfft(bubbles)
-        bubbles = torch.nan_to_num(
-            (bubbles.real * bubbles.imag),
-            nan=iota,
-            posinf=1.0,
-            neginf=iota,
-            ).sigmoid().softmax(1)
+        bubbles = bubbles.real * bubbles.imag
+        bubbles = nan_to_num(bubbles, nan=iota, posinf=1.0, neginf=iota)
+        bubbles = bubbles.sigmoid().softmax(1)
         bubbles = self.bilinear(bubbles, bubbles)
         bubbles = mask(bubbles.transpose(0, 1))
         bubbles = mask(self.input_cell(bubbles)[0])
         bubbles = self.output_cell(bubbles)[0]
         bubbles = self.linear(bubbles).view(self._constants_['output_dims'])
         bubbles = self.normalizer(bubbles.sum(2)).softmax(1)
-        # def bayesian_inference():
-            # hypothesis =
-            # prior_probability =
-            # evidence =
-            # posterior_probability =
-            # likelihood =
-            # model_evidence =
         return bubbles.clone()
 
     def research(self):
@@ -211,13 +201,13 @@ class ThreeBlindMice(nn.Module):
         symbols = self.symbols
         topk = torch.topk
         verbosity = self.verbosity
+        max_rating = constants['max_rating']
         max_trades = constants['max_trades']
         n_sample = constants['n_sample']
         n_time = constants['n_time']
         sample_range = range(n_sample)
         trade_range = range(max_trades)
-        trade_adj = constants['trade_adj']
-        target_rating = self.target_rating
+        target_rating = self.target_rating.sqrt()
         best_rating = -inf
         cooking = True
         t_cook = time.time()
@@ -230,11 +220,11 @@ class ThreeBlindMice(nn.Module):
             trades = list()
             gains = list()
             net_hist = list()
-            abs_loss = 0
+            rating = -max_rating
             for signal, target, candle in iter(self.cauldron):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(signal)
-                abs_loss += n_sample - (sigil - target).abs().sum()
+                rating += (1 - (sigil - target).abs().sum()).abs()
                 for day in sample_range:
                     trade = topk(sigil[day], max_trades).indices
                     day_avg = candle[day]
@@ -251,13 +241,13 @@ class ThreeBlindMice(nn.Module):
                             _prev = prev_avg[i]
                             if _day > 0 < _prev:
                                 gain = (_day - _prev) / _prev
-                            abs_loss += trade_adj * gain
+                            rating += 1 + gain
                             gains.append(gain)
                             net_gain += gain
                             net_hist.append(net_gain)
                     trades.append((trade, day_avg[trade]))
-            rating = (abs_loss / n_time) / target_rating
-            loss = loss_fn(rating, 1 / target_rating)
+            rating = (rating + max_rating).sqrt()
+            loss = loss_fn(rating, target_rating)
             loss.backward()
             optimizer.step()
             self.epochs += 1
