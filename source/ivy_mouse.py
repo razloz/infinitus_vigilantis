@@ -41,17 +41,17 @@ class ThreeBlindMice(nn.Module):
         constants = {}
         constants['cook_time'] = cook_time
         constants['hidden'] = 2048
-        constants['n_sample'] = n_sample = 5
+        constants['n_sample'] = n_sample = 3
         constants['n_symbols'] = n_symbols = len(self.symbols)
         constants['n_output'] = n_sample * n_symbols
         constants['n_time'] = int(offerings.shape[0] - n_sample)
-        constants['n_lin_in'] = n_lin_in = 3
+        constants['n_lin_in'] = n_lin_in = 2
         constants['n_lin_out'] = n_lin_out = 9
-        constants['max_trades'] = 3
+        constants['max_trades'] = 1
         constants['output_dims'] = [n_sample, n_symbols, n_lin_out]
         while constants['n_time'] % n_sample != 0:
             constants['n_time'] -= 1
-        constants['max_rating'] = constants['n_time'] * (1 + (n_sample * 33))
+        constants['max_gain'] = 137
         offerings = offerings[-constants['n_time']:]
         self._constants_ = dict(constants)
         self._prefix_ = prefix = 'Moirai:'
@@ -63,11 +63,12 @@ class ThreeBlindMice(nn.Module):
         self.signals.requires_grad_(True)
         self.targets = offerings[:, :, 1].clone().detach()
         self.targets = (self.targets + iota).softmax(1)
-        self.target_rating = torch.tensor(
-            constants['max_rating'],
+        self.target_gain = torch.tensor(
+            constants['max_gain'],
             device=dev,
             dtype=tfloat,
             )
+        self.target_zero = torch.zeros(1, device=dev, dtype=tfloat).squeeze()
         self.candles = offerings[:, :, 2].clone().detach()
         self.candles.requires_grad_(True)
         self.candelabrum = TensorDataset(
@@ -201,34 +202,35 @@ class ThreeBlindMice(nn.Module):
         symbols = self.symbols
         topk = torch.topk
         verbosity = self.verbosity
-        max_rating = constants['max_rating']
+        max_gain = constants['max_gain']
         max_trades = constants['max_trades']
         n_sample = constants['n_sample']
         n_time = constants['n_time']
         sample_range = range(n_sample)
         trade_range = range(max_trades)
-        target_rating = self.target_rating.sqrt()
-        best_rating = -inf
+        target_gain = self.target_gain
+        target_zero = self.target_zero
+        least_loss = inf
         cooking = True
         t_cook = time.time()
         loss_retry = 0
         loss_timeout = 137
-        msg = '{} epoch({}), loss({}), rating({}), net_gain({})'
+        msg = '{} epoch({}), loss({}), net_gain({})'
         self.train()
         while cooking:
-            net_gain = 0
+            net_gain = None
             trades = list()
-            gains = list()
-            net_hist = list()
-            rating = -max_rating
+            loss_avg = 0
             for signal, target, candle in iter(self.cauldron):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(signal)
-                rating += (1 - (sigil - target).abs().sum()).abs()
+                loss = loss_fn(sigil, target)
+                loss.backward()
+                optimizer.step()
+                loss_avg += loss.item()
                 for day in sample_range:
                     trade = topk(sigil[day], max_trades).indices
                     day_avg = candle[day]
-                    gain = 0
                     prev_avg = 0
                     if len(trades) > 0:
                         prev_trade = trades[-1]
@@ -241,21 +243,23 @@ class ThreeBlindMice(nn.Module):
                             _prev = prev_avg[i]
                             if _day > 0 < _prev:
                                 gain = (_day - _prev) / _prev
-                            rating += 1 + gain
-                            gains.append(gain)
-                            net_gain += gain
-                            net_hist.append(net_gain)
+                                if net_gain is None:
+                                    net_gain = gain.clone()
+                                else:
+                                    net_gain += gain
                     trades.append((trade, day_avg[trade]))
-            rating = (rating + max_rating).sqrt()
-            loss = loss_fn(rating, target_rating)
+            if net_gain == 0:
+                net_gain = -self.iota
+            loss = loss_fn(1 / net_gain, target_zero)
             loss.backward()
             optimizer.step()
+            self.signals.grad += self.candles.grad
+            loss_avg = loss_avg / n_time
             self.epochs += 1
-            loss = loss.item()
-            print(msg.format(prefix, self.epochs, loss, rating, net_gain))
-            if rating > best_rating:
+            print(msg.format(prefix, self.epochs, loss_avg, net_gain))
+            if loss_avg < least_loss:
                 loss_retry = 0
-                best_rating = rating
+                least_loss = loss_avg
             else:
                 loss_retry += 1
                 if loss_retry == loss_timeout:
@@ -268,11 +272,18 @@ class ThreeBlindMice(nn.Module):
         sigil = inscribe_sigil(self.signals[-n_sample:])
         print(banner)
         for t in range(sigil.shape[0]):
-            inscriptions = topk(sigil[t], 3)
+            inscriptions = topk(sigil[t], max_trades)
             for i in range(max_trades):
                 s = symbols[inscriptions.indices[i]]
                 v = inscriptions.values[i]
                 print(f'{prefix} day({t}) {s} {v} prob')
-        print(prefix, 'net_gain', net_gain)
+        print(msg.format(prefix, self.epochs, loss_avg, net_gain))
         print(banner)
+        plt.clf()
+        plt.plot(self.signals.grad.clone().detach().cpu().numpy())
+        plt.savefig(f'./rnn/signals_grad_{self.epochs}.png')
+        plt.clf()
+        plt.plot(self.candles.grad.clone().detach().cpu().numpy())
+        plt.savefig(f'./rnn/candles_grad_{self.epochs}.png')
+        plt.close()
         return True
