@@ -24,7 +24,7 @@ class ThreeBlindMice(nn.Module):
     def __init__(self, symbols, offerings, cook_time=inf, verbosity=2):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__()
-        torch.autograd.set_detect_anomaly(True)
+        #torch.autograd.set_detect_anomaly(True)
         self.iota = iota = 1 / 137
         self.phi = phi = 0.618033988749894
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -51,7 +51,7 @@ class ThreeBlindMice(nn.Module):
         constants['output_dims'] = [n_sample, n_symbols, n_lin_out]
         while constants['n_time'] % n_sample != 0:
             constants['n_time'] -= 1
-        constants['max_gain'] = 137
+        constants['max_gain'] = constants['n_time'] * constants['n_symbols']
         offerings = offerings[-constants['n_time']:]
         self._constants_ = dict(constants)
         self._prefix_ = prefix = 'Moirai:'
@@ -214,8 +214,8 @@ class ThreeBlindMice(nn.Module):
         cooking = True
         t_cook = time.time()
         loss_retry = 0
-        loss_timeout = 137
-        msg = '{} epoch({}), loss({}), net_gain({})'
+        loss_timeout = 1000
+        msg = '{} epoch({}), grad_loss({}), loss({}), net_gain({})'
         self.train()
         while cooking:
             net_gain = None
@@ -224,7 +224,7 @@ class ThreeBlindMice(nn.Module):
             for signal, target, candle in iter(self.cauldron):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(signal)
-                loss = loss_fn(sigil, target)
+                loss = loss_fn(sigil.flatten(), target.flatten())
                 loss.backward()
                 optimizer.step()
                 loss_avg += loss.item()
@@ -248,15 +248,19 @@ class ThreeBlindMice(nn.Module):
                                 else:
                                     net_gain += gain
                     trades.append((trade, day_avg[trade]))
-            if net_gain == 0:
-                net_gain = -self.iota
-            loss = loss_fn(1 / net_gain, target_zero)
+            loss_avg = loss_avg / n_time
+            loss = loss_fn(net_gain, target_gain)
             loss.backward()
             optimizer.step()
             self.signals.grad += self.candles.grad
-            loss_avg = loss_avg / n_time
+            self.signals.grad *= 0.5
+            grad_signal = self.signals.grad.flatten().sigmoid()
+            grad_candle = self.candles.grad.flatten().sigmoid()
+            grad_shape = grad_signal.shape[0]
+            loss = (grad_signal - grad_candle).abs().sum()
+            loss = loss.item() / grad_shape
             self.epochs += 1
-            print(msg.format(prefix, self.epochs, loss_avg, net_gain))
+            print(msg.format(prefix, self.epochs, loss, loss_avg, net_gain))
             if loss_avg < least_loss:
                 loss_retry = 0
                 least_loss = loss_avg
@@ -277,13 +281,10 @@ class ThreeBlindMice(nn.Module):
                 s = symbols[inscriptions.indices[i]]
                 v = inscriptions.values[i]
                 print(f'{prefix} day({t}) {s} {v} prob')
-        print(msg.format(prefix, self.epochs, loss_avg, net_gain))
+        print(msg.format(prefix, self.epochs, loss, loss_avg, net_gain))
         print(banner)
         plt.clf()
         plt.plot(self.signals.grad.clone().detach().cpu().numpy())
         plt.savefig(f'./rnn/signals_grad_{self.epochs}.png')
-        plt.clf()
-        plt.plot(self.candles.grad.clone().detach().cpu().numpy())
-        plt.savefig(f'./rnn/candles_grad_{self.epochs}.png')
         plt.close()
         return True
