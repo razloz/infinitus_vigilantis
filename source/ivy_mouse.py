@@ -214,12 +214,12 @@ class ThreeBlindMice(nn.Module):
         cooking = True
         t_cook = time.time()
         loss_retry = 0
-        loss_timeout = 1000
+        loss_timeout = 144
         msg = '{} epoch({}), grad_loss({}), loss({}), net_gain({})'
         self.train()
         while cooking:
             net_gain = None
-            trades = list()
+            prev_trade = (None, None)
             loss_avg = 0
             for signal, target, candle in iter(self.cauldron):
                 optimizer.zero_grad()
@@ -231,11 +231,9 @@ class ThreeBlindMice(nn.Module):
                 for day in sample_range:
                     trade = topk(sigil[day], max_trades).indices
                     day_avg = candle[day]
-                    prev_avg = 0
-                    if len(trades) > 0:
-                        prev_trade = trades[-1]
-                        prev_sym = prev_trade[0]
-                        prev_avg = prev_trade[1]
+                    prev_sym = prev_trade[0]
+                    prev_avg = prev_trade[1]
+                    if prev_sym is not None:
                         trade_avg = day_avg[prev_sym]
                         for i in trade_range:
                             gain = 0
@@ -247,7 +245,7 @@ class ThreeBlindMice(nn.Module):
                                     net_gain = gain.clone()
                                 else:
                                     net_gain += gain
-                    trades.append((trade, day_avg[trade]))
+                    prev_trade = (trade, day_avg[trade])
             loss_avg = loss_avg / n_time
             loss = loss_fn(net_gain, target_gain)
             loss.backward()
