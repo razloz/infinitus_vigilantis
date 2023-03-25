@@ -215,7 +215,7 @@ class ThreeBlindMice(nn.Module):
         t_cook = time.time()
         loss_retry = 0
         loss_timeout = 144
-        msg = '{} epoch({}), grad_loss({}), loss({}), net_gain({})'
+        msg = '{} epoch({}), loss({}), net_gain({})'
         self.train()
         while cooking:
             net_gain = None
@@ -247,18 +247,8 @@ class ThreeBlindMice(nn.Module):
                                     net_gain += gain
                     prev_trade = (trade, day_avg[trade])
             loss_avg = loss_avg / n_time
-            loss = loss_fn(net_gain, target_gain)
-            loss.backward()
-            optimizer.step()
-            self.signals.grad += self.candles.grad
-            self.signals.grad *= 0.5
-            grad_signal = self.signals.grad.flatten().sigmoid()
-            grad_candle = self.candles.grad.flatten().sigmoid()
-            grad_shape = grad_signal.shape[0]
-            loss = (grad_signal - grad_candle).abs().sum()
-            loss = loss.item() / grad_shape
             self.epochs += 1
-            print(msg.format(prefix, self.epochs, loss, loss_avg, net_gain))
+            print(msg.format(prefix, self.epochs, loss_avg, net_gain))
             if loss_avg < least_loss:
                 loss_retry = 0
                 least_loss = loss_avg
@@ -279,7 +269,7 @@ class ThreeBlindMice(nn.Module):
                 s = symbols[inscriptions.indices[i]]
                 v = inscriptions.values[i]
                 print(f'{prefix} day({t}) {s} {v} prob')
-        print(msg.format(prefix, self.epochs, loss, loss_avg, net_gain))
+        print(msg.format(prefix, self.epochs, loss_avg, net_gain))
         print(banner)
         plt.clf()
         plt.plot(self.signals.grad.clone().detach().cpu().numpy())
