@@ -5,7 +5,6 @@ import io
 import time
 import torch
 import traceback
-import matplotlib.pyplot as plt
 import numpy as np
 import source.ivy_commons as icy
 from torch import bernoulli, fft, full_like, nan_to_num, nn, stack
@@ -63,20 +62,16 @@ class ThreeBlindMice(nn.Module):
         self.signals.requires_grad_(True)
         self.targets = offerings[:, :, 1].clone().detach()
         self.targets = (self.targets + iota).softmax(1)
-        self.target_gain = torch.tensor(
-            constants['max_gain'],
-            device=dev,
-            dtype=tfloat,
-            )
-        self.target_zero = torch.zeros(1, device=dev, dtype=tfloat).squeeze()
         self.candles = offerings[:, :, 2].clone().detach()
-        self.candles.requires_grad_(True)
         self.candelabrum = TensorDataset(
             self.signals[:-n_sample],
             self.targets[n_sample:],
             self.candles[:-n_sample],
             )
-        self.cauldron = DataLoader(self.candelabrum, batch_size=n_sample)
+        self.cauldron = DataLoader(
+            self.candelabrum,
+            batch_size=n_sample,
+            )
         self.bilinear = nn.Bilinear(
             in1_features=n_lin_in,
             in2_features=n_lin_in,
@@ -193,7 +188,6 @@ class ThreeBlindMice(nn.Module):
         """Moirai research session, fully stocked with cheese and drinks."""
         prefix = self._prefix_
         print(prefix, 'Research started.')
-        banner = ''.join(['*' for _ in range(80)])
         constants = self._constants_
         cook_time = constants['cook_time']
         inscribe_sigil = self.inscribe_sigil
@@ -201,20 +195,17 @@ class ThreeBlindMice(nn.Module):
         optimizer = self.optimizer
         symbols = self.symbols
         topk = torch.topk
-        verbosity = self.verbosity
-        max_gain = constants['max_gain']
         max_trades = constants['max_trades']
         n_sample = constants['n_sample']
+        n_save = 100
         n_time = constants['n_time']
         sample_range = range(n_sample)
         trade_range = range(max_trades)
-        target_gain = self.target_gain
-        target_zero = self.target_zero
         least_loss = inf
         cooking = True
         t_cook = time.time()
         loss_retry = 0
-        loss_timeout = 144
+        loss_timeout = 1000
         msg = '{} epoch({}), loss({}), net_gain({})'
         self.train()
         while cooking:
@@ -248,6 +239,9 @@ class ThreeBlindMice(nn.Module):
                     prev_trade = (trade, day_avg[trade])
             loss_avg = loss_avg / n_time
             self.epochs += 1
+            if self.epochs % n_save == 0:
+                self.__manage_state__(call_type=1)
+                self.get_predictions(n_png=f'_{self.epochs}')
             print(msg.format(prefix, self.epochs, loss_avg, net_gain))
             if loss_avg < least_loss:
                 loss_retry = 0
@@ -259,9 +253,19 @@ class ThreeBlindMice(nn.Module):
             elapsed = time.time() - t_cook
             if elapsed >= cook_time:
                 cooking = False
-        self.__manage_state__(call_type=1)
+        return self.get_predictions()
+
+    def get_predictions(self, n_png=''):
+        """Output for the last batch."""
+        banner = ''.join(['*' for _ in range(80)])
+        constants = self._constants_
+        max_trades = constants['max_trades']
+        n_sample = constants['n_sample']
+        prefix = self._prefix_
+        symbols = self.symbols
+        topk = torch.topk
         self.eval()
-        sigil = inscribe_sigil(self.signals[-n_sample:])
+        sigil = self.inscribe_sigil(self.signals[-n_sample:])
         print(banner)
         for t in range(sigil.shape[0]):
             inscriptions = topk(sigil[t], max_trades)
@@ -269,10 +273,38 @@ class ThreeBlindMice(nn.Module):
                 s = symbols[inscriptions.indices[i]]
                 v = inscriptions.values[i]
                 print(f'{prefix} day({t}) {s} {v} prob')
-        print(msg.format(prefix, self.epochs, loss_avg, net_gain))
         print(banner)
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        from matplotlib import cm
+        sig = sigil.clone().detach().cpu().numpy()
+        xticks = range(sig.shape[1])
         plt.clf()
-        plt.plot(self.signals.grad.clone().detach().cpu().numpy())
-        plt.savefig(f'./rnn/signals_grad_{self.epochs}.png')
+        fig = plt.figure(figsize=(38.40, 5.40))
+        ax = fig.add_subplot()
+        ax.set_xlabel('Symbol')
+        ax.set_ylabel('Prob')
+        ax.set_xticks(xticks)
+        ax.set_xticklabels(self.symbols, fontweight='light')
+        ax.tick_params(axis='x', which='major', labelsize=7, pad=5, rotation=90)
+        width_adj = [0.7, 0.5, 0.3]
+        colors = [(0.34, 0.34, 1, 1), (0.34, 1, 0.34, 1), (1, 0.34, 0.34, 1)]
+        colors_set = 0
+        for day in range(sig.shape[0]):
+            bar_params = dict(
+                width=width_adj[day],
+                align='edge',
+                aa=True,
+                color=colors[day],
+                edgecolor=(1, 1, 1, 0.05),
+                )
+            if colors_set < 3:
+                bar_params['label'] = f'Day {day + 1}'
+                colors_set += 1
+            ax.bar(xticks, sig[day], **bar_params)
+        title = f'Candelabrum probabilities over the next {sig.shape[0]} days'
+        fig.suptitle(title, fontsize=18)
+        fig.legend(ncol=1, fontsize='xx-large', fancybox=True)
+        plt.savefig(f'./rnn/candelabrum{n_png}.png')
         plt.close()
-        return True
+        return sigil
