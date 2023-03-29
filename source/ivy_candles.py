@@ -229,7 +229,10 @@ class Candelabrum:
                     chart_symbol = job[1]
                     candelabrum_candles = job[2]
                     sealed_package = job[3]
-                    c_path = f'{chart_path}/{chart_symbol}.png'
+                    if len(job) == 5:
+                        c_path = job[4]
+                    else:
+                        c_path = f'{chart_path}/{chart_symbol}.png'
                     cartography(
                         str(chart_symbol),
                         candelabrum_candles,
@@ -357,9 +360,9 @@ class Candelabrum:
         template.fillna(method='ffill', inplace=True)
         template.fillna(method='bfill', inplace=True)
         template.dropna(inplace=True)
-        template = template.transpose().copy()
+        template = template.transpose()
         template.replace(to_replace=0, method='ffill', inplace=True)
-        template = template.transpose().copy()
+        template = template.transpose()
         template.dropna(inplace=True)
         return template.copy()
 
@@ -462,7 +465,9 @@ class Candelabrum:
             candle = make_candle(day_data)
             timestamps.append(ts)
             candles.append(candle)
-        return pd.DataFrame(candles, index=timestamps)
+        daily_data = pd.DataFrame(candles, index=timestamps)
+        daily_data.replace(to_replace=0.0, method='ffill', inplace=True)
+        return daily_data.copy()
 
     def daily_candle(self, day_data):
         """Takes minute data and converts it into a daily candle."""
@@ -513,7 +518,7 @@ class Candelabrum:
             print(prefix, f'{message}.')
         print(prefix, 'The recital comes to an end.')
 
-    def make_offering(self, paterae, cook_time=None, epochs=-1, trim=34):
+    def make_offering(self, paterae, cook_time=None, epochs=-1):
         """Spend time with the Norn researching candles."""
         from torch import load, stack
         abspath = path.abspath
@@ -527,31 +532,25 @@ class Candelabrum:
         epoch = 0
         aeternalis = True
         offerings = list()
-        keys = list()
         print(prefix, f'Gathering daily candles.')
-        for symbol in paterae:
-            try:
-                candle_path = abspath(f'{data_path}/{symbol}.candles')
-                candles = load(candle_path)
-                offerings.append(candles)
-                keys.append(symbol)
-            except Exception as details:
-                print(type(details), details.args)
-            finally:
-                continue
-        offerings = stack(offerings, dim=1)
+        offerings = load(abspath('./candelabrum/candelabrum.candles'))
+        with open(abspath('./candelabrum/candelabrum.symbols'), 'r') as f:
+            symbols = json.loads(f.read())['symbols']
+        if len(symbols) != offerings.shape[0]:
+            print('Symbol length mismatch.')
+            return False
         if cook_time:
             moirai = ThreeBlindMice(
-                keys,
+                ivy_watchlist,
                 offerings,
                 cook_time=cook_time,
                 verbosity=1,
                 )
         else:
-            moirai = ThreeBlindMice(keys, offerings, verbosity=1)
+            moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
         loop_start = time.time()
         while aeternalis:
-            session = moirai.research()
+            self.create_webview(*moirai.research())
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
@@ -559,22 +558,23 @@ class Candelabrum:
         message = f'({epoch}) Aeternalis elapsed time is'
         print(prefix, format_time(elapsed, message=message))
 
-    def pick_candles(self, num, trim=34):
+    def create_webview(self, metrics, forecast):
         """Get top picks from the Moirai."""
         import source.ivy_navigator as navigator
-        from source.ivy_mouse import read_sigil
-        get_daily = self.get_daily_candles
-        omenize = self.apply_indicators
-        inscribed_candles = read_sigil(num)
-        for inscription in inscribed_candles:
-            symbol = inscription['symbol']
-            candles = get_daily(symbol)
-            omens = omenize(candles)
-            candles = candles.merge(omens, left_index=True, right_index=True)
-            candles = candles[trim:]
-            self._QUEUE.put(('cartography', symbol, candles, inscription))
+        abspath = path.abspath
+        with open('./license/GPLv3.txt', 'r') as f:
+            info = f.read()
+        with open('./license/Disclaimer.txt', 'r') as f:
+            disclaimer = f.read()
+        for day, probs in enumerate(forecast):
+            symbol = probs[0]
+            cdl_path = abspath(f'./candelabrum/{symbol}.ivy')
+            candles = pd.read_csv(cdl_path, **self._CSV_PARAMS)
+            c_path = abspath(f'./resources/forecast_{day}.png')
+            self._QUEUE.put(('cartography', symbol, candles, None, c_path))
         self.join_workers()
-        navigator.make_all(inscribed_candles)
+        navigator.make_all(metrics, forecast, info, disclaimer)
+        print(self._PREFIX, 'Webview ready.')
 
     def candle_maker(self, candles):
         """Makes a candle."""
@@ -645,59 +645,61 @@ def make_utc(time_string):
     return time.mktime(third_annoyance)
 
 
-def build_historical_database(starting_year=2019, use_index=False):
-    """Cycle through calendar and update data accordingly."""
-    calendar = market_calendar()
-    calendar_dates = calendar.index.tolist()
-    if use_index:
-        ivy_ndx = composite_index()
-    else:
-        ivy_ndx = ivy_watchlist
-    today = time.strftime('%Y-%m-%d', time.localtime())
-    local_year = int(today[0:4])
-    local_month = int(today[5:7])
-    local_day = int(today[8:])
-    cdlm = Candelabrum()
-    uargs = dict(limit=10000)
-    keeper = icy.TimeKeeper()
+def build_historical_database(start_date='2018-01-01'):
+    """Create and light daily candles from historical data."""
+    from time import strftime, strptime
+    from torch import cuda, device, save, stack, tensor
+    from torch import float as tfloat
+    dev = device('cuda:0' if cuda.is_available() else 'cpu')
+    today = strftime('%Y-%m-%d', time.localtime())
+    kwargs = dict(timeframe='1Day', start=start_date, limit='10000')
+    tz = 'America/New_York'
+    ts = pd.Timestamp
+    date_args = dict(name='time')
+    date_args['start'] = start_date
+    date_args['end'] = today
+    date_args['tz'] = tz
+    date_args['freq'] = '1D'
+    date_range = pd.date_range(**date_args)
     msg = 'Build Historical Database: {}'
-    batch_limit = 224
-    print(msg.format(f'BATCH_LIMIT={batch_limit}'))
-    print(msg.format(f'INDEX_LENGTH={len(ivy_ndx)}'))
-    print(msg.format(f'Checking calendar dates for missing data.'))
-    for ts in calendar_dates:
-        ts_year = int(ts[0:4])
-        if ts_year < starting_year:
+    candles = dict()
+    print('Fetching historical data from Alpaca Markets.')
+    for symbol in ivy_watchlist:
+        try:
+            data = SHEPHERD.candles(symbol, **kwargs)
+            bars = pd.DataFrame(data['bars'])
+            bars['time'] = [ts(t, unit='s', tz=tz) for t in bars['t']]
+            bars.set_index('time', inplace=True)
+            bars.rename(columns=COLUMN_NAMES, inplace=True)
+            candles[symbol] = bars.copy()
+        except Exception as details:
+            print(f'{symbol}:', type(details), details.args)
+        finally:
             continue
-        ts_month = int(ts[5:7])
-        ts_day = int(ts[8:])
-        time_stop = (
-            ts_year == local_year,
-            ts_month == local_month,
-            ts_day >= local_day
-            )
-        if all(time_stop):
-            break
-        uargs['start'] = str(ts)
-        uargs['end'] = str(ts)
-        symbols = list()
-        batch_count = 0
-        for s in ivy_ndx:
-            if use_index:
-                symbols.append(s[0])
-            else:
-                symbols.append(s)
-            batch_count += 1
-            if batch_count == batch_limit:
-                cdlm.do_update(symbols, **uargs)
-                symbols = list()
-                batch_count = 0
-        if batch_count > 0:
-            cdlm.do_update(symbols, **uargs)
-    cdlm.clean_candelabrum()
-    if use_index:
-        cdlm.light_candles([s[0] for s in ivy_ndx])
-    else:
-        cdlm.light_candles(ivy_ndx)
-    cdlm.join_workers()
-    print(msg.format(f'completed after {keeper.final}.'))
+    p = path.abspath('./candelabrum/{}')
+    candelabrum = list()
+    omenize = icy.get_indicators
+    print(f'Applying indicators to {len(candles.keys())} symbols.')
+    for symbol in candles.keys():
+        del(candles[symbol]['utc_ts'])
+        cdls = pd.DataFrame(index=date_range, columns=candles[symbol].keys())
+        cdls.update(candles[symbol])
+        cdls.fillna(method='ffill', inplace=True)
+        cdls.fillna(method='bfill', inplace=True)
+        cdls.dropna(inplace=True)
+        cdls = cdls.transpose()
+        cdls.replace(to_replace=0, method='ffill', inplace=True)
+        cdls = cdls.transpose()
+        cdls.dropna(inplace=True)
+        cdls = cdls.merge(omenize(cdls), left_index=True, right_index=True)
+        cdls.to_csv(p.format(f'{symbol}.ivy'), mode='w+')
+        t = tensor(cdls.to_numpy(), device=dev, dtype=tfloat)
+        candelabrum.append(t.clone())
+    candelabrum = stack(candelabrum)
+    save(candelabrum, p.format('candelabrum.candles'))
+    with open(path.abspath('./candelabrum/candelabrum.symbols'), 'w+') as f:
+        f.write(json.dumps(dict(symbols=list(candles.keys()))))
+    with open(path.abspath('./candelabrum/candelabrum.features'), 'w+') as f:
+        f.write(json.dumps(dict(columns=list(cdls.keys()))))
+    msg = 'Candelabrum created with {} candles of {} length and {} features.'
+    print(msg.format(*candelabrum.shape))

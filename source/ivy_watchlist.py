@@ -2,7 +2,7 @@ ivy_watchlist = (
     'AAPL', 'ABBV', 'ABNB', 'ABT', 'ACN', 'ADBE', 'ADI', 'ADP', 'ADSK', 'AEP',
     'AIG', 'ALGN', 'AMAT', 'AMD', 'AMGN', 'AMT', 'AMZN', 'ANSS', 'ASML', 'ATVI',
     'AVGO', 'AXP', 'AZN', 'BA', 'BAC', 'BIIB', 'BK', 'BKNG', 'BKR', 'BLK',
-    'BMY', 'BRK.B', 'C', 'CAT', 'CDNS', 'CEG', 'CHTR', 'CL', 'CMCSA', 'COF',
+    'BMY', 'C', 'CAT', 'CDNS', 'CEG', 'CHTR', 'CL', 'CMCSA', 'COF',
     'COP', 'COST', 'CPRT', 'CRM', 'CRWD', 'CSCO', 'CSGP', 'CSX', 'CTAS',
     'CTSH', 'CVS', 'CVX', 'DDOG', 'DHR', 'DIS', 'DLTR', 'DOW', 'DUK', 'DXCM',
     'EA', 'EBAY', 'EMR', 'ENPH', 'EXC', 'F', 'FANG', 'FAST', 'FDX', 'FISV',

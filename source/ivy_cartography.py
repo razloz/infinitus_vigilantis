@@ -50,12 +50,10 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         trades = vstack(cheese['trades'])[-chart_size:]
         signals = vstack(cheese['signals'])[-chart_size:]
     fig = plt.figure(figsize=(19.20, 10.80), dpi=100, constrained_layout=False)
-    sargs = dict(ncols=1, nrows=4, figure=fig, height_ratios=[5,1,1,1])
+    sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
-    ax2 = fig.add_subplot(spec[3, 0], sharex=ax1)
-    ax3 = fig.add_subplot(spec[1, 0], sharex=ax1)
-    ax4 = fig.add_subplot(spec[2, 0], sharex=ax1)
+    ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
     plt.xticks(ticks=data_range, labels=ts_lbls, rotation=21, fontweight='bold')
     plt.subplots_adjust(left=0.08, bottom=0.08, right=0.77,
                         top=0.92, wspace=0, hspace=0.01)
@@ -77,20 +75,8 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ax2.set_ylabel('Volume', fontweight='bold')
     ax2.yaxis.set_major_locator(mticker.AutoLocator())
     ax2.yaxis.set_major_formatter(mticker.EngFormatter())
-    ax3.set_ylim((compass.min(), compass.max()))
-    ax3.grid(True, color=(0.3, 0.3, 0.3))
-    ax3.set_ylabel('Sentiment', fontweight='bold')
-    ax3.yaxis.set_major_locator(mticker.AutoLocator())
-    ax3.yaxis.set_major_formatter(mticker.EngFormatter())
-    ax4.set_ylim((trades.min(), trades.max()))
-    ax4.grid(True, color=(0.3, 0.3, 0.3))
-    ax4.set_ylabel('Trades', fontweight='bold')
-    ax4.yaxis.set_major_locator(mticker.AutoLocator())
-    ax4.yaxis.set_major_formatter(mticker.EngFormatter())
     xticks = ax1.xaxis.get_ticklabels()
     plt.setp(xticks[:], visible=False)
-    plt.setp(ax3.xaxis.get_ticklabels(), visible=False)
-    plt.setp(ax4.xaxis.get_ticklabels(), visible=False)
     # Dynamic width stuff
     tbb = ax1.get_tightbbox(fig.canvas.get_renderer()).get_points()
     xb = tbb[1][0] - tbb[0][0]
@@ -159,8 +145,6 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
             ax1.plot(cdl_range, cdl_data, **pkws)
         else:
             ax2.plot(cdl_range, cdl_data, **pkws)
-    ax3.plot(compass)
-    ax4.plot(trades)
     # Finalize
     props = dict(boxstyle='round', facecolor='0.03', alpha=0.97)
     plt.gcf().text(0.79, 0.77, moirai_metrics, fontsize=14, bbox=props)

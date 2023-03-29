@@ -84,18 +84,25 @@ class AlpacaShepherd:
 
     def candles(self, symbols, **kwargs):
         """Get historical price data for a symbol or list of symbols."""
-        params = 'timeframe=1Min'
-        for p in ('limit', 'start', 'end', 'page_token'):
+        params = ''
+        for p in ('timeframe', 'start', 'end', 'limit', 'page_token'):
             if p in kwargs:
                 params += f'&{p}={kwargs[p]}'
+                if p == 'start':
+                    params += 'T00:00:00-04:00'
+                elif p == 'end':
+                    params += 'T23:59:59-04:00'
+        if len(params) > 0:
+            params = params[1:]
         t = type(symbols)
-        if t == list:
+        if t in (list, tuple):
             url = f'{self.DATA_URL}/stocks/bars?symbols='
             for s in symbols:
                 url += f'{s},'
             url = f'{url[:-1]}&'
             return self.__query__(f'{url}{params}', just_text=True)
-        elif t == str and t.isalpha():
-            url = f'{self.DATA_URL}/stocks/{symbols}/bars?'
-            return self.__query__(f'{url}{params}')
-        return None
+        elif t == str and symbols.isalpha():
+            url = f'{self.DATA_URL}/stocks/{symbols}/bars?{params}'
+            return self.__query__(url)
+        else:
+            return None

@@ -37,17 +37,19 @@ class ThreeBlindMice(nn.Module):
         if not exists(self._sigil_path_): mkdir(self._sigil_path_)
         self.symbols = list(symbols)
         offerings = offerings.to(dev)
+        offerings = offerings.transpose(0, 1)
         constants = {}
         constants['cook_time'] = cook_time
-        constants['hidden'] = 2048
         constants['n_sample'] = n_sample = 3
         constants['n_symbols'] = n_symbols = len(self.symbols)
-        constants['n_output'] = n_sample * n_symbols
-        constants['n_time'] = int(offerings.shape[0] - n_sample)
-        constants['n_lin_in'] = n_lin_in = 2
+        constants['n_time'] = int(offerings.shape[0])
+        constants['n_lin_in'] = n_lin_in = 19
         constants['n_lin_out'] = n_lin_out = 9
+        constants['n_output'] = n_symbols * n_sample * n_lin_out
         constants['max_trades'] = 1
-        constants['output_dims'] = [n_sample, n_symbols, n_lin_out]
+        constants['output_dims'] = [n_symbols, n_sample, n_lin_out]
+        constants['hidden_input'] = n_symbols * n_sample * n_lin_out
+        constants['hidden_output'] = 4 * 8**3
         while constants['n_time'] % n_sample != 0:
             constants['n_time'] -= 1
         constants['max_gain'] = constants['n_time'] * constants['n_symbols']
@@ -58,11 +60,11 @@ class ThreeBlindMice(nn.Module):
         self.mask_p = lambda t: full_like(t, phi, device=dev, dtype=tfloat)
         self.mask = lambda t: self.iota + (t * bernoulli(self.mask_p(t)))
         self.rfft = fft.rfft
-        self.signals = offerings[:, :, 0].clone().detach()
+        self.signals = offerings.clone().detach()
         self.signals.requires_grad_(True)
-        self.targets = offerings[:, :, 1].clone().detach()
+        self.targets = offerings[:, :, -1].clone().detach()
         self.targets = (self.targets + iota).softmax(1)
-        self.candles = offerings[:, :, 2].clone().detach()
+        self.candles = offerings[:, :, :4].mean(2).clone().detach()
         self.candelabrum = TensorDataset(
             self.signals[:-n_sample],
             self.targets[n_sample:],
@@ -81,21 +83,21 @@ class ThreeBlindMice(nn.Module):
             dtype=tfloat,
             )
         self.input_cell = nn.LSTMCell(
-            input_size=constants['n_symbols'],
-            hidden_size=constants['hidden'],
+            input_size=constants['hidden_input'],
+            hidden_size=constants['hidden_output'],
             bias=True,
             device=dev,
             dtype=tfloat,
         )
         self.output_cell = nn.LSTMCell(
-            input_size=constants['hidden'],
-            hidden_size=constants['hidden'],
+            input_size=constants['hidden_output'],
+            hidden_size=constants['hidden_output'],
             bias=True,
             device=dev,
             dtype=tfloat,
         )
         self.linear = nn.Linear(
-            in_features=constants['hidden'],
+            in_features=constants['hidden_output'],
             out_features=constants['n_output'],
             bias=True,
             device=dev,
@@ -120,6 +122,8 @@ class ThreeBlindMice(nn.Module):
             maximize=False,
             )
         self.epochs = 0
+        self.rnn_loss = 0
+        self.net_gain = 0
         self.metrics = dict()
         self.verbosity = int(verbosity)
         if self.verbosity > 1:
@@ -139,12 +143,19 @@ class ThreeBlindMice(nn.Module):
             try:
                 state = torch.load(state_path, map_location=self._device_type_)
                 self.load_state_dict(state['moirai'])
-                self.epochs = state['epochs']
+                if 'epochs' in state:
+                    self.epochs = state['epochs']
+                if 'net_gain' in state:
+                    self.net_gain = state['net_gain']
+                if 'rnn_loss' in state:
+                    self.rnn_loss = state['rnn_loss']
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             except FileNotFoundError:
                 if not singular:
                     self.epochs = 0
+                    self.net_gain = 0
+                    self.rnn_loss = 0
                 if self.verbosity > 2:
                     print(self._prefix_, 'No state found, creating default.')
                 self.__manage_state__(call_type=1)
@@ -156,6 +167,8 @@ class ThreeBlindMice(nn.Module):
                 {
                     'epochs': self.epochs,
                     'moirai': self.state_dict(),
+                    'net_gain': self.net_gain,
+                    'rnn_loss': self.rnn_loss,
                     },
                 state_path,
                 )
@@ -177,11 +190,12 @@ class ThreeBlindMice(nn.Module):
         bubbles = nan_to_num(bubbles, nan=iota, posinf=1.0, neginf=iota)
         bubbles = bubbles.sigmoid().softmax(1)
         bubbles = self.bilinear(bubbles, bubbles)
-        bubbles = mask(bubbles.transpose(0, 1))
+        bubbles = mask(bubbles.transpose(0, 1).flatten())
         bubbles = mask(self.input_cell(bubbles)[0])
         bubbles = self.output_cell(bubbles)[0]
         bubbles = self.linear(bubbles).view(self._constants_['output_dims'])
-        bubbles = self.normalizer(bubbles.sum(2)).softmax(1)
+        bubbles = bubbles.sum(2).transpose(0, 1)
+        bubbles = self.normalizer(bubbles).softmax(1)
         return bubbles.clone()
 
     def research(self):
@@ -209,16 +223,16 @@ class ThreeBlindMice(nn.Module):
         msg = '{} epoch({}), loss({}), net_gain({})'
         self.train()
         while cooking:
-            net_gain = None
+            self.net_gain = 0
+            self.rnn_loss = 0
             prev_trade = (None, None)
-            loss_avg = 0
             for signal, target, candle in iter(self.cauldron):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(signal)
-                loss = loss_fn(sigil.flatten(), target.flatten())
+                loss = loss_fn(sigil, target)
                 loss.backward()
                 optimizer.step()
-                loss_avg += loss.item()
+                self.rnn_loss += loss.item()
                 for day in sample_range:
                     trade = topk(sigil[day], max_trades).indices
                     day_avg = candle[day]
@@ -232,20 +246,16 @@ class ThreeBlindMice(nn.Module):
                             _prev = prev_avg[i]
                             if _day > 0 < _prev:
                                 gain = (_day - _prev) / _prev
-                                if net_gain is None:
-                                    net_gain = gain.clone()
-                                else:
-                                    net_gain += gain
+                            self.net_gain += gain
                     prev_trade = (trade, day_avg[trade])
-            loss_avg = loss_avg / n_time
+            self.rnn_loss /= n_time
             self.epochs += 1
             if self.epochs % n_save == 0:
                 self.__manage_state__(call_type=1)
-                self.get_predictions(n_png=f'_{self.epochs}')
-            print(msg.format(prefix, self.epochs, loss_avg, net_gain))
-            if loss_avg < least_loss:
+            print(msg.format(prefix, self.epochs, self.rnn_loss, self.net_gain))
+            if self.rnn_loss < least_loss:
                 loss_retry = 0
-                least_loss = loss_avg
+                least_loss = self.rnn_loss
             else:
                 loss_retry += 1
                 if loss_retry == loss_timeout:
@@ -257,6 +267,9 @@ class ThreeBlindMice(nn.Module):
 
     def get_predictions(self, n_png=''):
         """Output for the last batch."""
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        from matplotlib import cm
         banner = ''.join(['*' for _ in range(80)])
         constants = self._constants_
         max_trades = constants['max_trades']
@@ -267,16 +280,15 @@ class ThreeBlindMice(nn.Module):
         self.eval()
         sigil = self.inscribe_sigil(self.signals[-n_sample:])
         print(banner)
+        forecast = list()
         for t in range(sigil.shape[0]):
             inscriptions = topk(sigil[t], max_trades)
             for i in range(max_trades):
                 s = symbols[inscriptions.indices[i]]
                 v = inscriptions.values[i]
+                forecast.append((s, v))
                 print(f'{prefix} day({t}) {s} {v} prob')
         print(banner)
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
-        from matplotlib import cm
         sig = sigil.clone().detach().cpu().numpy()
         xticks = range(sig.shape[1])
         plt.clf()
@@ -299,12 +311,25 @@ class ThreeBlindMice(nn.Module):
                 edgecolor=(1, 1, 1, 0.05),
                 )
             if colors_set < 3:
-                bar_params['label'] = f'Day {day + 1}'
+                bar_params['label'] = f'Forecast Day {day + 1}'
                 colors_set += 1
             ax.bar(xticks, sig[day], **bar_params)
         title = f'Candelabrum probabilities over the next {sig.shape[0]} days'
         fig.suptitle(title, fontsize=18)
         fig.legend(ncol=1, fontsize='xx-large', fancybox=True)
-        plt.savefig(f'./rnn/candelabrum{n_png}.png')
+        plt.savefig(f'./resources/candelabrum{n_png}.png')
+        plt.clf()
+        fig = plt.figure(figsize=(19.20, 10.80))
+        ax = fig.add_subplot()
+        ax.set_xlabel('Time')
+        ax.set_ylabel('Prob')
+        ax.plot(self.signals.grad.clone().detach().mean(2).cpu().numpy())
+        fig.suptitle('Signal Gradient', fontsize=18)
+        plt.savefig(f'./resources/signal_gradient{n_png}.png')
         plt.close()
-        return sigil
+        metrics = dict(
+            epochs=self.epochs,
+            rnn_loss=self.rnn_loss,
+            net_gain=self.net_gain,
+            )
+        return metrics, forecast
