@@ -8,7 +8,7 @@ import traceback
 import numpy as np
 import source.ivy_commons as icy
 from torch import bernoulli, fft, full_like, nan_to_num, nn, stack
-from torch.optim import RMSprop
+from torch.optim import Adagrad
 from torch.utils.data import DataLoader, TensorDataset
 from math import inf
 from os import listdir, mkdir
@@ -49,7 +49,11 @@ class ThreeBlindMice(nn.Module):
         constants['max_trades'] = 1
         constants['output_dims'] = [n_symbols, n_sample, n_lin_out]
         constants['hidden_input'] = n_symbols * n_sample * n_lin_out
-        constants['hidden_output'] = 4 * 8**3
+        constants['hidden_output'] = 2048
+        constants['lr_init'] = iota ** phi
+        constants['lr_decay'] = 1 + iota / (phi - 1)
+        constants['weight_decay'] = iota / phi
+        constants['eps'] = iota * 1e-6
         while constants['n_time'] % n_sample != 0:
             constants['n_time'] -= 1
         constants['max_gain'] = constants['n_time'] * constants['n_symbols']
@@ -116,10 +120,14 @@ class ThreeBlindMice(nn.Module):
             reduction='mean',
             delta=1.0,
             )
-        self.optimizer = RMSprop(
+        self.optimizer = Adagrad(
             self.parameters(),
+            lr=phi,
+            lr_decay=constants['lr_decay'],
+            weight_decay=constants['weight_decay'],
+            initial_accumulator_value=constants['lr_init'],
+            eps=constants['eps'],
             foreach=True,
-            maximize=False,
             )
         self.epochs = 0
         self.rnn_loss = 0
@@ -186,15 +194,15 @@ class ThreeBlindMice(nn.Module):
         mask = self.mask
         bubbles = self.normalizer(signal.transpose(0, 1))
         bubbles = self.rfft(bubbles)
-        bubbles = bubbles.real * bubbles.imag
+        bubbles = (bubbles.real * bubbles.imag).sigmoid()
         bubbles = nan_to_num(bubbles, nan=iota, posinf=1.0, neginf=iota)
-        bubbles = bubbles.sigmoid().softmax(1)
+        bubbles = bubbles.softmax(1)
         bubbles = self.bilinear(bubbles, bubbles)
-        bubbles = mask(bubbles.transpose(0, 1).flatten())
+        bubbles = mask(bubbles.flatten())
         bubbles = mask(self.input_cell(bubbles)[0])
         bubbles = self.output_cell(bubbles)[0]
         bubbles = self.linear(bubbles).view(self._constants_['output_dims'])
-        bubbles = bubbles.sum(2).transpose(0, 1)
+        bubbles = bubbles.mean(2).transpose(0, 1)
         bubbles = self.normalizer(bubbles).softmax(1)
         return bubbles.clone()
 
@@ -263,6 +271,8 @@ class ThreeBlindMice(nn.Module):
             elapsed = time.time() - t_cook
             if elapsed >= cook_time:
                 cooking = False
+        if self.epochs % n_save != 0:
+            self.__manage_state__(call_type=1)
         return self.get_predictions()
 
     def get_predictions(self, n_png=''):
@@ -321,10 +331,8 @@ class ThreeBlindMice(nn.Module):
         plt.clf()
         fig = plt.figure(figsize=(19.20, 10.80))
         ax = fig.add_subplot()
-        ax.set_xlabel('Time')
-        ax.set_ylabel('Prob')
-        ax.plot(self.signals.grad.clone().detach().mean(2).cpu().numpy())
-        fig.suptitle('Signal Gradient', fontsize=18)
+        ax.set_xlabel('Signal Gradient')
+        ax.plot(self.signals.grad.clone().detach().mean(2).sqrt().cpu().numpy())
         plt.savefig(f'./resources/signal_gradient{n_png}.png')
         plt.close()
         metrics = dict(
