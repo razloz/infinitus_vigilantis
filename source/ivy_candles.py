@@ -52,7 +52,6 @@ class Candelabrum:
             if not path.exists(path.abspath(_path)):
                 mkdir(_path)
         self._PREFIX = 'Candelabrum:'
-        self._TIMER = icy.TimeKeeper()
         self._tz = 'America/New_York'
         p = lambda c: pd.to_datetime(c, utc=True).tz_convert(self._tz)
         self._CSV_PARAMS = dict(
@@ -89,7 +88,7 @@ class Candelabrum:
                 if job[0] == 'cartography':
                     chart_symbol = job[1]
                     candelabrum_candles = job[2]
-                    sealed_package = job[3]
+                    cheese = job[3]
                     if len(job) == 5:
                         c_path = job[4]
                     else:
@@ -97,7 +96,7 @@ class Candelabrum:
                     cartography(
                         str(chart_symbol),
                         candelabrum_candles,
-                        cheese=sealed_package,
+                        cheese=cheese,
                         chart_path=c_path,
                         chart_size=100,
                         )
@@ -120,32 +119,6 @@ class Candelabrum:
                 w.join()
         else:
             self._QUEUE.join()
-
-    def alpaca_jazz(self, attendants=8, cook_time=0, epochs=-1):
-        """🎶🎵🎶 🎃 🪬 🎃 🎶🎵🎶"""
-        attendance = 0
-        att_msg = 'Current attendance is {} with {} guests remaining.'
-        guests = [s[0] for s in composite_index()]
-        prefix = self._PREFIX
-        rng = random.randint
-        print(prefix, f'The jazz recital with {len(guests)} patrons begins.')
-        recital_start = time.time()
-        while len(guests) > 0:
-            attendees = list()
-            for admission in range(attendants):
-                remaining_guests = len(guests) - 1
-                if remaining_guests != 0:
-                    attendees.append(guests.pop(rng(0, remaining_guests)))
-                else:
-                    attendees.append(guests.pop(0))
-                    break
-            attendance += len(attendees)
-            self.make_offering(attendees, cook_time=cook_time, epochs=epochs)
-            print(prefix, att_msg.format(attendance, remaining_guests))
-            elapsed = time.time() - recital_start
-            message = format_time(elapsed, message='Recital elapsed time is')
-            print(prefix, f'{message}.')
-        print(prefix, 'The recital comes to an end.')
 
     def make_offering(self, paterae, cook_time=None, epochs=-1):
         """Spend time with the Norn researching candles."""
@@ -201,16 +174,6 @@ class Candelabrum:
         self.join_workers()
         navigator.make_all(metrics, forecast, info, disclaimer)
         print(self._PREFIX, 'Webview ready.')
-
-
-
-def make_utc(time_string):
-    """Liberation from the chains of Daylight Savings."""
-    fmt = '%Y-%m-%dT%H:%M:%S%z'
-    first_annoyance = time.strptime(time_string, fmt)
-    second_annoyance = time.mktime(first_annoyance)
-    third_annoyance = time.gmtime(second_annoyance)
-    return time.mktime(third_annoyance)
 
 
 def candle_maker(candles):

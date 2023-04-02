@@ -20,7 +20,7 @@ __license__ = 'GPL v3'
 
 class ThreeBlindMice(nn.Module):
     """Let the daughters of necessity shape the candles of the future."""
-    def __init__(self, symbols, offerings, cook_time=inf, verbosity=2):
+    def __init__(self, symbols, offerings, cook_time=inf, trim=34, verbosity=2):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__()
         torch.autograd.set_detect_anomaly(True)
@@ -32,14 +32,13 @@ class ThreeBlindMice(nn.Module):
         self._state_path_ = abspath('./rnn')
         if not exists(self._state_path_): mkdir(self._state_path_)
         self.symbols = list(symbols)
-        offerings = offerings.to(dev)
-        offerings = offerings.transpose(0, 1)
+        offerings = offerings.to(dev).transpose(0, 1)[trim:]
         constants = {}
         constants['cook_time'] = cook_time
         constants['n_sample'] = n_sample = 3
         constants['n_symbols'] = n_symbols = len(self.symbols)
         constants['n_time'] = int(offerings.shape[0])
-        constants['n_lin_in'] = n_lin_in = 19
+        constants['n_lin_in'] = n_lin_in = 11
         constants['n_lin_out'] = n_lin_out = 9
         constants['n_output'] = n_symbols * n_sample
         constants['output_dims'] = [n_sample, n_symbols]
@@ -48,7 +47,7 @@ class ThreeBlindMice(nn.Module):
         constants['lr_init'] = iota ** phi
         constants['lr_decay'] = 1 + iota / (phi - 1)
         constants['weight_decay'] = iota / phi
-        constants['eps'] = iota * 1e-6
+        constants['eps'] = 1e-12
         while constants['n_time'] % n_sample != 0:
             constants['n_time'] -= 1
         offerings = offerings[-constants['n_time']:]
@@ -58,9 +57,8 @@ class ThreeBlindMice(nn.Module):
         self.rfft = fft.rfft
         self.candles = offerings.clone().detach()
         self.candles.requires_grad_(True)
-        self.targets = offerings[:, :, -1].clone().detach()
-        self.targets = (self.targets + iota).softmax(1)
-        self.cdl_means = offerings[:, :, :4].mean(2).clone().detach()
+        self.targets = offerings[:, :, -1].clone().detach().softmax(1)
+        self.cdl_means = offerings[:, :, :4].clone().detach().mean(2)
         self.candelabrum = TensorDataset(
             self.candles[:-n_sample],
             self.targets[n_sample:],
@@ -122,13 +120,13 @@ class ThreeBlindMice(nn.Module):
             foreach=True,
             )
         self.metrics = dict(
-            accuracy=0,
-            avg_gain=0,
-            epochs=0,
             rnn_loss=0,
-            net_gain=0,
+            accuracy=0,
             trades_profit=0,
             trades_total=0,
+            avg_gain=0,
+            net_gain=0,
+            epochs=0,
             )
         self.verbosity = int(verbosity)
         if self.verbosity > 1:
@@ -176,17 +174,17 @@ class ThreeBlindMice(nn.Module):
         sigil = self.normalizer(wax.transpose(0, 1))
         sigil = self.rfft(sigil)
         sigil = self.bilinear(sigil.real, sigil.imag)
-        sigil = sigil.sigmoid().softmax(1).flatten()
+        sigil = sigil.tanh().softmax(1).flatten()
         sigil = self.input_cell(sigil)[0]
         sigil = self.output_cell(sigil)[0]
         sigil = self.linear(sigil).view(self._constants_['output_dims'])
-        sigil = self.normalizer(sigil).softmax(1)
+        sigil = self.normalizer(sigil).tanh().softmax(1)
         return sigil.clone()
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
         prefix = self._prefix_
-        print(prefix, 'Research started.')
+        print(prefix, 'Research started.\n')
         constants = self._constants_
         cook_time = constants['cook_time']
         inscribe_sigil = self.inscribe_sigil
@@ -220,11 +218,12 @@ class ThreeBlindMice(nn.Module):
                 rnn_loss += loss.item()
                 for day in sample_range:
                     trade = topk(sigil[day], 1).indices
+                    curr_sym = symbols[trade]
                     day_avg = cdl_means[day]
                     prev_sym = prev_trade[0]
                     prev_avg = prev_trade[1]
                     for sym in symbols:
-                        trades[sym].append(1 if sym == trade else 0)
+                        trades[sym].append(1 if sym == curr_sym else 0)
                     if prev_sym is not None:
                         gain = 0
                         curr_avg = day_avg[prev_sym]
@@ -262,6 +261,8 @@ class ThreeBlindMice(nn.Module):
                 self.__manage_state__(call_type=1)
         if self.metrics['epochs'] % n_save != 0:
             self.__manage_state__(call_type=1)
+        if self.verbosity > 0:
+            print(prefix, 'Research complete.\n')
         return self.get_predictions()
 
     def get_predictions(self, n_png=''):
@@ -280,12 +281,11 @@ class ThreeBlindMice(nn.Module):
         print(banner)
         forecast = list()
         for t in range(sigil.shape[0]):
-            inscriptions = topk(sigil[t], max_trades)
-            for i in range(max_trades):
-                s = symbols[inscriptions.indices[i]]
-                v = inscriptions.values[i]
-                forecast.append((s, v))
-                print(f'{prefix} day({t}) {s} {v} prob')
+            inscriptions = topk(sigil[t], 1)
+            s = symbols[inscriptions.indices]
+            v = inscriptions.values.item()
+            forecast.append((s, v))
+            print(f'{prefix} day({t}) {s} {v} prob')
         print(banner)
         sig = sigil.clone().detach().cpu().numpy()
         xticks = range(sig.shape[1])
@@ -320,9 +320,7 @@ class ThreeBlindMice(nn.Module):
         fig = plt.figure(figsize=(19.20, 10.80))
         ax = fig.add_subplot()
         ax.set_xlabel('Signal Gradient')
-        grad = self.signals.grad.clone().detach()
-        grad = grad.sum(2).mean(1).sqrt().cpu().numpy()
-        ax.plot(grad)
+        ax.plot(self.candles.grad.clone().detach().sum(2).cpu().numpy())
         plt.savefig(f'./resources/signal_gradient{n_png}.png')
         plt.close()
-        return forecast
+        return (dict(self.metrics), forecast)

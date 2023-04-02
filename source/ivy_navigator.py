@@ -34,10 +34,11 @@ HTML_HEAD = """
                 background-color: #04AA6D;
                 }
             div.gallery {
-                margin: 5px;
+                margin: auto 0;
                 border: 1px solid #ccc;
                 float: left;
-                width: 180px;
+                width: 30%;
+                height: auto;
                 }
             div.gallery:hover {
                 border: 1px solid #777;
@@ -64,6 +65,8 @@ HTML_HEAD = """
                 height: auto;
                 }
         </style>
+    </head>
+    <body>
         <div>
             <ul>
                 <li><a href="candelabrum.html">Candelabrum</a></li>
@@ -71,10 +74,6 @@ HTML_HEAD = """
                 <li style="float:right"><a href="info.html">Info</a></li>
                 <li style="float:right"><a href="disclaimer.html">Disclaimer</a></li>
             </ul>
-        </div>
-    </head>
-    <body>
-        <div>
 """
 HTML_TAIL = """
         </div>
@@ -121,13 +120,13 @@ def make_forecast(forecast):
 
 def make_info(info):
     file_name = RESOURCE_PATH + '/info.html'
-    html = f"""<p><b>{info}</b></p>"""
+    html = f"""<div class="metrics"><p><b>{info}</b></p></div>"""
     make_html(file_name, html)
 
 
 def make_disclaimer(disclaimer):
     file_name = RESOURCE_PATH + '/disclaimer.html'
-    html = f"""<p><b>{disclaimer}</b></p>"""
+    html = f"""<div class="metrics"><p><b>{disclaimer}</b></p></div>"""
     make_html(file_name, html)
 
 

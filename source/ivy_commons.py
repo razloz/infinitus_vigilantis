@@ -152,18 +152,11 @@ def gartley(five_point_wave, tolerance = 0.001):
     return g
 
 
-__next_wave__ = lambda i, l: i + 1 if i + 1 < l else 0
 def get_indicators(df, index_key='time'):
     """Collects indicators and adds them to the dataframe."""
-    trend_strength = 0
-    wave_points = [0, 0, 0, 0, 0]
-    wave_index = 0
-    wave_length = len(wave_points)
-    trend = list()
-    fibs_extended = list()
-    fibs_retraced = list()
-    gartley_checks = list()
     sample = 34
+    trend = list()
+    trend_strength = 0
     weights = dict(fast=3, weight=13)
     money_p = {f'price_{k}': list() for k in _NO_MONEY_.keys()}
     money_v = {f'volume_{k}': list() for k in _NO_MONEY_.keys()}
@@ -180,37 +173,21 @@ def get_indicators(df, index_key='time'):
         if i >= 2:
             ii = i - 1
             iii = i - 2
-            hp1 = h[i]
-            hp2 = h[ii]
-            hp3 = h[iii]
-            lp1 = l[i]
-            lp2 = l[ii]
-            lp3 = l[iii]
+            hp1, hp2, hp3 = h[i], h[ii], h[iii]
+            lp1, lp2, lp3 = l[i], l[ii], l[iii]
             trending_up = hp1 > hp2 > hp3 and lp1 > lp2 > lp3
             trending_down = hp1 < hp2 < hp3 and lp1 < lp2 < lp3
             if trending_up and trending_down:
                 trend_strength = 0
-                wave_points[wave_index] = 0
-                wave_index = __next_wave__(wave_index, wave_length)
             elif trending_up:
                 if trend_strength <= 0:
                     trend_strength = 0
-                    wave_points[wave_index] = lp3
-                    wave_index = __next_wave__(wave_index, wave_length)
                 trend_strength += 1
             elif trending_down:
                 if trend_strength >= 0:
                     trend_strength = 0
-                    wave_points[wave_index] = hp3
-                    wave_index = __next_wave__(wave_index, wave_length)
                 trend_strength -= 1
-        r = fibonacci(wave_points, trend=trend_strength)
-        e = fibonacci(wave_points, trend=trend_strength, extend=True)
-        g = gartley(wave_points)
-        fibs_retraced.append(r)
-        fibs_extended.append(e)
         trend.append(trend_strength)
-        gartley_checks.append(g)
         si = i - sample
         ei = i + 1
         if i == df_last:
@@ -228,213 +205,13 @@ def get_indicators(df, index_key='time'):
             money_v[f'volume_{key}'].append(value)
     indicators = DataFrame(index=df.index)
     indicators['trend'] = trend
-    dfs = [
-        DataFrame(fibs_retraced),
-        DataFrame(fibs_extended),
-        DataFrame(gartley_checks),
-        DataFrame(money_p),
-        DataFrame(money_v)
-        ]
-    for dataframe in dfs:
-        for c, s in dataframe.items():
-            indicators[c] = s.tolist()
-    o = df['open'].values
-    h = df['high'].values
-    l = df['low'].values
-    c = df['close'].values
-    median = ((o + h + l + c) / 4).tolist()
-    wema = indicators['price_wema']
-    delta = (median - wema) / wema
-    indicators['delta'] = delta
-    indicators['price_med'] = median
+    for dataframe in [DataFrame(money_p), DataFrame(money_v)]:
+        for key, value in dataframe.items():
+            indicators[key] = value.tolist()
+    price_sum = df['open'].values + df['high'].values
+    price_sum += df['low'].values + df['close'].values
+    indicators['price_med'] = (price_sum / 4).tolist()
     indicators['pct_chg'] = indicators['price_med'].pct_change(periods=sample)
     indicators.replace([inf, -inf], nan, inplace=True)
     indicators.fillna(0, inplace=True)
     return indicators.copy()
-
-
-def format_time(elapsed, message=''):
-    if elapsed > 86400:
-        message += '{} days'.format(round(elapsed / 86400, 5))
-    elif elapsed > 3600:
-        message += '{} hours'.format(round(elapsed / 3600, 5))
-    elif elapsed > 60:
-        message += '{} minutes'.format(round(elapsed / 60, 5))
-    else:
-        message += '{} seconds'.format(round(elapsed, 5))
-    return message
-
-
-class TimeKeeper:
-    """Used to invoke elapsed time."""
-    def __init__(self):
-        self._start_time = time()
-        self._timer = self._start_time
-
-    @property
-    def final(self):
-        """Final elapsed time."""
-        elapsed = time() - self._start_time
-        elapsed_str = format_time(elapsed)
-        return (elapsed_str, elapsed)
-
-    @property
-    def reset(self):
-        """Reset start time."""
-        self._start_time = time()
-        self._timer = self._start_time
-        return self._start_time
-
-    @property
-    def update(self):
-        """Get elapsed time since update was last called."""
-        elapsed = time() - self._timer
-        elapsed_str = format_time(elapsed)
-        self._timer = time()
-        return (elapsed_str, elapsed)
-
-
-def posix_from_time(t, f='%Y-%m-%d %H:%M'):
-    """Python time struct to POSIX timestamp."""
-    ts = mktime(strptime(t, f))
-    return float(ts)
-
-
-class UpdateSchedule(object):
-    """Generator for next update time."""
-    def __init__(self, date_string, freq='15min'):
-        """Set internal variables."""
-        _sd = f"{date_string} 00:00:00"
-        _ed = f"{date_string} 23:59:59"
-        _drng = date_range(start=_sd, end=_ed, freq=freq)
-        self._dates = _drng.tolist()
-        self._last = len(self._dates) - 1
-        self._current = 0
-
-    def __iter__(self):
-        """Make iterable."""
-        return self
-
-    def __next__(self):
-        """Python3 compatibility."""
-        return self.next()
-
-    def next(self):
-        """Get next POSIX timestamp."""
-        if self._current <= self._last:
-            ts = self._dates[self._current]
-            self._current += 1
-            return strftime('%Y-%m-%d %H:%M:%S', gmtime(ts.timestamp()))
-        else:
-            raise StopIteration()
-
-
-class FibonacciSequencer():
-    """Get the next N sequence of numbers."""
-    def __init__(self):
-        self.n = 0
-        self.previous = 0
-        self.current = 1
-    def __seq_gen__(self, steps=1):
-        steps -= 1
-        if steps > 0:
-            n = self.n + steps
-            while self.n <= n:
-                next_number = self.current + self.previous
-                self.previous = self.current
-                self.current = next_number
-                self.n += 1
-                yield next_number
-        else:
-            yield self.current
-    def next(self, n=1):
-        return [i for i in self.__seq_gen__(steps=n)]
-    def skip(self, n):
-        for _ in self.__seq_gen__(steps=n):
-            pass
-        return self
-
-
-def read_sigil(num):
-    """Translate the inscribed sigils."""
-    from pandas import DataFrame
-    inscriptions = dict()
-    sigils = list()
-    sigil_path = abspath('./rnn/sigil')
-    keys = ['signal', 'accuracy', 'avg_gain', 'net_gains', 'sentiment']
-    ascending = [True, False, False, False, False]
-    for file_name in listdir(sigil_path):
-        if file_name[-6:] == '.sigil':
-            file_path = abspath(f'{sigil_path}/{file_name}')
-            with open(file_path, 'r') as file_obj:
-                sigil_data = json.loads(file_obj.read())
-            symbol = sigil_data['symbol']
-            inscriptions[symbol] = sigil_data
-            sigil = {'symbol': symbol}
-            for key, value in sigil_data.items():
-                if key in keys:
-                    sigil[key] = value
-            sigils.append(sigil)
-    sigils = DataFrame(sigils)
-    sigils.set_index('symbol', inplace=True)
-    sigils.sort_values(keys, ascending=ascending, inplace=True)
-    best = list()
-    top_sigils = sigils.index[:num]
-    for symbol in top_sigils:
-        best.append(inscriptions[symbol])
-    print(sigils[:num])
-    return best
-
-
-def boil_wax(num):
-    """Full reduction numerology."""
-    if type(num) != str:
-        num = str(num)
-    if '.' in num:
-        num = num.replace('.', '')
-    while len(num) > 1:
-        num = str(sum([int(i) for i in num]))
-    return int(num)
-
-
-def golden_brew():
-    """Care for a spot of tea?"""
-    from math import pi
-    from torch import stack, tensor
-    from torch.fft import rfft, irfft, rfftfreq
-    def transform(brew):
-        t = list()
-        for f, b in brew.items():
-            input_signal = tensor(b, dtype=torch.float)
-            freq_domain = rfft(input_signal)
-            harmonic_mean = stack([freq_domain.real, freq_domain.imag])
-            harmonic_mean = (1 / harmonic_mean).mean(0) ** -1
-            if harmonic_mean.shape[0] > 25:
-                harmonic_mean = harmonic_mean[:25]
-            t.append(harmonic_mean)
-        return t
-    fib_seq = icy.FibonacciSequencer()
-    fib_seq.skip(100000)
-    f1, f2 = fib_seq.next(2)
-    phi = f2 / f1
-    golden_string = f'{(f2 / f1):.50}'.replace('.', '')
-    pi_string = f'{pi:.50}'.replace('.', '')
-    golden_r = [int(n) for n in golden_string]
-    pi_r = [int(n) for n in pi_string]
-    golden_brew = list()
-    pi_brew = list()
-    l = 0
-    for i in range(50):
-        g = golden_string[:i+1]
-        p = pi_string[:i+1]
-        m = len(g)
-        if m > l:
-            l = m
-        else:
-            break
-        golden_brew.append(boil_wax(g))
-        pi_brew.append(boil_wax(p))
-    t = {'fib': golden_brew, 'pi': pi_brew, 'fib_raw': golden_r, 'pi_raw': pi_r}
-    brew = (1 / stack(transform(t), dim=0)).mean(0) ** -1
-    return brew.clone()
-
