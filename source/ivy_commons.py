@@ -1,24 +1,11 @@
 """Common functions used by the Infinitus Vigilantis application"""
 import traceback
-from time import time
-from time import strptime
-from time import strftime
-from time import mktime
-from time import localtime
-from time import gmtime
 from statistics import stdev
 from statistics import mean
-from numpy import busday_count, errstate, inf, nan
-from datetime import datetime
+from numpy import inf, nan
 from threading import Thread, Lock
-from queue import Queue
 from multiprocessing import Process
-from multiprocessing import Queue as mpQueue
-from pandas import date_range
 from pandas import DataFrame
-from dateutil import parser as date_parser
-from collections import Counter
-from math import isclose
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -54,26 +41,6 @@ def ivy_dispatcher(func, ftype='thread', args=None,
     f.daemon = daemon
     f.start()
     return f
-
-
-def safe_div(a, b):
-    """Will it divide?"""
-    with errstate(divide='ignore', invalid='ignore'):
-        try:
-            c = a / b
-        except Exception as _:
-            return b
-        return c
-
-
-def percent_change(current, previous):
-    """Will it percentage?"""
-    try:
-        chg = (current - previous) / previous
-    except ZeroDivisionError:
-        chg = 0
-    finally:
-        return float(round(100 * chg, 2))
 
 
 __weighted__ = lambda c, p, w: c * w + (p * (1 - w))
@@ -112,44 +79,6 @@ def money_line(points, fast=8, weight=34):
         money['mid'] = mid
     finally:
         return money
-
-
-def pivot_points(*ohlc):
-    """Generate a list of pivot points at price."""
-    price_points = [p for l in ohlc for p in l]
-    return dict(Counter(price_points))
-
-
-_FIB_LEVELS_ = [0.236, 0.382, 0.5, 0.618, 0.786, 0.886]
-def fibonacci(points, trend=0, extend=False):
-    """Extends/retraces price movement based on the trend's polarity."""
-    a = max(points)
-    b = min(points)
-    c = points[-1]
-    s = a - b
-    x = c if extend else a
-    m = 'fib_extend_' if extend else 'fib_retrace_'
-    if trend > 0:
-        fibs = {f'{m}{i}': round(x + s * i, 2) for i in _FIB_LEVELS_}
-    else:
-        fibs = {f'{m}{i}': round(x - s * i, 2) for i in _FIB_LEVELS_}
-    return fibs
-
-
-def gartley(five_point_wave, tolerance = 0.001):
-    """Check points for Gartley's harmonic pattern."""
-    p = five_point_wave
-    t = tolerance
-    r1 = fibonacci((p[1], p[0]))
-    r2 = fibonacci((p[1], p[2]))
-    c1 = isclose(p[2], r1['fib_retrace_0.618'], rel_tol=t)
-    c2 = isclose(p[3], r2['fib_retrace_0.382'], rel_tol=t)
-    c3 = isclose(p[4], r1['fib_retrace_0.786'], rel_tol=t)
-    g = dict(gartley_target=0, gartley_stop_loss=0)
-    if all((c1, c2, c3)):
-        g['gartley_target'] = p[1] + ((p[1] - p[3]) * 1.618033988749)
-        g['gartley_stop_loss'] = p[0]
-    return g
 
 
 def get_indicators(df, index_key='time'):
@@ -211,7 +140,7 @@ def get_indicators(df, index_key='time'):
     price_sum = df['open'].values + df['high'].values
     price_sum += df['low'].values + df['close'].values
     indicators['price_med'] = (price_sum / 4).tolist()
-    indicators['pct_chg'] = indicators['price_med'].pct_change(periods=sample)
+    indicators['pct_chg'] = indicators['price_med'].pct_change(periods=3)
     indicators.replace([inf, -inf], nan, inplace=True)
     indicators.fillna(0, inplace=True)
     return indicators.copy()

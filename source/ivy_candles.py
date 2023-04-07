@@ -8,17 +8,16 @@ import time
 import traceback
 import source.ivy_commons as icy
 import source.ivy_alpaca as api
+from os import path, listdir, cpu_count, remove, mkdir
+from datetime import datetime
+from queue import Queue
+from multiprocessing import Queue as mpQueue
 from source.ivy_cartography import cartography
 from source.ivy_mouse import ThreeBlindMice
 from source.ivy_watchlist import ivy_watchlist
-from datetime import datetime
-from os import path, listdir, cpu_count, remove, mkdir
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
-SILENCE = icy.silence
-DIV = icy.safe_div
-PERCENT = icy.percent_change
 SHEPHERD = api.AlpacaShepherd()
 COLUMN_NAMES = {
     't': 'utc_ts',
@@ -54,18 +53,12 @@ class Candelabrum:
         self._PREFIX = 'Candelabrum:'
         self._tz = 'America/New_York'
         p = lambda c: pd.to_datetime(c, utc=True).tz_convert(self._tz)
-        self._CSV_PARAMS = dict(
-            index_col=0,
-            parse_dates=True,
-            infer_datetime_format=True,
-            date_parser=p
-            )
         if self._FTYPE == 'process':
-            self._QUEUE = icy.mpQueue()
+            self._QUEUE = mpQueue()
             print(self._PREFIX, f'creating {self._CPU_COUNT - 1} processes...')
             r = range(self._CPU_COUNT - 1)
         else:
-            self._QUEUE = icy.Queue()
+            self._QUEUE = Queue()
             print(self._PREFIX, f'creating {self._MAX_THREADS} threads...')
             r = range(self._MAX_THREADS)
         for _ in r:
@@ -122,7 +115,7 @@ class Candelabrum:
 
     def make_offering(self, paterae, cook_time=None, epochs=-1):
         """Spend time with the Norn researching candles."""
-        from torch import load, stack
+        from torch import load
         abspath = path.abspath
         prefix = self._PREFIX
         if type(paterae) not in [list, tuple]:
@@ -149,7 +142,9 @@ class Candelabrum:
             moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
         loop_start = time.time()
         while aeternalis:
-            self.create_webview(*moirai.research())
+            metrics, forecast, sigil = moirai.research()
+            moirai.plot_predictions(sigil)
+            self.create_webview(metrics, forecast)
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
@@ -160,6 +155,7 @@ class Candelabrum:
     def create_webview(self, metrics, forecast):
         """Get top picks from the Moirai."""
         import source.ivy_navigator as navigator
+        from pandas import read_csv
         abspath = path.abspath
         with open('./license/GPLv3.txt', 'r') as f:
             info = f.read()
@@ -168,7 +164,7 @@ class Candelabrum:
         for day, probs in enumerate(forecast):
             symbol = probs[0]
             cdl_path = abspath(f'./candelabrum/{symbol}.ivy')
-            candles = pd.read_csv(cdl_path, **self._CSV_PARAMS)
+            candles = read_csv(cdl_path, index_col=0, parse_dates=True)
             c_path = abspath(f'./resources/forecast_{day}.png')
             self._QUEUE.put(('cartography', symbol, candles, None, c_path))
         self.join_workers()
@@ -201,6 +197,9 @@ def build_historical_database(start_date='2018-01-01'):
     from time import strftime, strptime
     from torch import cuda, device, save, stack, tensor
     from torch import float as tfloat
+    candelabrum_path = path.abspath('./candelabrum')
+    if not path.exists(candelabrum_path):
+        mkdir(candelabrum_path)
     dev = device('cuda:0' if cuda.is_available() else 'cpu')
     today = strftime('%Y-%m-%d', time.localtime())
     kwargs = dict(timeframe='1Day', start=start_date, limit='10000')
@@ -227,7 +226,7 @@ def build_historical_database(start_date='2018-01-01'):
             print(f'{symbol}:', type(details), details.args)
         finally:
             continue
-    p = path.abspath('./candelabrum/{}')
+    p = candelabrum_path + '/{}'
     candelabrum = list()
     omenize = icy.get_indicators
     print(f'Applying indicators to {len(candles.keys())} symbols.')

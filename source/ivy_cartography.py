@@ -54,7 +54,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
     ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
-    plt.xticks(ticks=data_range, labels=ts_lbls, rotation=21, fontweight='bold')
+    plt.xticks(ticks=data_range, labels=ts_lbls, rotation=13, fontweight='bold')
     plt.subplots_adjust(left=0.08, bottom=0.08, right=0.77,
                         top=0.92, wspace=0, hspace=0.01)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
