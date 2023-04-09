@@ -91,7 +91,7 @@ class Candelabrum:
                         candelabrum_candles,
                         cheese=cheese,
                         chart_path=c_path,
-                        chart_size=100,
+                        chart_size=365,
                         )
             except Exception as err:
                 err_path = f'./errors/{time.time()}-worker.exception'
@@ -142,34 +142,13 @@ class Candelabrum:
             moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
         loop_start = time.time()
         while aeternalis:
-            metrics, forecast, sigil = moirai.research()
-            moirai.plot_predictions(sigil)
-            self.create_webview(metrics, forecast)
+            moirai.update_webview(*moirai.research())
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
         elapsed = time.time() - loop_start
         message = f'({epoch}) Aeternalis elapsed time is'
         print(prefix, format_time(elapsed, message=message))
-
-    def create_webview(self, metrics, forecast):
-        """Get top picks from the Moirai."""
-        import source.ivy_navigator as navigator
-        from pandas import read_csv
-        abspath = path.abspath
-        with open('./license/GPLv3.txt', 'r') as f:
-            info = f.read()
-        with open('./license/Disclaimer.txt', 'r') as f:
-            disclaimer = f.read()
-        for day, probs in enumerate(forecast):
-            symbol = probs[0]
-            cdl_path = abspath(f'./candelabrum/{symbol}.ivy')
-            candles = read_csv(cdl_path, index_col=0, parse_dates=True)
-            c_path = abspath(f'./resources/forecast_{day}.png')
-            self._QUEUE.put(('cartography', symbol, candles, None, c_path))
-        self.join_workers()
-        navigator.make_all(metrics, forecast, info, disclaimer)
-        print(self._PREFIX, 'Webview ready.')
 
 
 def candle_maker(candles):

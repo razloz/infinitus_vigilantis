@@ -55,7 +55,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     ax1 = fig.add_subplot(spec[0, 0])
     ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
     plt.xticks(ticks=data_range, labels=ts_lbls, rotation=13, fontweight='bold')
-    plt.subplots_adjust(left=0.08, bottom=0.08, right=0.77,
+    plt.subplots_adjust(left=0.08, bottom=0.08, right=0.92,
                         top=0.92, wspace=0, hspace=0.01)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
     ax1.set_ylabel('Price', fontweight='bold')
@@ -146,13 +146,10 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
         else:
             ax2.plot(cdl_range, cdl_data, **pkws)
     # Finalize
-    props = dict(boxstyle='round', facecolor='0.03', alpha=0.97)
-    plt.gcf().text(0.79, 0.77, moirai_metrics, fontsize=14, bbox=props)
     res = adj if adj else 'None'
     rnc = round(cdl_close[-1], 3)
     t = f'[ {rnc} ]   {symbol}  @  {ts_last} (resample: {res})'
     fig.suptitle(t, fontsize=18)
-    fig.legend(ncol=1, loc='lower right', fontsize='xx-large', fancybox=True)
     plt.savefig(str(chart_path))
     plt.clf()
     plt.close()
@@ -160,93 +157,35 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
     return False
 
 
-def scaled_chart(symbol, chart_size, scale, signals,
-                 candelabrum, start_date, end_date):
-    """Omenize and resample data for chart generation."""
-    sym = str(symbol).upper()
-    cp = f'./charts/{sym}.png'
-    s = chart_size if isinstance(chart_size, int) else 100
-    cs = s * -1
-    get_candles = candelabrum.gather_data
-    resample = candelabrum.resample_candles
-    omenize = candelabrum.apply_indicators
-    cdls = get_candles(symbol, start_date, end_date)
-    if scale: cdls = resample(cdls, scale)
-    pivots = PivotPoints(
-        cdls['open'].tolist(),
-        cdls['high'].tolist(),
-        cdls['low'].tolist(),
-        cdls['close'].tolist())
-    cdls = omenize(cdls)
-    if len(cdls) > 0:
-        if len(cdls) > s:
-            scaled_cdls = cdls[cs:]
-        else:
-            scaled_cdls = cdls[:]
-        kargs = dict(pivot_points=pivots, cheese=signals, chart_path=cp)
-        if scale: kargs['adj'] = scale
-        cartography(sym, scaled_cdls, **kargs)
-        with open(f'./configs/{sym}.done', 'w') as f:
-            f.write('yigyig')
-
-
-def cartographer(symbol=None, chart_size=100, adj_time=None,
-                 daemon=False, no_signals=False,
-                 start_date=None, end_date=None):
-    """Charting daemon."""
-    from source.ivy_commons import ivy_dispatcher
-    from source.ivy_candles import composite_index
-    from source.ivy_candles import Candelabrum
-    do_once = isinstance(symbol, str)
-    valid_times = ('5Min', '10Min', '15Min', '30Min', '1H', '3H')
-    if adj_time:
-        adj = adj_time if adj_time in valid_times else None
-        if not adj:
-            if verbose: print(f'Error: adj_time must be one of {valid_times}')
-    else:
-        adj = None
-    cdlm = Candelabrum()
-    if not do_once:
-        ivy_ndx = composite_index('./indexes/default.ndx')
-        if verbose: print(f'Cartographer: working on {len(ivy_ndx)} symbols.')
-    else:
-        mk_msg = 'Cartographer: creating a {} width {} chart for {}.'
-        if verbose: print(mk_msg.format(chart_size, adj, symbol))
-    charting = True
-    last_poll = 0
-    try:
-        mp = path.abspath('./configs/last.update')
-        ac = path.abspath('./configs/all.cheese')
-        while charting:
-            mouse_poll = path.getmtime(mp) if path.exists(mp) else 0
-            if mouse_poll > last_poll or no_signals:
-                if verbose: print('Cartographer: starting work.')
-                try:
-                    if not no_signals:
-                        with open(ac, 'rb') as pkl:
-                            mice = pickle.load(pkl)
-                        c = mice.signals
-                    else:
-                        c = None
-                    t = time()
-                    a = (chart_size, adj, c, cdlm, start_date, end_date)
-                    if not do_once:
-                        for symbol_pair in ivy_ndx:
-                            scaled_chart(symbol_pair[0], *a)
-                    else:
-                        scaled_chart(symbol, *a)
-                finally:
-                    e = time() - t
-                    last_poll = mouse_poll
-                    if verbose: print(f'Cartographer: finished work in {e} seconds.')
-                if daemon:
-                    if verbose: print('Cartographer: going to sleep.')
-            if not daemon:
-                charting = False
-            else:
-                sleep(0.5)
-    except KeyboardInterrupt:
-        print('Keyboard Interrupt: Stopping loop.')
-        charting = False
-    finally:
-        if verbose: print('Cartographer retired.')
+def plot_candelabrum(sigil, symbols):
+    """Candelabrum forecast in bar chart format."""
+    xticks = range(sigil.shape[1])
+    plt.clf()
+    fig = plt.figure(figsize=(38.40, 10.24))
+    ax = fig.add_subplot()
+    plt.subplots_adjust(left=0.03, bottom=0.03, right=0.97, top=0.77)
+    ax.set_xlabel('Symbol')
+    ax.set_ylabel('Prob')
+    ax.set_xticks(xticks)
+    ax.set_xticklabels(symbols, fontweight='light')
+    ax.tick_params(axis='x', which='major', labelsize=7, pad=5, rotation=90)
+    width_adj = [0.7, 0.5, 0.3]
+    colors = [(0.34, 0.34, 1, 1), (0.34, 1, 0.34, 1), (1, 0.34, 0.34, 1)]
+    colors_set = 0
+    for day in range(sigil.shape[0]):
+        bar_params = dict(
+            width=width_adj[day],
+            align='edge',
+            aa=True,
+            color=colors[day],
+            edgecolor=(1, 1, 1, 0.05),
+            )
+        if colors_set < 3:
+            bar_params['label'] = f'Forecast Day {day + 1}'
+            colors_set += 1
+        ax.bar(xticks, sigil[day], **bar_params)
+    title = f'Candelabrum probabilities over the next {sigil.shape[0]} days'
+    fig.suptitle(title, fontsize=18)
+    fig.legend(ncol=1, fontsize='xx-large', fancybox=True)
+    plt.savefig('./resources/candelabrum.png')
+    plt.close()

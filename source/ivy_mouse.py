@@ -7,12 +7,14 @@ import torch
 import traceback
 import numpy as np
 import source.ivy_commons as icy
+from pandas import read_csv
 from torch import bernoulli, fft, nan_to_num, nn, stack
 from torch.optim import Adagrad
 from torch.utils.data import DataLoader, TensorDataset
 from math import inf, sqrt
 from os import listdir, mkdir
 from os.path import abspath, exists
+from source.ivy_cartography import cartography, plot_candelabrum
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2022, Daniel Ward'
 __license__ = 'GPL v3'
@@ -222,6 +224,7 @@ class ThreeBlindMice(nn.Module):
                 sigil = inscribe_sigil(candles)
                 loss = loss_fn(sigil, targets)
                 loss.backward()
+                optimizer.step()
                 rnn_loss += loss.item()
                 for i in trade_range:
                     prob, index = topk(sigil[i], 1)
@@ -244,15 +247,14 @@ class ThreeBlindMice(nn.Module):
                 trade_index += n_sample
                 if verbosity > 1:
                     print(prefix, 'step loss =', loss.item())
-            optimizer.step()
             self.metrics['rnn_loss'] = rnn_loss / n_time
             self.metrics['n_profit'] = n_profit
             self.metrics['n_trades'] = n_trades
             self.metrics['accuracy'] = n_profit / n_trades
-            self.metrics['net_gain'] = net_gain
-            self.metrics['avg_gain'] = net_gain / n_trades
-            self.metrics['max_gain'] = max_gain
-            self.metrics['max_loss'] = max_loss
+            self.metrics['net_gain'] = net_gain.item()
+            self.metrics['avg_gain'] = (net_gain / n_trades).item()
+            self.metrics['max_gain'] = max_gain.item()
+            self.metrics['max_loss'] = max_loss.item()
             self.metrics['epochs'] += 1
             if self.metrics['rnn_loss'] < least_loss:
                 loss_retry = 0
@@ -277,7 +279,6 @@ class ThreeBlindMice(nn.Module):
             print(prefix, 'Research complete.\n')
         return self.get_predictions()
 
-
     def get_predictions(self):
         """Output for the last batch."""
         banner = ''.join(['*' for _ in range(80)])
@@ -297,39 +298,35 @@ class ThreeBlindMice(nn.Module):
             forecast.append((s, v))
             print(f'{prefix} day({t}) {s} {v} prob')
         print(banner)
-        return (dict(self.metrics), forecast, sigil.clone().detach())
+        return (
+            dict(self.metrics),
+            forecast,
+            sigil.clone().detach().cpu().numpy(),
+            )
 
-
-    def plot_predictions(self, sigil, n_png=''):
-        """Plot candelabrum and topk selections."""
-        import matplotlib.pyplot as plt
-        sig = sigil.clone().detach().cpu().numpy()
-        xticks = range(sig.shape[1])
-        plt.clf()
-        fig = plt.figure(figsize=(38.40, 5.40))
-        ax = fig.add_subplot()
-        ax.set_xlabel('Symbol')
-        ax.set_ylabel('Prob')
-        ax.set_xticks(xticks)
-        ax.set_xticklabels(self.symbols, fontweight='light')
-        ax.tick_params(axis='x', which='major', labelsize=7, pad=5, rotation=90)
-        width_adj = [0.7, 0.5, 0.3]
-        colors = [(0.34, 0.34, 1, 1), (0.34, 1, 0.34, 1), (1, 0.34, 0.34, 1)]
-        colors_set = 0
-        for day in range(sig.shape[0]):
-            bar_params = dict(
-                width=width_adj[day],
-                align='edge',
-                aa=True,
-                color=colors[day],
-                edgecolor=(1, 1, 1, 0.05),
-                )
-            if colors_set < 3:
-                bar_params['label'] = f'Forecast Day {day + 1}'
-                colors_set += 1
-            ax.bar(xticks, sig[day], **bar_params)
-        title = f'Candelabrum probabilities over the next {sig.shape[0]} days'
-        fig.suptitle(title, fontsize=18)
-        fig.legend(ncol=1, fontsize='xx-large', fancybox=True)
-        plt.savefig(f'./resources/candelabrum{n_png}.png')
-        plt.close()
+    def update_webview(self, metrics, forecast, sigil):
+        """Commission the Cartographer to plot the forecast."""
+        html = """<p style="color:white;text-align:center;font-size:18px"><b>"""
+        row_keys = [
+            ('accuracy', 'net_gain', 'n_profit', 'n_trades'),
+            ('avg_gain', 'max_gain', 'max_loss'),
+            ('epochs', 'rnn_loss'),
+            ]
+        for row, keys in enumerate(row_keys):
+            if row > 0:
+                html += """<br>"""
+            for k in keys:
+                v = metrics[k]
+                html += """{0}: {1}&emsp;""".format(k, v)
+        ts = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.localtime())
+        html += """timestamp: {0}</b></p>""".format(ts)
+        with open(abspath('./resources/metrics.html'), 'w+') as f:
+            f.write(html)
+        plot_candelabrum(sigil, self.symbols)
+        for day, probs in enumerate(forecast):
+            symbol = probs[0]
+            cdl_path = abspath(f'./candelabrum/{symbol}.ivy')
+            candles = read_csv(cdl_path, index_col=0, parse_dates=True)
+            c_path = abspath(f'./resources/forecast_{day}.png')
+            cartography(symbol, candles, chart_path=c_path, chart_size=365)
+        print(self._prefix_, 'Webview updated.')

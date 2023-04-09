@@ -90,20 +90,13 @@ def make_html(file_name, html):
         f.write(html_doc)
 
 
-def make_candelabrum(metrics):
+def make_candelabrum(metrics, forecast):
     file_name = RESOURCE_PATH + '/candelabrum.html'
     html = """      <div class="metrics"><h2>\n"""
     for key, value in metrics.items():
         html += f"""          <p>{key}: {value}</p>\n"""
     html += """            <img class="cartography" src="candelabrum.png"></img>
-            <img class="cartography" src="signal_gradient.png"></img>
             </h2></p></div></p>"""
-    make_html(file_name, html)
-
-
-def make_forecast(forecast):
-    file_name = RESOURCE_PATH + '/forecast.html'
-    html = """"""
     for day, probs in enumerate(forecast):
         img_name = f'forecast_{day}.png'
         symbol = probs[0]
@@ -115,6 +108,12 @@ def make_forecast(forecast):
                 <div class="desc">{1}</div>
             </div>
             """.format(img_name, symbol)
+    make_html(file_name, html)
+
+
+def make_forecast(forecast):
+    file_name = RESOURCE_PATH + '/forecast.html'
+    html = """"""
     make_html(file_name, html)
 
 
