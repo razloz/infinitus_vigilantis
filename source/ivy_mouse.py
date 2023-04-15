@@ -8,10 +8,10 @@ import traceback
 import numpy as np
 import source.ivy_commons as icy
 from pandas import read_csv
-from torch import bernoulli, fft, nan_to_num, nn, stack
+from torch import bernoulli, fft, nan_to_num, nn, stack, topk
 from torch.optim import Adagrad
 from torch.utils.data import DataLoader, TensorDataset
-from math import inf, sqrt
+from math import inf, sqrt, pi
 from os import listdir, mkdir
 from os.path import abspath, exists
 from source.ivy_cartography import cartography, plot_candelabrum
@@ -25,36 +25,34 @@ class ThreeBlindMice(nn.Module):
     def __init__(self, symbols, offerings, cook_time=inf, trim=34, verbosity=2):
         """Beckon the Norn."""
         super(ThreeBlindMice, self).__init__()
+        #Setup
         torch.autograd.set_detect_anomaly(True)
-        self.iota = iota = 1 / 137
-        self.phi = phi = 0.618033988749894
+        iota = 1 / 137
+        phi = 1.618033988749894
+        n_sample = 3
+        n_symbols = len(symbols)
+        n_time = int(offerings.shape[0])
+        n_lin_in = 11
+        n_lin_out = 9
+        n_output = n_symbols * n_sample
+        output_dims = [n_sample, n_symbols]
+        hidden_input = n_sample * n_symbols * n_lin_out
+        hidden_output = 377 * 9
+        hidden_dims = [377, 9]
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-        self._device_ = dev = torch.device(self._device_type_)
-        self.to(dev)
-        self._state_path_ = abspath('./rnn')
-        if not exists(self._state_path_): mkdir(self._state_path_)
-        self.symbols = list(symbols)
-        offerings = offerings.to(dev).transpose(0, 1)[trim:]
-        constants = {}
-        constants['cook_time'] = cook_time
-        constants['n_sample'] = n_sample = 3
-        constants['n_symbols'] = n_symbols = len(self.symbols)
-        constants['n_time'] = int(offerings.shape[0])
-        constants['n_lin_in'] = n_lin_in = 11
-        constants['n_lin_out'] = n_lin_out = 9
-        constants['n_output'] = n_symbols * n_sample
-        constants['output_dims'] = [n_sample, n_symbols]
-        constants['hidden_input'] = n_sample * n_symbols * n_lin_out
-        constants['hidden_output'] = 2048
-        while constants['n_time'] % n_sample != 0:
-            constants['n_time'] -= 1
-        offerings = offerings[-constants['n_time']:]
-        self._constants_ = dict(constants)
-        self._prefix_ = prefix = 'Moirai:'
+        self._device_ = torch.device(self._device_type_)
+        self.to(self._device_)
+        dev = self._device_
         tfloat = torch.float
-        self.rfft = fft.rfft
+        self._state_path_ = abspath('./rnn')
+        if not exists(self._state_path_):
+            mkdir(self._state_path_)
+        offerings = offerings.to(dev).transpose(0, 1)[trim:]
+        while n_time % n_sample != 0:
+            n_time -= 1
+        #Tensors
+        offerings = offerings[-n_time:]
         self.candles = offerings.clone().detach()
-        self.candles.requires_grad_(True)
         self.targets = offerings[:, :, -1].clone().detach().softmax(1)
         self.cdl_means = self.candles[:, :, -2].clone().detach()
         self.trade_array = torch.zeros(
@@ -62,6 +60,17 @@ class ThreeBlindMice(nn.Module):
             device=dev,
             dtype=tfloat,
             )
+        wax = [-phi, pi, phi, -1, 0, 1, phi, -pi, -phi]
+        self.wax = list()
+        for _ in range(n_symbols):
+            for _ in range(n_sample):
+                self.wax += wax
+        self.wax = torch.tensor(
+            self.wax,
+            device=dev,
+            dtype=tfloat,
+            ).view(n_symbols, n_sample, 9)
+        self.wax.requires_grad_(True)
         self.candelabrum = TensorDataset(
             self.candles[:-n_sample],
             self.targets[n_sample:],
@@ -70,6 +79,7 @@ class ThreeBlindMice(nn.Module):
             self.candelabrum,
             batch_size=n_sample,
             )
+        #Functions
         self.bilinear = nn.Bilinear(
             in1_features=n_lin_in,
             in2_features=n_lin_in,
@@ -79,35 +89,22 @@ class ThreeBlindMice(nn.Module):
             dtype=tfloat,
             )
         self.input_cell = nn.LSTMCell(
-            input_size=constants['hidden_input'],
-            hidden_size=constants['hidden_output'],
+            input_size=hidden_input,
+            hidden_size=hidden_output,
             bias=True,
             device=dev,
             dtype=tfloat,
         )
-        self.hidden_cell = nn.LSTMCell(
-            input_size=constants['hidden_output'],
-            hidden_size=constants['hidden_output'],
+        self.output_cell = nn.LSTM(
+            input_size=hidden_dims[1],
+            hidden_size=hidden_dims[1],
+            num_layers=3,
             bias=True,
             device=dev,
             dtype=tfloat,
         )
-        self.output_cell = nn.LSTMCell(
-            input_size=constants['hidden_output'],
-            hidden_size=constants['hidden_output'],
-            bias=True,
-            device=dev,
-            dtype=tfloat,
-        )
-        self.linear = nn.Linear(
-            in_features=constants['hidden_output'],
-            out_features=constants['n_output'],
-            bias=True,
-            device=dev,
-            dtype=tfloat,
-            )
         self.normalizer = nn.InstanceNorm1d(
-            num_features=constants['n_symbols'],
+            num_features=n_symbols,
             eps=1e-09,
             momentum=0.1,
             affine=False,
@@ -115,9 +112,11 @@ class ThreeBlindMice(nn.Module):
             device=dev,
             dtype=tfloat,
             )
-        self.activation = nn.functional.leaky_relu
-        self.loss_fn = nn.functional.binary_cross_entropy
         self.optimizer = Adagrad(self.parameters())
+        self.loss_fn = nn.functional.binary_cross_entropy
+        self.activation = nn.functional.leaky_relu
+        self.rfft = fft.rfft
+        #Settings
         self.metrics = dict(
             rnn_loss=0,
             n_profit=0,
@@ -129,11 +128,21 @@ class ThreeBlindMice(nn.Module):
             max_loss=0,
             epochs=0,
             )
-        self.verbosity = int(verbosity)
-        if self.verbosity > 1:
-            for key, value in constants.items():
-                print(prefix, f'set {key} to {value}')
-            print('')
+        self.symbols = symbols
+        self.cook_time = cook_time
+        self.n_sample = n_sample
+        self.n_symbols = n_symbols
+        self.n_time = n_time
+        self.n_lin_in = n_lin_in
+        self.n_lin_out = n_lin_out
+        self.n_output = n_output
+        self.output_dims = output_dims
+        self.hidden_input = hidden_input
+        self.hidden_output = hidden_output
+        self.hidden_dims = hidden_dims
+        self.pi = pi
+        self.verbosity = verbosity
+        self._prefix_ = prefix = 'Moirai:'
         self.__manage_state__(call_type=0)
 
     def __manage_state__(self, call_type=0):
@@ -165,7 +174,7 @@ class ThreeBlindMice(nn.Module):
             if self.verbosity > 2:
                 print(self._prefix_, 'Saved RNN state.')
 
-    def inscribe_sigil(self, wax):
+    def inscribe_sigil(self, candles):
         """
             Let Clotho mold the candles
             Let Lachesis measure the candles
@@ -173,23 +182,29 @@ class ThreeBlindMice(nn.Module):
             Let Awen contain the wax
         """
         activation = self.activation
-        sigil = self.normalizer(wax.transpose(0, 1))
-        sigil = self.rfft(sigil)
-        sigil = self.bilinear(sigil.real, sigil.imag)
-        sigil = activation(sigil).softmax(1).flatten()
-        sigil = self.input_cell(sigil)[0]
-        sigil = self.hidden_cell(sigil)[0]
-        sigil = self.output_cell(sigil)[0]
-        sigil = self.linear(sigil).view(self._constants_['output_dims'])
-        sigil = self.normalizer(sigil)
-        sigil = activation(sigil).softmax(1)
-        return sigil.clone()
+        symbols = self.n_symbols
+        dims = self.hidden_dims
+        output_dims = self.output_dims
+        output_size = output_dims[0] * output_dims[1]
+        candles = self.normalizer(candles.transpose(0, 1))
+        candles = self.rfft(candles)
+        candles = self.bilinear(candles.real, candles.imag)
+        candle_wax = list()
+        for i, batch in enumerate(self.wax):
+            for ii, wax in enumerate(batch):
+                candle = candles[i, ii].view(3, 3)
+                candle_wax.append((wax.view(3, 3) @ candle).flatten() ** -1)
+        candle_wax = stack(candle_wax).log_softmax(1).flatten()
+        candles = self.input_cell(candle_wax)[0].view(dims)
+        candles = self.output_cell(candles)[0].flatten()
+        sigil = topk(candles, output_size, sorted=False).indices
+        inscription = candles[sigil].view(output_dims).softmax(1)
+        return inscription.clone()
 
     def research(self):
         """Moirai research session, fully stocked with cheese and drinks."""
         prefix = self._prefix_
         verbosity = self.verbosity
-        constants = self._constants_
         inscribe_sigil = self.inscribe_sigil
         loss_fn = self.loss_fn
         optimizer = self.optimizer
@@ -197,13 +212,13 @@ class ThreeBlindMice(nn.Module):
         targets = self.targets
         trade_array = self.trade_array.clone()
         topk = torch.topk
-        cook_time = constants['cook_time']
-        n_sample = constants['n_sample']
-        n_time = constants['n_time']
+        cook_time = self.cook_time
+        n_sample = self.n_sample
+        n_time = self.n_time
         least_loss = inf
         loss_retry = 0
         loss_timeout = 1000
-        n_save = 100
+        n_save = 15
         trade_range = range(n_sample)
         self.train()
         cooking = True
@@ -282,8 +297,7 @@ class ThreeBlindMice(nn.Module):
     def get_predictions(self):
         """Output for the last batch."""
         banner = ''.join(['*' for _ in range(80)])
-        constants = self._constants_
-        n_sample = constants['n_sample']
+        n_sample = self.n_sample
         prefix = self._prefix_
         symbols = self.symbols
         topk = torch.topk

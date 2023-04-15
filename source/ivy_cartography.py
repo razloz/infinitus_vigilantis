@@ -169,21 +169,16 @@ def plot_candelabrum(sigil, symbols):
     ax.set_xticks(xticks)
     ax.set_xticklabels(symbols, fontweight='light')
     ax.tick_params(axis='x', which='major', labelsize=7, pad=5, rotation=90)
+    ax.grid(True, color=(0.4, 0.4, 0.4))
     width_adj = [0.7, 0.5, 0.3]
     colors = [(0.34, 0.34, 1, 1), (0.34, 1, 0.34, 1), (1, 0.34, 0.34, 1)]
     colors_set = 0
     for day in range(sigil.shape[0]):
-        bar_params = dict(
-            width=width_adj[day],
-            align='edge',
-            aa=True,
-            color=colors[day],
-            edgecolor=(1, 1, 1, 0.05),
-            )
+        plot_params = dict(linestyle='solid', color=colors[day])
         if colors_set < 3:
-            bar_params['label'] = f'Forecast Day {day + 1}'
+            plot_params['label'] = f'Forecast Day {day + 1}'
             colors_set += 1
-        ax.bar(xticks, sigil[day], **bar_params)
+        ax.plot(sigil[day], **plot_params)
     title = f'Candelabrum probabilities over the next {sigil.shape[0]} days'
     fig.suptitle(title, fontsize=18)
     fig.legend(ncol=1, fontsize='xx-large', fancybox=True)
