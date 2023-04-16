@@ -112,13 +112,13 @@ class ThreeBlindMice(nn.Module):
             device=dev,
             dtype=tfloat,
             )
+        self.loss_fn = torch.nn.HuberLoss()
         self.optimizer = Adagrad(self.parameters())
-        self.loss_fn = nn.functional.binary_cross_entropy
         self.activation = nn.functional.leaky_relu
         self.rfft = fft.rfft
         #Settings
         self.metrics = dict(
-            rnn_loss=0,
+            mse=0,
             n_profit=0,
             n_trades=0,
             accuracy=0,
@@ -220,14 +220,14 @@ class ThreeBlindMice(nn.Module):
         loss_timeout = 1000
         n_save = 3
         trade_range = range(n_sample)
-        self.train()
         cooking = True
         print(prefix, 'Research started.\n')
         t_cook = time.time()
         while cooking:
+            self.train()
             trade_array *= 0
             trade_index = 0
-            rnn_loss = 0
+            mse = 0
             max_gain = 0
             max_loss = 0
             net_gain = 0
@@ -240,7 +240,7 @@ class ThreeBlindMice(nn.Module):
                 loss = loss_fn(sigil, targets)
                 loss.backward()
                 optimizer.step()
-                rnn_loss += loss.item()
+                mse += loss.item()
                 for i in trade_range:
                     prob, index = topk(sigil[i], 1)
                     ti = trade_index + i
@@ -261,8 +261,13 @@ class ThreeBlindMice(nn.Module):
                     prev_trades[i] = (index, price)
                 trade_index += n_sample
                 if verbosity > 1:
-                    print(prefix, trade_index, 'loss =', rnn_loss / trade_index)
-            self.metrics['rnn_loss'] = rnn_loss / n_time
+                    msg = '{0} ({1}) mse = {2}'
+                    print(msg.format(
+                        prefix,
+                        trade_index,
+                        (mse / trade_index) ** 2,
+                        ))
+            self.metrics['mse'] = (mse / trade_index) ** 2
             self.metrics['n_profit'] = n_profit
             self.metrics['n_trades'] = n_trades
             self.metrics['accuracy'] = n_profit / n_trades
@@ -271,9 +276,9 @@ class ThreeBlindMice(nn.Module):
             self.metrics['max_gain'] = max_gain.item()
             self.metrics['max_loss'] = max_loss.item()
             self.metrics['epochs'] += 1
-            if self.metrics['rnn_loss'] < least_loss:
+            if self.metrics['mse'] < least_loss:
                 loss_retry = 0
-                least_loss = self.metrics['rnn_loss']
+                least_loss = self.metrics['mse']
             else:
                 loss_retry += 1
                 if loss_retry == loss_timeout:
@@ -282,7 +287,7 @@ class ThreeBlindMice(nn.Module):
             if elapsed >= cook_time:
                 cooking = False
             if verbosity > 0:
-                print(prefix, 'loss over time =', self.metrics['rnn_loss'])
+                print(prefix, 'loss over time =', self.metrics['mse'])
             if self.metrics['epochs'] % n_save == 0:
                 self.__manage_state__(call_type=1)
                 if verbosity > 0:
@@ -328,7 +333,7 @@ class ThreeBlindMice(nn.Module):
         row_keys = [
             ('accuracy', 'net_gain', 'n_profit', 'n_trades'),
             ('avg_gain', 'max_gain', 'max_loss'),
-            ('epochs', 'rnn_loss'),
+            ('epochs', 'mse'),
             ]
         for row, keys in enumerate(row_keys):
             if row > 0:
