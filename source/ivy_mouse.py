@@ -27,18 +27,6 @@ class ThreeBlindMice(nn.Module):
         super(ThreeBlindMice, self).__init__()
         #Setup
         torch.autograd.set_detect_anomaly(True)
-        iota = 1 / 137
-        phi = 1.618033988749894
-        n_sample = 3
-        n_symbols = len(symbols)
-        n_time = int(offerings.shape[0])
-        n_lin_in = 11
-        n_lin_out = 9
-        n_output = n_symbols * n_sample
-        output_dims = [n_sample, n_symbols]
-        hidden_input = n_sample * n_symbols * n_lin_out
-        hidden_output = 377 * 9
-        hidden_dims = [377, 9]
         self._device_type_ = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self._device_ = torch.device(self._device_type_)
         self.to(self._device_)
@@ -47,11 +35,23 @@ class ThreeBlindMice(nn.Module):
         self._state_path_ = abspath('./rnn')
         if not exists(self._state_path_):
             mkdir(self._state_path_)
+        iota = 1 / 137
+        phi = 1.618033988749894
+        n_sample = 3
+        n_symbols = len(symbols)
         offerings = offerings.to(dev).transpose(0, 1)[trim:]
+        n_time = int(offerings.shape[0])
         while n_time % n_sample != 0:
             n_time -= 1
-        #Tensors
         offerings = offerings[-n_time:]
+        n_lin_in = 11
+        n_lin_out = 9
+        n_output = n_symbols * n_sample
+        output_dims = [n_sample, n_symbols]
+        hidden_input = n_sample * n_symbols * n_lin_out
+        hidden_output = 377 * 9
+        hidden_dims = [377, 9]
+        #Tensors
         self.candles = offerings.clone().detach()
         self.targets = offerings[:, :, -1].clone().detach().softmax(1)
         self.cdl_means = self.candles[:, :, -2].clone().detach()
@@ -218,14 +218,13 @@ class ThreeBlindMice(nn.Module):
         least_loss = inf
         loss_retry = 0
         loss_timeout = 1000
-        n_save = 15
+        n_save = 3
         trade_range = range(n_sample)
         self.train()
         cooking = True
         print(prefix, 'Research started.\n')
         t_cook = time.time()
         while cooking:
-            optimizer.zero_grad()
             trade_array *= 0
             trade_index = 0
             rnn_loss = 0
@@ -236,6 +235,7 @@ class ThreeBlindMice(nn.Module):
             n_profit = 0
             prev_trades = [None for _ in trade_range]
             for candles, targets in iter(self.cauldron):
+                optimizer.zero_grad()
                 sigil = inscribe_sigil(candles)
                 loss = loss_fn(sigil, targets)
                 loss.backward()
@@ -261,7 +261,7 @@ class ThreeBlindMice(nn.Module):
                     prev_trades[i] = (index, price)
                 trade_index += n_sample
                 if verbosity > 1:
-                    print(prefix, 'step loss =', loss.item())
+                    print(prefix, trade_index, 'loss =', rnn_loss / trade_index)
             self.metrics['rnn_loss'] = rnn_loss / n_time
             self.metrics['n_profit'] = n_profit
             self.metrics['n_trades'] = n_trades
@@ -285,14 +285,18 @@ class ThreeBlindMice(nn.Module):
                 print(prefix, 'loss over time =', self.metrics['rnn_loss'])
             if self.metrics['epochs'] % n_save == 0:
                 self.__manage_state__(call_type=1)
+                if verbosity > 0:
+                    self.update_webview(*self.get_predictions())
         self.trade_array = trade_array.clone().detach()
         if self.metrics['epochs'] % n_save != 0:
             self.__manage_state__(call_type=1)
+            if verbosity > 0:
+                self.update_webview(*self.get_predictions())
         if verbosity > 0:
             for metric_key, metric_value in self.metrics.items():
                 print(f'{prefix} {metric_key} = {metric_value}')
             print(prefix, 'Research complete.\n')
-        return self.get_predictions()
+        return self.trade_array.clone().detach()
 
     def get_predictions(self):
         """Output for the last batch."""

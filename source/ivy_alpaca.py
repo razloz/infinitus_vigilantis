@@ -89,9 +89,9 @@ class AlpacaShepherd:
             if p in kwargs:
                 params += f'&{p}={kwargs[p]}'
                 if p == 'start':
-                    params += 'T00:00:00-04:00'
+                    params += 'T00:00:00Z'
                 elif p == 'end':
-                    params += 'T23:59:59-04:00'
+                    params += 'T23:59:59Z'
         if len(params) > 0:
             params = params[1:]
         t = type(symbols)

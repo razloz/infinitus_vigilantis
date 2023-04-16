@@ -142,7 +142,7 @@ class Candelabrum:
             moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
         loop_start = time.time()
         while aeternalis:
-            moirai.update_webview(*moirai.research())
+            trade_array = moirai.research()
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
