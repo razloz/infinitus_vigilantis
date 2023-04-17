@@ -53,7 +53,7 @@ class ThreeBlindMice(nn.Module):
         hidden_dims = [377, 9]
         #Tensors
         self.candles = offerings.clone().detach()
-        self.targets = offerings[:, :, -1].clone().detach().softmax(1)
+        self.targets = offerings[:, :, -1].clone().detach().log_softmax(1)
         self.cdl_means = self.candles[:, :, -2].clone().detach()
         self.trade_array = torch.zeros(
             *self.targets.shape,
@@ -112,13 +112,13 @@ class ThreeBlindMice(nn.Module):
             device=dev,
             dtype=tfloat,
             )
-        self.loss_fn = torch.nn.HuberLoss()
+        self.loss_fn = nn.KLDivLoss(reduction='batchmean', log_target=True)
         self.optimizer = Adagrad(self.parameters())
         self.activation = nn.functional.leaky_relu
         self.rfft = fft.rfft
         #Settings
         self.metrics = dict(
-            mse=0,
+            mae=0,
             n_profit=0,
             n_trades=0,
             accuracy=0,
@@ -198,7 +198,7 @@ class ThreeBlindMice(nn.Module):
         candles = self.input_cell(candle_wax)[0].view(dims)
         candles = self.output_cell(candles)[0].flatten()
         sigil = topk(candles, output_size, sorted=False).indices
-        inscription = candles[sigil].view(output_dims).softmax(1)
+        inscription = candles[sigil].view(output_dims).log_softmax(1)
         return inscription.clone()
 
     def research(self):
@@ -227,12 +227,14 @@ class ThreeBlindMice(nn.Module):
             self.train()
             trade_array *= 0
             trade_index = 0
-            mse = 0
+            mae = 0
             max_gain = 0
             max_loss = 0
             net_gain = 0
             n_trades = 0
             n_profit = 0
+            n_loss = 0
+            n_doji = 0
             prev_trades = [None for _ in trade_range]
             for candles, targets in iter(self.cauldron):
                 optimizer.zero_grad()
@@ -240,7 +242,7 @@ class ThreeBlindMice(nn.Module):
                 loss = loss_fn(sigil, targets)
                 loss.backward()
                 optimizer.step()
-                mse += loss.item()
+                mae += loss.item()
                 for i in trade_range:
                     prob, index = topk(sigil[i], 1)
                     ti = trade_index + i
@@ -258,17 +260,19 @@ class ThreeBlindMice(nn.Module):
                         n_trades += 1
                         if gain > 0:
                             n_profit += 1
+                        elif gain < 0:
+                            n_loss += 1
+                        else:
+                            n_doji += 1
                     prev_trades[i] = (index, price)
                 trade_index += n_sample
                 if verbosity > 1:
-                    msg = '{0} ({1}) mse = {2}'
-                    print(msg.format(
-                        prefix,
-                        trade_index,
-                        (mse / trade_index) ** 2,
-                        ))
-            self.metrics['mse'] = (mse / trade_index) ** 2
+                    msg = '{0} ({1}) mae = {2}'
+                    print(msg.format(prefix, trade_index, (mae / trade_index)))
+            self.metrics['mae'] = mae / trade_index
             self.metrics['n_profit'] = n_profit
+            self.metrics['n_loss'] = n_loss
+            self.metrics['n_doji'] = n_doji
             self.metrics['n_trades'] = n_trades
             self.metrics['accuracy'] = n_profit / n_trades
             self.metrics['net_gain'] = net_gain.item()
@@ -276,9 +280,9 @@ class ThreeBlindMice(nn.Module):
             self.metrics['max_gain'] = max_gain.item()
             self.metrics['max_loss'] = max_loss.item()
             self.metrics['epochs'] += 1
-            if self.metrics['mse'] < least_loss:
+            if self.metrics['mae'] < least_loss:
                 loss_retry = 0
-                least_loss = self.metrics['mse']
+                least_loss = self.metrics['mae']
             else:
                 loss_retry += 1
                 if loss_retry == loss_timeout:
@@ -287,7 +291,7 @@ class ThreeBlindMice(nn.Module):
             if elapsed >= cook_time:
                 cooking = False
             if verbosity > 0:
-                print(prefix, 'loss over time =', self.metrics['mse'])
+                print(prefix, 'loss over time =', self.metrics['mae'])
             if self.metrics['epochs'] % n_save == 0:
                 self.__manage_state__(call_type=1)
                 if verbosity > 0:
@@ -331,9 +335,10 @@ class ThreeBlindMice(nn.Module):
         """Commission the Cartographer to plot the forecast."""
         html = """<p style="color:white;text-align:center;font-size:18px"><b>"""
         row_keys = [
-            ('accuracy', 'net_gain', 'n_profit', 'n_trades'),
+            ('accuracy', 'net_gain', 'n_trades'),
+            ('n_profit', 'n_loss', 'n_doji'),
             ('avg_gain', 'max_gain', 'max_loss'),
-            ('epochs', 'mse'),
+            ('epochs', 'mae'),
             ]
         for row, keys in enumerate(row_keys):
             if row > 0:
