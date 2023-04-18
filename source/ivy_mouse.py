@@ -46,11 +46,11 @@ class ThreeBlindMice(nn.Module):
         offerings = offerings[-n_time:]
         n_lin_in = 11
         n_lin_out = 9
-        n_output = n_symbols * n_sample
         output_dims = [n_sample, n_symbols]
+        output_size = output_dims[0] * output_dims[1]
         hidden_input = n_sample * n_symbols * n_lin_out
-        hidden_output = 377 * 9
-        hidden_dims = [377, 9]
+        hidden_output = 512 * 9
+        hidden_dims = [512, 9]
         #Tensors
         self.candles = offerings.clone().detach()
         self.targets = offerings[:, :, -1].clone().detach().log_softmax(1)
@@ -114,7 +114,6 @@ class ThreeBlindMice(nn.Module):
             )
         self.loss_fn = nn.KLDivLoss(reduction='batchmean', log_target=True)
         self.optimizer = Adagrad(self.parameters())
-        self.activation = nn.functional.leaky_relu
         self.rfft = fft.rfft
         #Settings
         self.metrics = dict(
@@ -135,8 +134,8 @@ class ThreeBlindMice(nn.Module):
         self.n_time = n_time
         self.n_lin_in = n_lin_in
         self.n_lin_out = n_lin_out
-        self.n_output = n_output
         self.output_dims = output_dims
+        self.output_size = output_size
         self.hidden_input = hidden_input
         self.hidden_output = hidden_output
         self.hidden_dims = hidden_dims
@@ -181,11 +180,10 @@ class ThreeBlindMice(nn.Module):
             Let Atropos seal the candles
             Let Awen contain the wax
         """
-        activation = self.activation
         symbols = self.n_symbols
         dims = self.hidden_dims
         output_dims = self.output_dims
-        output_size = output_dims[0] * output_dims[1]
+        output_size = self.output_size
         candles = self.normalizer(candles.transpose(0, 1))
         candles = self.rfft(candles)
         candles = self.bilinear(candles.real, candles.imag)

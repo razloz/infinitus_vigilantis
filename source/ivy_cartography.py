@@ -163,7 +163,7 @@ def plot_candelabrum(sigil, symbols):
     plt.clf()
     fig = plt.figure(figsize=(38.40, 10.24))
     ax = fig.add_subplot()
-    plt.subplots_adjust(left=0.03, bottom=0.03, right=0.97, top=0.77)
+    plt.subplots_adjust(left=0.03, bottom=0.13, right=0.97, top=0.87)
     ax.set_xlabel('Symbol')
     ax.set_ylabel('Prob')
     ax.set_xticks(xticks)
