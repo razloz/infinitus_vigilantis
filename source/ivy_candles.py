@@ -181,7 +181,12 @@ def build_historical_database(start_date='2018-01-01'):
         mkdir(candelabrum_path)
     dev = device('cuda:0' if cuda.is_available() else 'cpu')
     today = strftime('%Y-%m-%d', time.localtime())
-    kwargs = dict(timeframe='1Day', start=start_date, limit='10000')
+    shepherd_args = dict(
+        adjustment='all',
+        timeframe='1Day',
+        start=start_date,
+        limit='10000',
+        )
     tz = 'America/New_York'
     ts = pd.Timestamp
     date_args = dict(name='time')
@@ -195,7 +200,7 @@ def build_historical_database(start_date='2018-01-01'):
     print('Fetching historical data from Alpaca Markets.')
     for symbol in ivy_watchlist:
         try:
-            data = SHEPHERD.candles(symbol, **kwargs)
+            data = SHEPHERD.candles(symbol, **shepherd_args)
             bars = pd.DataFrame(data['bars'])
             bars['time'] = [ts(t, unit='s', tz=tz) for t in bars['t']]
             bars.set_index('time', inplace=True)

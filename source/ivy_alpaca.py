@@ -85,7 +85,8 @@ class AlpacaShepherd:
     def candles(self, symbols, **kwargs):
         """Get historical price data for a symbol or list of symbols."""
         params = ''
-        for p in ('timeframe', 'start', 'end', 'limit', 'page_token'):
+        for p in ('timeframe', 'start', 'end', 'limit',
+                  'page_token', 'adjustment'):
             if p in kwargs:
                 params += f'&{p}={kwargs[p]}'
                 if p == 'start':

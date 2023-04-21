@@ -161,14 +161,14 @@ def plot_candelabrum(sigil, symbols):
     """Candelabrum forecast in bar chart format."""
     xticks = range(sigil.shape[1])
     plt.clf()
-    fig = plt.figure(figsize=(38.40, 10.24))
+    fig = plt.figure(figsize=(30.00, 10.80))
     ax = fig.add_subplot()
     plt.subplots_adjust(left=0.03, bottom=0.13, right=0.97, top=0.87)
     ax.set_xlabel('Symbol')
     ax.set_ylabel('Prob')
     ax.set_xticks(xticks)
     ax.set_xticklabels(symbols, fontweight='light')
-    ax.tick_params(axis='x', which='major', labelsize=7, pad=5, rotation=90)
+    ax.tick_params(axis='x', which='major', labelsize=7, pad=5, rotation=15)
     ax.grid(True, color=(0.4, 0.4, 0.4))
     width_adj = [0.7, 0.5, 0.3]
     colors = [(0.34, 0.34, 1, 1), (0.34, 1, 0.34, 1), (1, 0.34, 0.34, 1)]

@@ -35,7 +35,7 @@ class ThreeBlindMice(nn.Module):
         self._state_path_ = abspath('./rnn')
         if not exists(self._state_path_):
             mkdir(self._state_path_)
-        iota = 1 / 137
+        iota = (1 / 137) ** 3
         phi = 1.618033988749894
         n_sample = 3
         n_symbols = len(symbols)
@@ -49,8 +49,8 @@ class ThreeBlindMice(nn.Module):
         output_dims = [n_sample, n_symbols]
         output_size = output_dims[0] * output_dims[1]
         hidden_input = n_sample * n_symbols * n_lin_out
-        hidden_output = 512 * 9
-        hidden_dims = [512, 9]
+        hidden_output = 580 * 9
+        hidden_dims = [580, 9]
         #Tensors
         self.candles = offerings.clone().detach()
         self.targets = offerings[:, :, -1].clone().detach().log_softmax(1)
@@ -127,6 +127,8 @@ class ThreeBlindMice(nn.Module):
             max_loss=0,
             epochs=0,
             )
+        self.iota = iota
+        self.phi = phi
         self.symbols = symbols
         self.cook_time = cook_time
         self.n_sample = n_sample
@@ -139,7 +141,6 @@ class ThreeBlindMice(nn.Module):
         self.hidden_input = hidden_input
         self.hidden_output = hidden_output
         self.hidden_dims = hidden_dims
-        self.pi = pi
         self.verbosity = verbosity
         self._prefix_ = prefix = 'Moirai:'
         self.__manage_state__(call_type=0)
@@ -191,15 +192,15 @@ class ThreeBlindMice(nn.Module):
         for i, batch in enumerate(self.wax):
             for ii, wax in enumerate(batch):
                 candle = candles[i, ii].view(3, 3)
-                candle_wax.append((wax.view(3, 3) @ candle).flatten() ** -1)
-        candle_wax = stack(candle_wax).log_softmax(1).flatten()
+                candle_wax.append((wax.view(3, 3) @ candle).flatten())
+        candle_wax = stack(candle_wax).tanh().flatten()
         candles = self.input_cell(candle_wax)[0].view(dims)
         candles = self.output_cell(candles)[0].flatten()
         sigil = topk(candles, output_size, sorted=False).indices
         inscription = candles[sigil].view(output_dims).log_softmax(1)
         return inscription.clone()
 
-    def research(self):
+    def research(self, n_save=13, loss_timeout=1000):
         """Moirai research session, fully stocked with cheese and drinks."""
         prefix = self._prefix_
         verbosity = self.verbosity
@@ -215,8 +216,8 @@ class ThreeBlindMice(nn.Module):
         n_time = self.n_time
         least_loss = inf
         loss_retry = 0
-        loss_timeout = 1000
-        n_save = 3
+        iota = self.iota
+        phi = self.phi
         trade_range = range(n_sample)
         cooking = True
         print(prefix, 'Research started.\n')
@@ -238,9 +239,6 @@ class ThreeBlindMice(nn.Module):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(candles)
                 loss = loss_fn(sigil, targets)
-                loss.backward()
-                optimizer.step()
-                mae += loss.item()
                 for i in trade_range:
                     prob, index = topk(sigil[i], 1)
                     ti = trade_index + i
@@ -262,8 +260,13 @@ class ThreeBlindMice(nn.Module):
                             n_loss += 1
                         else:
                             n_doji += 1
+                        loss = sum([loss, (phi / (phi ** gain)) * iota])
                     prev_trades[i] = (index, price)
                 trade_index += n_sample
+                loss = sum([loss, (1 - (n_profit / trade_index)) * iota])
+                loss.backward()
+                mae += loss.item()
+                optimizer.step()
                 if verbosity > 1:
                     msg = '{0} ({1}) mae = {2}'
                     print(msg.format(prefix, trade_index, (mae / trade_index)))
