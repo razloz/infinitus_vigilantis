@@ -49,8 +49,8 @@ class ThreeBlindMice(nn.Module):
         output_dims = [n_sample, n_symbols]
         output_size = output_dims[0] * output_dims[1]
         hidden_input = n_sample * n_symbols * n_lin_out
-        hidden_output = 580 * 9
-        hidden_dims = [580, 9]
+        hidden_output = 512 * 9
+        hidden_dims = [512, 9]
         #Tensors
         self.candles = offerings.clone().detach()
         self.targets = offerings[:, :, -1].clone().detach().log_softmax(1)
@@ -126,6 +126,7 @@ class ThreeBlindMice(nn.Module):
             max_gain=0,
             max_loss=0,
             epochs=0,
+            curr_trades=list(),
             )
         self.iota = iota
         self.phi = phi
@@ -154,6 +155,8 @@ class ThreeBlindMice(nn.Module):
                 if 'metrics' in state:
                     self.metrics = dict(state['metrics'])
                 self.load_state_dict(state['moirai'])
+                self.optimizer.load_state_dict(state['optim'])
+                self.wax.grad = state['wax']
                 if self.verbosity > 2:
                     print(self._prefix_, 'Loaded RNN state.')
             except FileNotFoundError:
@@ -168,6 +171,8 @@ class ThreeBlindMice(nn.Module):
                 {
                     'metrics': self.metrics,
                     'moirai': self.state_dict(),
+                    'optim': self.optimizer.state_dict(),
+                    'wax': self.wax.grad,
                     },
                 state_path,
                 )
@@ -218,6 +223,10 @@ class ThreeBlindMice(nn.Module):
         loss_retry = 0
         iota = self.iota
         phi = self.phi
+        n_symbols = (1 / self.n_symbols)
+        r_symbols = n_symbols * 0.118
+        trade_min = n_symbols + r_symbols
+        trade_max = n_symbols - r_symbols
         trade_range = range(n_sample)
         cooking = True
         print(prefix, 'Research started.\n')
@@ -234,34 +243,44 @@ class ThreeBlindMice(nn.Module):
             n_profit = 0
             n_loss = 0
             n_doji = 0
-            prev_trades = [None for _ in trade_range]
+            has_avg = False
+            curr_trades = [None for _ in trade_range]
             for candles, targets in iter(self.cauldron):
                 optimizer.zero_grad()
                 sigil = inscribe_sigil(candles)
                 loss = loss_fn(sigil, targets)
-                for i in trade_range:
-                    prob, index = topk(sigil[i], 1)
-                    ti = trade_index + i
-                    price = cdl_means[ti][index]
-                    trade_array[ti][index] = prob.item()
-                    if prev_trades[i] is not None:
-                        prev_index, prev_price = prev_trades[i]
-                        curr_price = cdl_means[ti][prev_index]
-                        gain = (curr_price - prev_price) / prev_price
-                        net_gain += gain
-                        if gain > max_gain:
-                            max_gain = gain
-                        elif gain < max_loss:
-                            max_loss = gain
-                        n_trades += 1
-                        if gain > 0:
-                            n_profit += 1
-                        elif gain < 0:
-                            n_loss += 1
+                if not has_avg:
+                    has_avg = True
+                else:
+                    for index in trade_range:
+                        p, i = topk(sigil[index], 1)
+                        ti = trade_index + index
+                        price = cdl_means[ti][i]
+                        prob = p.exp().item()
+                        trade_array[ti][i] = prob
+                        if curr_trades[index] is not None:
+                            prev_symbol, prev_price = curr_trades[index]
+                            curr_prob = sigil[index][prev_symbol]
+                            if curr_prob <= trade_max:
+                                curr_price = cdl_means[ti][prev_symbol]
+                                gain = (curr_price - prev_price) / prev_price
+                                net_gain += gain
+                                if gain > max_gain:
+                                    max_gain = gain
+                                elif gain < max_loss:
+                                    max_loss = gain
+                                n_trades += 1
+                                if gain > 0:
+                                    n_profit += 1
+                                elif gain < 0:
+                                    n_loss += 1
+                                else:
+                                    n_doji += 1
+                                loss = sum([loss, (phi / (phi ** gain)) * iota])
+                                curr_trades[index] = None
                         else:
-                            n_doji += 1
-                        loss = sum([loss, (phi / (phi ** gain)) * iota])
-                    prev_trades[i] = (index, price)
+                            if prob >= trade_min:
+                                curr_trades[index] = (i, price)
                 trade_index += n_sample
                 loss = sum([loss, (1 - (n_profit / trade_index)) * iota])
                 loss.backward()
@@ -275,11 +294,20 @@ class ThreeBlindMice(nn.Module):
             self.metrics['n_loss'] = n_loss
             self.metrics['n_doji'] = n_doji
             self.metrics['n_trades'] = n_trades
-            self.metrics['accuracy'] = n_profit / n_trades
-            self.metrics['net_gain'] = net_gain.item()
-            self.metrics['avg_gain'] = (net_gain / n_trades).item()
-            self.metrics['max_gain'] = max_gain.item()
-            self.metrics['max_loss'] = max_loss.item()
+            if type(net_gain) != int:
+                self.metrics['net_gain'] = net_gain.item()
+            else:
+                self.metrics['net_gain'] = 0
+            if n_trades != 0:
+                self.metrics['accuracy'] = n_profit / n_trades
+                self.metrics['avg_gain'] = (net_gain / n_trades).item()
+                self.metrics['max_gain'] = max_gain.item()
+                self.metrics['max_loss'] = max_loss.item()
+            else:
+                self.metrics['accuracy'] = 0
+                self.metrics['avg_gain'] = 0
+                self.metrics['max_gain'] = 0
+                self.metrics['max_loss'] = 0
             self.metrics['epochs'] += 1
             if self.metrics['mae'] < least_loss:
                 loss_retry = 0
@@ -292,7 +320,7 @@ class ThreeBlindMice(nn.Module):
             if elapsed >= cook_time:
                 cooking = False
             if verbosity > 0:
-                print(prefix, 'loss over time =', self.metrics['mae'])
+                print(prefix, 'MAE =', self.metrics['mae'])
             if self.metrics['epochs'] % n_save == 0:
                 self.__manage_state__(call_type=1)
                 if verbosity > 0:
@@ -302,6 +330,7 @@ class ThreeBlindMice(nn.Module):
             self.__manage_state__(call_type=1)
             if verbosity > 0:
                 self.update_webview(*self.get_predictions())
+        self.metrics['curr_trades'] = curr_trades
         if verbosity > 0:
             for metric_key, metric_value in self.metrics.items():
                 print(f'{prefix} {metric_key} = {metric_value}')
@@ -322,9 +351,11 @@ class ThreeBlindMice(nn.Module):
         for t in range(sigil.shape[0]):
             prob, sym = topk(sigil[t], 1)
             s = symbols[sym.item()]
-            v = prob.item()
+            v = prob.exp().item()
             forecast.append((s, v))
             print(f'{prefix} day({t}) {s} {v} prob')
+        for index, trade, price in enumerate(self.metrics['curr_trades']):
+            print(f'{prefix} trade #{index + 1} = {symbols[trade]} @ {price}')
         print(banner)
         return (
             dict(self.metrics),
@@ -334,6 +365,8 @@ class ThreeBlindMice(nn.Module):
 
     def update_webview(self, metrics, forecast, sigil):
         """Commission the Cartographer to plot the forecast."""
+        symbols = self.symbols
+        current_trades = self.metrics['curr_trades']
         html = """<p style="color:white;text-align:center;font-size:18px"><b>"""
         row_keys = [
             ('accuracy', 'net_gain', 'n_trades'),
@@ -348,7 +381,17 @@ class ThreeBlindMice(nn.Module):
                 v = metrics[k]
                 html += """{0}: {1}&emsp;""".format(k, v)
         ts = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.localtime())
-        html += """timestamp: {0}</b></p>""".format(ts)
+        html += """timestamp: {0}<br>""".format(ts)
+        for index, trade, price in enumerate(current_trades):
+            symbol = symbols[trade]
+            html += f'Trade #{index + 1} = '
+            html += f'<a href="{symbol}.png">{symbol}</a>'
+            html += f' @ {price}&emsp;'
+            cdl_path = abspath(f'./candelabrum/{symbol}.ivy')
+            candles = read_csv(cdl_path, index_col=0, parse_dates=True)
+            c_path = abspath(f'./resources/{symbol}.png')
+            cartography(symbol, candles, chart_path=c_path, chart_size=365)
+        html += '</b></p>'
         with open(abspath('./resources/metrics.html'), 'w+') as f:
             f.write(html)
         plot_candelabrum(sigil, self.symbols)
