@@ -159,7 +159,7 @@ def cartography(symbol, dataframe, chart_path=None, cheese=None,
 
 def plot_candelabrum(sigil, symbols):
     """Candelabrum forecast in bar chart format."""
-    xticks = range(sigil.shape[1])
+    xticks = range(len(symbols))
     plt.clf()
     fig = plt.figure(figsize=(30.00, 10.80))
     ax = fig.add_subplot()
@@ -171,15 +171,10 @@ def plot_candelabrum(sigil, symbols):
     ax.tick_params(axis='x', which='major', labelsize=7, pad=5, rotation=15)
     ax.grid(True, color=(0.4, 0.4, 0.4))
     width_adj = [0.7, 0.5, 0.3]
-    colors = [(0.34, 0.34, 1, 1), (0.34, 1, 0.34, 1), (1, 0.34, 0.34, 1)]
-    colors_set = 0
-    for day in range(sigil.shape[0]):
-        plot_params = dict(linestyle='solid', color=colors[day])
-        if colors_set < 3:
-            plot_params['label'] = f'Forecast Day {day + 1}'
-            colors_set += 1
-        ax.plot(sigil[day], **plot_params)
-    title = f'Candelabrum probabilities over the next {sigil.shape[0]} days'
+    plot_params = dict(linestyle='solid', color=(0.34, 1, 0.34, 1))
+    plot_params['label'] = f'Symbol Probability'
+    ax.plot(sigil, **plot_params)
+    title = 'Candelabrum'
     fig.suptitle(title, fontsize=18)
     fig.legend(ncol=1, fontsize='xx-large', fancybox=True)
     plt.savefig('./resources/candelabrum.png')

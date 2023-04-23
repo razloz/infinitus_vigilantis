@@ -140,7 +140,7 @@ def get_indicators(df, index_key='time'):
     price_sum = df['open'].values + df['high'].values
     price_sum += df['low'].values + df['close'].values
     indicators['price_med'] = (price_sum / 4).tolist()
-    indicators['pct_chg'] = indicators['price_med'].pct_change(periods=3)
+    indicators['pct_chg'] = indicators['price_med'].pct_change(periods=1)
     indicators.replace([inf, -inf], nan, inplace=True)
     indicators.fillna(0, inplace=True)
     return indicators.copy()
