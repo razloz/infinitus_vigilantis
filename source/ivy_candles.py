@@ -136,10 +136,10 @@ class Candelabrum:
                 ivy_watchlist,
                 offerings,
                 cook_time=cook_time,
-                verbosity=2,
+                verbosity=1,
                 )
         else:
-            moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=2)
+            moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
         loop_start = time.time()
         while aeternalis:
             trade_array = moirai.research()

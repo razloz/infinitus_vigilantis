@@ -117,7 +117,7 @@ class ThreeBlindMice(nn.Module):
             net_gain=0,
             avg_gain=0,
             max_gain=0,
-            max_loss=0,
+            min_gain=0,
             epochs=0,
             trade=None,
             days_trading=0,
@@ -186,14 +186,14 @@ class ThreeBlindMice(nn.Module):
         candles = self.rfft(candles)
         candles = self.bilinear(candles.real, candles.imag)
         candle_wax = self.wax.view(symbols, 3, 3) @ candles.view(symbols, 3, 3)
-        candle_wax = candle_wax.tanh().flatten()
+        candle_wax = candle_wax.abs().log_softmax(-1).flatten()
         candles = self.input_cell(candle_wax)[0].view(dims)
         candles = self.output_cell(candles)[0].flatten()
         sigil = topk(candles, symbols, sorted=False).indices
         inscription = candles[sigil].view(symbols).log_softmax(0)
         return inscription.clone()
 
-    def research(self, n_save=1, loss_timeout=1000):
+    def research(self, n_save=34, loss_timeout=1000):
         """Moirai research session, fully stocked with cheese and drinks."""
         prefix = self._prefix_
         verbosity = self.verbosity
@@ -210,9 +210,8 @@ class ThreeBlindMice(nn.Module):
         loss_retry = 0
         iota = self.iota
         phi = self.phi
-        prob_mean = 1 / self.n_symbols
-        days_min = 7
-        days_max = 90
+        days_min = 3
+        days_max = 21
         longest_trade = 0
         print(prefix, 'Research started.\n')
         cooking = True
@@ -223,7 +222,7 @@ class ThreeBlindMice(nn.Module):
             day_index = 0
             mae = 0
             max_gain = 0
-            max_loss = 0
+            min_gain = 0
             net_gain = 0
             n_trades = 0
             n_profit = 0
@@ -236,7 +235,7 @@ class ThreeBlindMice(nn.Module):
                 'accuracy',
                 'avg_gain',
                 'max_gain',
-                'max_loss',
+                'min_gain',
                 'days_trading',
                 'days_mean',
                 'days_max',
@@ -248,13 +247,7 @@ class ThreeBlindMice(nn.Module):
                 sigil = inscribe_sigil(candles)
                 loss = loss_fn(sigil, targets)
                 prob, sym_index = topk(sigil, 1)
-                prob = prob.exp().item()
-                if not trade:
-                    price = cdl_means[day_index][sym_index]
-                    trade = (sym_index, price)
-                    trade_array[day_index][sym_index] = 1
-                    days_trading = 1
-                else:
+                if trade:
                     days_trading += 1
                     if days_trading >= days_min:
                         trade_symbol, entry_price = trade
@@ -263,14 +256,13 @@ class ThreeBlindMice(nn.Module):
                             days_trading == days_max,
                             ])
                         if exit_trade:
-                            trade_prob = sigil[trade_symbol]
                             price = cdl_means[day_index][trade_symbol]
                             gain = (price - entry_price) / entry_price
                             net_gain += gain
                             if gain > max_gain:
                                 max_gain = gain
-                            elif gain < max_loss:
-                                max_loss = gain
+                            elif gain < min_gain:
+                                min_gain = gain
                             n_trades += 1
                             if gain > 0:
                                 n_profit += 1
@@ -283,6 +275,11 @@ class ThreeBlindMice(nn.Module):
                             trade_days.append(days_trading)
                             days_trading = 0
                             trade = None
+                if not trade:
+                    price = cdl_means[day_index][sym_index]
+                    trade = (sym_index, price)
+                    trade_array[day_index][sym_index] = 1
+                    days_trading = 0
                 day_index += 1
                 loss = sum([loss, (1 - (n_profit / day_index)) * iota])
                 loss.backward()
@@ -300,7 +297,7 @@ class ThreeBlindMice(nn.Module):
                 self.metrics['accuracy'] = n_profit / n_trades
                 self.metrics['avg_gain'] = (net_gain / n_trades)
                 self.metrics['max_gain'] = max_gain
-                self.metrics['max_loss'] = max_loss
+                self.metrics['min_gain'] = min_gain
                 self.metrics['days_trading'] = days_trading
                 self.metrics['days_mean'] = sum(trade_days) / len(trade_days)
                 self.metrics['days_max'] = max(trade_days)
@@ -319,12 +316,11 @@ class ThreeBlindMice(nn.Module):
                 cooking = False
             if verbosity > 0:
                 print(prefix, 'MAE =', self.metrics['mae'])
-                if verbosity > 1:
-                    for metric_key, metric_value in self.metrics.items():
-                        print(f'{prefix} {metric_key} = {metric_value}')
             if self.metrics['epochs'] % n_save == 0:
                 self.__manage_state__(call_type=1)
                 if verbosity > 0:
+                    for metric_key, metric_value in self.metrics.items():
+                        print(f'{prefix} {metric_key} = {metric_value}')
                     self.update_webview(*self.get_predictions())
         self.trade_array = trade_array.clone().detach()
         if self.metrics['epochs'] % n_save != 0:
@@ -373,7 +369,7 @@ class ThreeBlindMice(nn.Module):
         row_keys = [
             ('accuracy', 'net_gain', 'n_trades'),
             ('n_profit', 'n_loss', 'n_doji'),
-            ('avg_gain', 'max_gain', 'max_loss'),
+            ('avg_gain', 'max_gain', 'min_gain'),
             ('epochs', 'mae'),
             ('days_mean', 'days_max', 'days_min'),
             ]
