@@ -249,6 +249,8 @@ class ThreeBlindMice(nn.Module):
                 prob, sym_index = topk(sigil, 1)
                 if trade:
                     days_trading += 1
+                    if days_trading == 1:
+                        trade[1] = cdl_means[day_index][trade[0]]
                     if days_trading >= days_min:
                         trade_symbol, entry_price = trade
                         exit_trade = any([
@@ -276,8 +278,7 @@ class ThreeBlindMice(nn.Module):
                             days_trading = 0
                             trade = None
                 if not trade:
-                    price = cdl_means[day_index][sym_index]
-                    trade = (sym_index, price)
+                    trade = [sym_index, None]
                     trade_array[day_index][sym_index] = 1
                     days_trading = 0
                 day_index += 1
