@@ -25,7 +25,7 @@ if __name__ == '__main__':
                    help='Build historical indicators.')
     p.add_argument('--jazz', action='store_true',
                    help='Alpaca jazz recital.')
-    p.add_argument('--pick', action='store_true',
+    p.add_argument('--train', action='store_true',
                    help='Select best candles for trading.')
     p.add_argument('--study', action='store_true',
                    help='Quick study session.')
@@ -51,7 +51,7 @@ if __name__ == '__main__':
         candelabrum.apply_indicators()
     elif args.jazz:
         candelabrum.alpaca_jazz(attendants=137, cook_time=1, epochs=1)
-    elif args.pick:
-        candelabrum.pick_candles(25)
+    elif args.train:
+        candelabrum.trade_signals(freeze=False)
     elif args.study:
         candelabrum.make_offering(None, cook_time=10800, epochs=-1)
