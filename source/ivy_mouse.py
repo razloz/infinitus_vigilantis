@@ -35,25 +35,31 @@ class ThreeBlindMice(nn.Module):
         self._state_path_ = abspath('./rnn')
         if not exists(self._state_path_):
             mkdir(self._state_path_)
-        iota = (1 / 137) ** 3
+        iota = (1 / 137) ** 9
         phi = 1.618033988749894
         n_symbols = len(symbols)
         offerings = offerings.to(dev).transpose(0, 1)[trim:]
         n_time = int(offerings.shape[0])
         n_lin_in = 11
         n_lin_out = 9
+        n_signals = int(n_symbols * 0.118)
         hidden_input = n_symbols * n_lin_out
-        hidden_dims = [512, 9]
+        hidden_dims = [256, 9]
         hidden_output = hidden_dims[0] * hidden_dims[1]
         #Tensors
         self.candles = offerings.clone().detach()
         self.targets = offerings[:, :, -1].clone().detach().log_softmax(1)
         self.cdl_means = self.candles[:, :, -2].clone().detach()
         self.trade_array = torch.zeros(
-            *self.targets.shape,
+            n_signals * 2,
             device=dev,
             dtype=tfloat,
-            )
+            ).requires_grad_(True)
+        self.trade_profit = torch.zeros(
+            1,
+            device=dev,
+            dtype=tfloat,
+            ).requires_grad_(True)
         wax = [-phi, pi, phi, -1, 0, 1, phi, -pi, -phi]
         self.wax = list()
         for _ in range(n_symbols):
@@ -71,6 +77,7 @@ class ThreeBlindMice(nn.Module):
         self.cauldron = DataLoader(
             self.candelabrum,
             batch_size=1,
+            drop_last=True,
             )
         #Functions
         self.bilinear = nn.Bilinear(
@@ -91,10 +98,12 @@ class ThreeBlindMice(nn.Module):
         self.output_cell = nn.LSTM(
             input_size=hidden_dims[1],
             hidden_size=hidden_dims[1],
-            num_layers=3,
+            num_layers=55,
             bias=True,
             device=dev,
             dtype=tfloat,
+            dropout=0.118,
+            bidirectional=True,
         )
         self.normalizer = nn.InstanceNorm1d(
             num_features=n_symbols,
@@ -105,8 +114,23 @@ class ThreeBlindMice(nn.Module):
             device=dev,
             dtype=tfloat,
             )
-        self.loss_fn = nn.KLDivLoss(reduction='batchmean', log_target=True)
-        self.optimizer = Adagrad(self.parameters())
+        self.cauldron_loss = nn.KLDivLoss(
+            reduction='batchmean',
+            log_target=True,
+            )
+        self.cauldron_optimizer = Adagrad(self.parameters())
+        self.trade_rnn = nn.GRU(
+            input_size=self.trade_array.shape[0],
+            hidden_size=self.trade_array.shape[0],
+            num_layers=32,
+            bias=True,
+            batch_first=True,
+            dropout=0.5,
+            bidirectional=True,
+            device=dev,
+            )
+        self.trade_loss = nn.HuberLoss()
+        self.trade_optimizer = Adagrad(self.trade_rnn.parameters())
         self.rfft = fft.rfft
         #Settings
         self.metrics = dict(
@@ -120,6 +144,7 @@ class ThreeBlindMice(nn.Module):
             min_gain=0,
             epochs=0,
             trade=None,
+            exit_trade=False,
             days_trading=0,
             days_mean=0,
             days_max=0,
@@ -129,10 +154,12 @@ class ThreeBlindMice(nn.Module):
         self.phi = phi
         self.symbols = symbols
         self.cook_time = cook_time
+        self.n_forecast = n_symbols * 2
         self.n_symbols = n_symbols
         self.n_time = n_time
         self.n_lin_in = n_lin_in
         self.n_lin_out = n_lin_out
+        self.n_signals = n_signals
         self.hidden_input = hidden_input
         self.hidden_output = hidden_output
         self.hidden_dims = hidden_dims
@@ -149,9 +176,12 @@ class ThreeBlindMice(nn.Module):
                 if 'metrics' in state:
                     self.metrics = dict(state['metrics'])
                 self.load_state_dict(state['moirai'])
-                self.optimizer.load_state_dict(state['optim'])
+                self.cauldron_optimizer.load_state_dict(state['c_optim'])
+                self.trade_optimizer.load_state_dict(state['t_optim'])
                 self.wax.grad = state['wax']
-                if self.verbosity > 2:
+                self.trade_array.grad = state['trade_array']
+                self.trade_profit.grad = state['trade_profit']
+                if self.verbosity > 0:
                     print(self._prefix_, 'Loaded RNN state.')
             except FileNotFoundError:
                 if self.verbosity > 2:
@@ -165,15 +195,18 @@ class ThreeBlindMice(nn.Module):
                 {
                     'metrics': self.metrics,
                     'moirai': self.state_dict(),
-                    'optim': self.optimizer.state_dict(),
+                    'c_optim': self.cauldron_optimizer.state_dict(),
+                    't_optim': self.trade_optimizer.state_dict(),
+                    'trade_array': self.trade_array.grad,
+                    'trade_profit': self.trade_profit.grad,
                     'wax': self.wax.grad,
                     },
                 state_path,
                 )
-            if self.verbosity > 2:
+            if self.verbosity > 0:
                 print(self._prefix_, 'Saved RNN state.')
 
-    def inscribe_sigil(self, candles):
+    def cauldron_bubble(self, candles):
         """
             Let Clotho mold the candles
             Let Lachesis measure the candles
@@ -182,6 +215,7 @@ class ThreeBlindMice(nn.Module):
         """
         symbols = self.n_symbols
         dims = self.hidden_dims
+        n_forecast = self.n_forecast
         candles = self.normalizer(candles.transpose(0, 1))
         candles = self.rfft(candles)
         candles = self.bilinear(candles.real, candles.imag)
@@ -189,38 +223,89 @@ class ThreeBlindMice(nn.Module):
         candle_wax = candle_wax.abs().log_softmax(-1).flatten()
         candles = self.input_cell(candle_wax)[0].view(dims)
         candles = self.output_cell(candles)[0].flatten()
-        sigil = topk(candles, symbols, sorted=False).indices
-        inscription = candles[sigil].view(symbols).log_softmax(0)
-        return inscription.clone()
+        sigil = candles[-symbols:].view(1, symbols).log_softmax(1)
+        return sigil.clone()
 
-    def research(self, n_save=34, loss_timeout=1000):
+    def research(self, n_save=8, loss_timeout=1000):
         """Moirai research session, fully stocked with cheese and drinks."""
-        prefix = self._prefix_
-        verbosity = self.verbosity
-        inscribe_sigil = self.inscribe_sigil
-        loss_fn = self.loss_fn
-        optimizer = self.optimizer
-        cdl_means = self.cdl_means
-        targets = self.targets
-        trade_array = self.trade_array.clone()
-        topk = torch.topk
+        cauldron_bubble = self.cauldron_bubble
+        cauldron_loss = self.cauldron_loss
         cook_time = self.cook_time
-        n_time = self.n_time
         least_loss = inf
         loss_retry = 0
-        iota = self.iota
-        phi = self.phi
-        days_min = 3
-        days_max = 21
-        longest_trade = 0
+        n_time = self.n_time - 1
+        optimizer = self.cauldron_optimizer
+        prefix = self._prefix_
+        verbosity = self.verbosity
         print(prefix, 'Research started.\n')
         cooking = True
         t_cook = time.time()
         while cooking:
             self.train()
-            trade_array *= 0
-            day_index = 0
             mae = 0
+            for candles, targets in iter(self.cauldron):
+                optimizer.zero_grad()
+                sigil = cauldron_bubble(candles)
+                loss = cauldron_loss(sigil, targets)
+                loss.backward()
+                optimizer.step()
+                mae += loss.item()
+            mae /= n_time
+            self.metrics['epochs'] += 1
+            if mae < least_loss:
+                loss_retry = 0
+                least_loss = mae
+            else:
+                loss_retry += 1
+                if loss_retry == loss_timeout:
+                    cooking = False
+            elapsed = time.time() - t_cook
+            if elapsed >= cook_time:
+                cooking = False
+            if verbosity > 0:
+                print(prefix, 'Mean Absolute Error =', mae)
+            self.metrics['mae'] = mae
+            if self.metrics['epochs'] % n_save == 0:
+                self.__manage_state__(call_type=1)
+        if self.metrics['epochs'] % n_save != 0:
+            self.__manage_state__(call_type=1)
+        if verbosity > 0:
+            print(prefix, 'Research complete.\n')
+        return self.trade_array
+
+    def trade(self, freeze=False, max_epochs=1000, n_save=13):
+        """Trade signals."""
+        cauldron_bubble = self.cauldron_bubble
+        prefix = self._prefix_
+        verbosity = self.verbosity
+        cdl_means = self.cdl_means
+        targets = self.targets
+        tensor = torch.tensor
+        dev = self._device_
+        tfloat = torch.float
+        topk = torch.topk
+        iota = self.iota
+        phi = self.phi
+        n_signals = self.n_signals
+        days_min = 3
+        days_max = 21
+        trade_array = self.trade_array
+        trade_rnn = self.trade_rnn
+        trade_loss = self.trade_loss
+        trade_optimizer = self.trade_optimizer
+        trade_shape = trade_array.shape[0]
+        loss_target = torch.zeros(1, device=dev, dtype=tfloat)
+        trade_profit = self.trade_profit
+        cauldron = self.cauldron
+        if not freeze:
+            self.train()
+        else:
+            self.eval()
+        epochs = 0
+        while epochs < max_epochs:
+            longest_trade = 0
+            trade_symbols = list()
+            day_index = 0
             max_gain = 0
             min_gain = 0
             net_gain = 0
@@ -242,53 +327,63 @@ class ThreeBlindMice(nn.Module):
                 'days_min',
                 ):
                 self.metrics[key] = 0
-            for candles, targets in iter(self.cauldron):
-                optimizer.zero_grad()
-                sigil = inscribe_sigil(candles)
-                loss = loss_fn(sigil, targets)
-                prob, sym_index = topk(sigil, 1)
+            exit_trade = False
+            trade_symbol = None
+            signal_indices = list()
+            for candles, _ in iter(cauldron):
+                sigil = cauldron_bubble(candles).flatten()
+                b_sig = topk(sigil, n_signals, largest=True, sorted=True)
+                s_sig = topk(sigil, n_signals, largest=False, sorted=True)
+                ndx = b_sig.indices.tolist() + s_sig.indices.tolist()
+                probs = b_sig.values.tolist() + s_sig.values.tolist()
+                probs = tensor(probs, device=dev, dtype=tfloat)
+                trade_probs = (trade_array + probs).view(1, trade_shape)
+                trade_probs = trade_rnn(trade_probs)[0].flatten()
+                trade_probs = trade_probs[-trade_shape:].softmax(0)
+                signal_indices.append(ndx)
                 if trade:
                     days_trading += 1
-                    if days_trading == 1:
+                    if exit_trade:
+                        price = cdl_means[day_index][trade_symbol]
+                        gain = (price - entry_price) / entry_price
+                        net_gain += gain
+                        if gain > max_gain:
+                            max_gain = gain
+                        elif gain < min_gain:
+                            min_gain = gain
+                        n_trades += 1
+                        if gain > 0:
+                            n_profit += 1
+                        elif gain < 0:
+                            n_loss += 1
+                        else:
+                            n_doji += 1
+                        #if not freeze:
+                            #loss = sum([loss, (phi / (phi ** gain)) * iota])
+                        trade_days.append(days_trading)
+                        days_trading = 0
+                        trade = None
+                        exit_trade = False
+                    elif days_trading == 1:
                         trade[1] = cdl_means[day_index][trade[0]]
-                    if days_trading >= days_min:
+                    elif days_trading >= days_min:
                         trade_symbol, entry_price = trade
                         exit_trade = any([
                             trade_symbol != sym_index,
                             days_trading == days_max,
                             ])
-                        if exit_trade:
-                            price = cdl_means[day_index][trade_symbol]
-                            gain = (price - entry_price) / entry_price
-                            net_gain += gain
-                            if gain > max_gain:
-                                max_gain = gain
-                            elif gain < min_gain:
-                                min_gain = gain
-                            n_trades += 1
-                            if gain > 0:
-                                n_profit += 1
-                            elif gain < 0:
-                                n_loss += 1
-                            else:
-                                n_doji += 1
-                            loss = sum([loss, (phi / (phi ** gain)) * iota])
-                            trade_array[day_index][trade_symbol] = -1
-                            trade_days.append(days_trading)
-                            days_trading = 0
-                            trade = None
                 if not trade:
+                    sym_index = topk(trade_probs, 1, largest=True).indices
+                    sym_index = ndx[sym_index.item()]
                     trade = [sym_index, None]
-                    trade_array[day_index][sym_index] = 1
                     days_trading = 0
                 day_index += 1
-                loss = sum([loss, (1 - (n_profit / day_index)) * iota])
-                loss.backward()
-                mae += loss.item()
-                optimizer.step()
-                if verbosity > 2:
-                    print(f'{prefix} MAE = {mae / day_index}')
-            self.metrics['mae'] = mae / day_index
+                if not freeze:
+                    loss = trade_profit + ((1 - (net_gain / day_index)) * iota)
+                    loss = trade_loss(trade_profit, loss_target)
+                    loss.backward()
+                    trade_optimizer.step()
+            epochs += 1
             self.metrics['n_profit'] = n_profit
             self.metrics['n_loss'] = n_loss
             self.metrics['n_doji'] = n_doji
@@ -304,35 +399,15 @@ class ThreeBlindMice(nn.Module):
                 self.metrics['days_max'] = max(trade_days)
                 self.metrics['days_min'] = min(trade_days)
             self.metrics['trade'] = trade
-            self.metrics['epochs'] += 1
-            if self.metrics['mae'] < least_loss:
-                loss_retry = 0
-                least_loss = self.metrics['mae']
-            else:
-                loss_retry += 1
-                if loss_retry == loss_timeout:
-                    cooking = False
-            elapsed = time.time() - t_cook
-            if elapsed >= cook_time:
-                cooking = False
-            if verbosity > 0:
-                print(prefix, 'MAE =', self.metrics['mae'])
-            if self.metrics['epochs'] % n_save == 0:
-                self.__manage_state__(call_type=1)
-                if verbosity > 0:
-                    for metric_key, metric_value in self.metrics.items():
-                        print(f'{prefix} {metric_key} = {metric_value}')
-                    self.update_webview(*self.get_predictions())
-        self.trade_array = trade_array.clone().detach()
-        if self.metrics['epochs'] % n_save != 0:
-            self.__manage_state__(call_type=1)
-            if verbosity > 0:
-                self.update_webview(*self.get_predictions())
-        if verbosity > 0:
+            self.metrics['exit_trade'] = exit_trade
             for metric_key, metric_value in self.metrics.items():
                 print(f'{prefix} {metric_key} = {metric_value}')
-            print(prefix, 'Research complete.\n')
-        return self.trade_array.clone().detach()
+            print('')
+            if epochs % n_save == 0:
+                self.__manage_state__(call_type=1)
+        if epochs % n_save != 0:
+            self.__manage_state__(call_type=1)
+        self.update_webview(*self.get_predictions())
 
     def get_predictions(self):
         """Output for the last batch."""
@@ -341,7 +416,7 @@ class ThreeBlindMice(nn.Module):
         symbols = self.symbols
         topk = torch.topk
         self.eval()
-        sigil = self.inscribe_sigil(self.candles[-1:])
+        sigil, forecast = self.cauldron_bubble(self.candles[-1:])
         print(banner)
         prob, sym = topk(sigil, 1)
         s = symbols[sym.item()]
@@ -383,6 +458,7 @@ class ThreeBlindMice(nn.Module):
                     v = v.item()
                 html += """{0}: {1}&emsp;""".format(k, v)
         trade = self.metrics['trade']
+        exit_trade = self.metrics['exit_trade']
         if trade:
             sym_index, price = trade
             days_trading = self.metrics['days_trading']
@@ -390,6 +466,7 @@ class ThreeBlindMice(nn.Module):
             html += """<br>"""
             html += f"""<a href="{symbol}.png">active trade: {symbol}</a>"""
             html += f""" @ {price}&emsp;({days_trading} days in trade)"""
+            html += f""" exit_trade = {exit_trade} """
             cdl_path = abspath(f'./candelabrum/{symbol}.ivy')
             candles = read_csv(cdl_path, index_col=0, parse_dates=True)
             c_path = abspath(f'./resources/{symbol}.png')

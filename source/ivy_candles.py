@@ -38,7 +38,7 @@ class Candelabrum:
         self._FTYPE = str(ftype)
         self._WORKERS = list()
         self._CPU_COUNT = cpu_count()
-        self._MAX_THREADS = self._CPU_COUNT * 2 - 3
+        self._MAX_THREADS = 3
         self._DATA_PATH = './candelabrum'
         self._ERROR_PATH = './errors'
         self._CHART_PATH = './charts'
@@ -150,6 +150,19 @@ class Candelabrum:
         message = f'({epoch}) Aeternalis elapsed time is'
         print(prefix, format_time(elapsed, message=message))
 
+    def trade_signals(self, freeze=False):
+        from torch import load
+        abspath = path.abspath
+        prefix = self._PREFIX
+        print(prefix, f'Gathering daily candles.')
+        offerings = load(abspath('./candelabrum/candelabrum.candles'))
+        with open(abspath('./candelabrum/candelabrum.symbols'), 'r') as f:
+            symbols = json.loads(f.read())['symbols']
+        if len(symbols) != offerings.shape[0]:
+            print('Symbol length mismatch.')
+            return False
+        moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
+        moirai.trade(freeze=freeze)
 
 def candle_maker(candles):
     """Makes a candle."""
@@ -230,8 +243,7 @@ def build_historical_database(start_date='2018-01-01'):
         cdls.dropna(inplace=True)
         cdls = cdls.merge(omenize(cdls), left_index=True, right_index=True)
         cdls.to_csv(p.format(f'{symbol}.ivy'), mode='w+')
-        t = tensor(cdls.to_numpy(), device=dev, dtype=tfloat)
-        candelabrum.append(t.clone())
+        candelabrum.append(tensor(cdls.to_numpy(), device=dev, dtype=tfloat))
     candelabrum = stack(candelabrum)
     save(candelabrum, p.format('candelabrum.candles'))
     with open(path.abspath('./candelabrum/candelabrum.symbols'), 'w+') as f:
