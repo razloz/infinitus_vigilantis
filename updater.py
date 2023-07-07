@@ -54,4 +54,4 @@ if __name__ == '__main__':
     elif args.train:
         candelabrum.trade_signals(freeze=False)
     elif args.study:
-        candelabrum.make_offering(None, cook_time=10800, epochs=-1)
+        candelabrum.make_offering(None, cook_time=10800, epochs=3)
