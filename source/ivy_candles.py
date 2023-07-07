@@ -140,15 +140,11 @@ class Candelabrum:
                 )
         else:
             moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
-        loop_start = time.time()
         while aeternalis:
             trade_array = moirai.research()
             epoch += 1
             if epoch == epochs:
                 aeternalis = False
-        elapsed = time.time() - loop_start
-        message = f'({epoch}) Aeternalis elapsed time is'
-        print(prefix, format_time(elapsed, message=message))
 
     def trade_signals(self, freeze=False):
         from torch import load
