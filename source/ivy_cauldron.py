@@ -39,11 +39,11 @@ class Cauldron(torch.nn.Module):
             num_encoder_layers=7,
             num_decoder_layers=7,
             dim_feedforward=64,
-            dropout=0.1,
+            dropout=0.118,
             activation=torch.nn.functional.leaky_relu,
-            layer_norm_eps=1e-05,
+            layer_norm_eps=0.000118,
             batch_first=True,
-            norm_first=False,
+            norm_first=True,
             device=DEVICE,
             dtype=FLOAT,
             )
@@ -74,10 +74,14 @@ class Cauldron(torch.nn.Module):
             )
         self.candelabrum = candelabrum
         self.n_split = n_split
+        self.n_batch = n_batch
+        self.n_symbols = n_symbols
         self.metrics = dict(
-            epochs=0,
-            error=0,
-            total_time=0,
+            training_epochs=0,
+            training_error=0,
+            training_time=0,
+            validation_accuracy=0,
+            validation_error=0,
             )
         self.state_path = abspath('./rnn/.norn.state')
         self.load_state()
@@ -90,6 +94,7 @@ class Cauldron(torch.nn.Module):
                 self.metrics = dict(state['metrics'])
             self.load_state_dict(state['state'])
             self.optimizer.load_state_dict(state['optimizer'])
+            self.network.load_state_dict(state['network'])
         except FileNotFoundError:
             print('No state found, creating default.')
             self.save_state()
@@ -100,25 +105,27 @@ class Cauldron(torch.nn.Module):
         state_path = self.state_path
         torch.save({
             'metrics': self.metrics,
-            'state': self.state_dict(),
+            'network': self.network.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'state': self.state_dict(),
             }, state_path,
             )
         print('Saved state.')
 
-    def train_network(self, hours=72, checkpoint=0.25):
+    def train_network(self, hours=72, checkpoint=10):
         network = self.network
         loss_fn = self.loss_fn
         optimizer = self.optimizer
         training_data = self.training_data
         t_bernoulli = self.t_bernoulli
-        epoch = self.metrics['epochs']
+        epoch = self.metrics['training_epochs']
         elapsed = 0
-        n_split = self.n_split
+        timesteps = self.n_split - self.n_batch
         self.train()
         print('Training started.')
         start_time = time.time()
         while elapsed < hours:
+            epoch_time = time.time()
             epoch += 1
             print('Epoch:', epoch)
             error = 0
@@ -132,17 +139,47 @@ class Cauldron(torch.nn.Module):
                 loss.backward()
                 error += loss.item()
             optimizer.step()
-            error /= n_split
-            elapsed = ((time.time() - start_time) / 60) / 60
-            self.metrics['epochs'] = epoch
-            self.metrics['error'] = error
-            self.metrics['total_time'] += elapsed
+            error /= timesteps
+            ts = time.time()
+            elapsed = ((ts - start_time) / 60) / 60
+            epoch_time = ((ts - epoch_time) / 60) / 60
+            self.metrics['training_epochs'] = epoch
+            self.metrics['training_error'] = error
+            self.metrics['training_time'] += epoch_time
             print('\nState:', state, '\nTargets:', targets)
-            print('Error:', error)
-            print('Elapsed:', elapsed, '\n')
-            if elapsed % checkpoint == 0:
+            print('epochs:', self.metrics['training_epochs'])
+            print('epoch_time:', epoch_time * 60, 'minutes')
+            print('training_error:', self.metrics['training_error'])
+            print('training_time:', self.metrics['training_time'], 'hours')
+            print('session_time:', elapsed, 'hours')
+            if epoch % checkpoint == 0:
+                self.validate_network()
                 self.save_state()
-        if elapsed % checkpoint != 0:
+        if epoch % checkpoint != 0:
+            self.validate_network()
             self.save_state()
         print(f'Training finished after {elapsed} hours.')
 
+    def validate_network(self, threshold=0.0005):
+        validation_data = self.validation_data
+        t_bernoulli = self.t_bernoulli
+        timesteps = self.n_split - self.n_batch
+        n_error = self.n_symbols * self.n_batch
+        network = self.network
+        accuracy = 0
+        batches = 0
+        mae = 0
+        self.eval()
+        print('Starting validation routine.')
+        for inputs, targets in iter(validation_data):
+            state = network(inputs, inputs).mean(-1)
+            error = (state - targets).abs()
+            correct = error[error <= threshold].shape[0]
+            accuracy += correct / n_error
+            mae += error.flatten().mean(0).item()
+            batches += 1
+        self.metrics['validation_accuracy'] = accuracy / batches
+        self.metrics['validation_error'] = mae / timesteps
+        print('validation_accuracy:', self.metrics['validation_accuracy'])
+        print('validation_error:', self.metrics['validation_error'])
+        print('Validation complete.')
