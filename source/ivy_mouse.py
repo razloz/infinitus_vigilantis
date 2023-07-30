@@ -39,7 +39,9 @@ class ThreeBlindMice(nn.Module):
         iota = (1 / 137) ** 9
         phi = 1.618033988749894
         n_symbols = len(symbols)
-        offerings = offerings.to(dev).transpose(0, 1)[trim:]
+        print(offerings.shape)
+        offerings = offerings.to(dev)[trim:]
+        print(offerings.shape)
         n_time = int(offerings.shape[0])
         n_lin_in = 11
         n_lin_out = 9

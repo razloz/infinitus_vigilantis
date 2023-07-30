@@ -185,6 +185,7 @@ def build_historical_database(start_date='2018-01-01'):
     from time import strftime, strptime
     from torch import cuda, device, save, stack, tensor
     from torch import float as tfloat
+    msg = 'Build Historical Database: {}'
     candelabrum_path = path.abspath('./candelabrum')
     if not path.exists(candelabrum_path):
         mkdir(candelabrum_path)
@@ -204,9 +205,17 @@ def build_historical_database(start_date='2018-01-01'):
     date_args['tz'] = tz
     date_args['freq'] = '1D'
     date_range = pd.date_range(**date_args)
-    msg = 'Build Historical Database: {}'
+    print(msg.format('Requesting calendar...'))
+    calendar = list()
+    market_days = list()
+    for market_session in SHEPHERD.calendar():
+        calendar.append(market_session['date'])
+    for index, date in enumerate(date_range):
+        date = str(date)[:10]
+        if date in calendar:
+            market_days.append(index)
     candles = dict()
-    print('Fetching historical data from Alpaca Markets.')
+    print(msg.format('Fetching data...'))
     for symbol in ivy_watchlist:
         try:
             data = SHEPHERD.candles(symbol, **shepherd_args)
@@ -222,7 +231,7 @@ def build_historical_database(start_date='2018-01-01'):
     p = candelabrum_path + '/{}'
     candelabrum = list()
     omenize = icy.get_indicators
-    print(f'Applying indicators to {len(candles.keys())} symbols.')
+    print(msg.format(f'Applying indicators to {len(candles.keys())} symbols.'))
     for symbol in candles.keys():
         del(candles[symbol]['utc_ts'])
         del(candles[symbol]['num_trades'])
@@ -240,11 +249,12 @@ def build_historical_database(start_date='2018-01-01'):
         cdls = cdls.merge(omenize(cdls), left_index=True, right_index=True)
         cdls.to_csv(p.format(f'{symbol}.ivy'), mode='w+')
         candelabrum.append(tensor(cdls.to_numpy(), device=dev, dtype=tfloat))
-    candelabrum = stack(candelabrum)
+    candelabrum = stack(candelabrum).transpose(0, 1)
+    candelabrum = candelabrum[market_days]
     save(candelabrum, p.format('candelabrum.candles'))
     with open(path.abspath('./candelabrum/candelabrum.symbols'), 'w+') as f:
         f.write(json.dumps(dict(symbols=list(candles.keys()))))
     with open(path.abspath('./candelabrum/candelabrum.features'), 'w+') as f:
         f.write(json.dumps(dict(columns=list(cdls.keys()))))
-    msg = 'Candelabrum created with {} candles of {} length and {} features.'
-    print(msg.format(*candelabrum.shape))
+    m = 'Candelabrum created with {} candles for {} symbols with {} features.'
+    print(msg.format(m.format(*candelabrum.shape)))
