@@ -5,6 +5,7 @@ import time
 from os import path, mkdir, environ
 from math import isclose
 from torch.utils.data import DataLoader, TensorDataset
+from torch.nn.init import uniform_
 torch.autograd.set_detect_anomaly(True)
 DEVICE_TYPE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 DEVICE = torch.device(DEVICE_TYPE)
@@ -16,11 +17,11 @@ vstack = torch.vstack
 leaky_relu = torch.nn.functional.leaky_relu
 
 class Cauldron(torch.nn.Module):
-    def __init__(self, candelabrum=None, verbosity=1):
+    def __init__(self, candelabrum=None, verbosity=1, no_caching=True):
         super(Cauldron, self).__init__()
-        if DEVICE_TYPE != 'cpu':
+        if DEVICE_TYPE != 'cpu' and no_caching:
             environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
-            if verbosity > 0:
+            if verbosity > 1:
                 print('Disabled CUDA memory caching.')
             torch.cuda.empty_cache()
         if candelabrum is None:
@@ -67,7 +68,7 @@ class Cauldron(torch.nn.Module):
             nhead=n_features,
             num_encoder_layers=3,
             num_decoder_layers=3,
-            dim_feedforward=256,
+            dim_feedforward=1024,
             dropout=0.118,
             activation=leaky_relu,
             layer_norm_eps=1.18e-9,
@@ -95,6 +96,12 @@ class Cauldron(torch.nn.Module):
                 mkdir(network_path)
         self.state_path = f'{network_path}/.norn.state'
         self.verbosity = verbosity
+        iota = (1 / 137) ** 2
+        if verbosity > 1:
+            print(f'Initializing weights with bounds of {-iota} to {iota}')
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                uniform_(param, -iota, iota)
         self.load_state()
 
     def load_state(self):
