@@ -2,7 +2,7 @@
 import torch
 import json
 import time
-from os import path
+from os import path, mkdir, environ
 from math import isclose
 from torch.utils.data import DataLoader, TensorDataset
 torch.autograd.set_detect_anomaly(True)
@@ -16,8 +16,13 @@ vstack = torch.vstack
 leaky_relu = torch.nn.functional.leaky_relu
 
 class Cauldron(torch.nn.Module):
-    def __init__(self, candelabrum=None, n_batch=14):
+    def __init__(self, candelabrum=None, verbosity=1):
         super(Cauldron, self).__init__()
+        if DEVICE_TYPE != 'cpu':
+            environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
+            if verbosity > 0:
+                print('Disabled CUDA memory caching.')
+            torch.cuda.empty_cache()
         if candelabrum is None:
             cdl_path = abspath('./candelabrum')
             candelabrum = torch.load(f'{cdl_path}/candelabrum.candles')
@@ -26,6 +31,7 @@ class Cauldron(torch.nn.Module):
             candelabrum = candelabrum.clone().detach()
         with open(f'{cdl_path}/candelabrum.symbols', 'r') as f:
             self.symbols = json.loads(f.read())['symbols']
+        n_batch = 5
         n_trim = candelabrum.shape[0]
         while n_trim % (n_batch * 2) != 0:
             n_trim -= 1
@@ -58,18 +64,18 @@ class Cauldron(torch.nn.Module):
         candelabrum = None
         self.network = torch.nn.Transformer(
             d_model=n_features,
-            nhead=10,
+            nhead=n_features,
             num_encoder_layers=3,
             num_decoder_layers=3,
-            dim_feedforward=128,
+            dim_feedforward=256,
             dropout=0.118,
             activation=leaky_relu,
             layer_norm_eps=1.18e-9,
             batch_first=True,
             norm_first=True,
-            device=DEVICE,
             dtype=FLOAT,
             )
+        self.network.to(DEVICE)
         self.loss_fn = torch.nn.HuberLoss()
         self.optimizer = torch.optim.Adagrad(self.parameters())
         self.n_split = n_split
@@ -84,7 +90,11 @@ class Cauldron(torch.nn.Module):
             validation_error=0,
             validation_total=0,
             )
-        self.state_path = abspath('./rnn/.norn.state')
+        network_path = abspath('./network')
+        if not path.exists(network_path):
+                mkdir(network_path)
+        self.state_path = f'{network_path}/.norn.state'
+        self.verbosity = verbosity
         self.load_state()
 
     def load_state(self):
@@ -97,10 +107,12 @@ class Cauldron(torch.nn.Module):
             self.optimizer.load_state_dict(state['optimizer'])
             self.network.load_state_dict(state['network'])
         except FileNotFoundError:
-            print('No state found, creating default.')
+            if self.verbosity > 1:
+                print('No state found, creating default.')
             self.save_state()
         except Exception as details:
-            print('Exception', *details.args)
+            if self.verbosity > 1:
+                print('Exception', *details.args)
 
     def save_state(self):
         state_path = self.state_path
@@ -111,9 +123,11 @@ class Cauldron(torch.nn.Module):
             'state': self.state_dict(),
             }, state_path,
             )
-        print('Saved state.')
+        if self.verbosity > 1:
+            print('Saved state.')
 
     def train_network(self, hours=72, checkpoint=10, validate=50):
+        verbosity = self.verbosity
         network = self.network
         loss_fn = self.loss_fn
         optimizer = self.optimizer
@@ -126,12 +140,14 @@ class Cauldron(torch.nn.Module):
         p_last = p_range[-1]
         m = ' || {} \t\t {} \t\t || '
         self.train()
-        print('Training started.')
+        if verbosity > 0:
+            print('Training started.')
         start_time = time.time()
         while elapsed < hours:
             epoch_time = time.time()
             epoch += 1
-            print('Epoch:', epoch)
+            if verbosity > 0:
+                print('Epoch:', epoch)
             error = 0
             optimizer.zero_grad()
             for inputs, targets in iter(training_data):
@@ -152,16 +168,18 @@ class Cauldron(torch.nn.Module):
             self.metrics['training_epochs'] = epoch
             self.metrics['training_error'] = error
             self.metrics['training_time'] += epoch_time
-            print('\n || State \t\t Targets \t\t || ')
-            for i in p_range:
-                s = round(state[-1][i].item(), 9)
-                t = round(targets[-1][i].item(), 9)
-                print(m.format(s, t))
-            print('epochs:', self.metrics['training_epochs'])
-            print('epoch_time:', epoch_time * 60, 'minutes')
-            print('training_error:', self.metrics['training_error'])
-            print('training_time:', self.metrics['training_time'], 'hours')
-            print('session_time:', elapsed, 'hours')
+            if verbosity > 1:
+                print('\n || State \t\t Targets \t\t || ')
+                for i in p_range:
+                    s = round(state[-1][i].item(), 9)
+                    t = round(targets[-1][i].item(), 9)
+                    print(m.format(s, t))
+            if verbosity > 0:
+                print('epochs:', self.metrics['training_epochs'])
+                print('epoch_time:', epoch_time * 60, 'minutes')
+                print('training_error:', self.metrics['training_error'])
+                print('training_time:', self.metrics['training_time'], 'hours')
+                print('session_time:', elapsed, 'hours')
             if epoch % validate == 0:
                 self.validate_network()
             if epoch % checkpoint == 0:
@@ -171,9 +189,11 @@ class Cauldron(torch.nn.Module):
         if epoch % checkpoint != 0:
             self.validate_network()
             self.save_state()
-        print(f'Training finished after {elapsed} hours.')
+        if verbosity > 0:
+            print(f'Training finished after {elapsed} hours.')
 
     def validate_network(self, threshold=0.003):
+        verbosity = self.verbosity
         validation_data = self.validation_data
         t_bernoulli = self.t_bernoulli
         n_batch = self.n_batch
@@ -187,7 +207,8 @@ class Cauldron(torch.nn.Module):
         self.eval()
         n_correct = 0
         n_total = 0
-        print('Starting validation routine.')
+        if verbosity > 0:
+            print('Starting validation routine.')
         for inputs, targets in iter(validation_data):
             state = leaky_relu(network(inputs, inputs).sum(-1))
             correct = 0
@@ -206,8 +227,9 @@ class Cauldron(torch.nn.Module):
         self.metrics['validation_correct'] = n_correct
         self.metrics['validation_error'] = error / timesteps
         self.metrics['validation_total'] = n_total
-        print('correct predictions:', self.metrics['validation_correct'])
-        print('total predictions:', self.metrics['validation_total'])
-        print('validation_accuracy:', self.metrics['validation_accuracy'])
-        print('validation_error:', self.metrics['validation_error'])
-        print('Validation complete.')
+        if verbosity > 0:
+            print('correct predictions:', self.metrics['validation_correct'])
+            print('total predictions:', self.metrics['validation_total'])
+            print('validation_accuracy:', self.metrics['validation_accuracy'])
+            print('validation_error:', self.metrics['validation_error'])
+            print('Validation complete.')
