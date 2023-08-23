@@ -16,7 +16,7 @@ from source.ivy_cartography import cartography
 from source.ivy_mouse import ThreeBlindMice
 from source.ivy_watchlist import ivy_watchlist
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2022, Daniel Ward'
+__copyright__ = 'Copyright 2023, Daniel Ward'
 __license__ = 'GPL v3'
 SHEPHERD = api.AlpacaShepherd()
 COLUMN_NAMES = {

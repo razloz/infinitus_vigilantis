@@ -10,7 +10,7 @@ from os import path
 from time import sleep, time
 from numpy import arange, vstack
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2022, Daniel Ward'
+__copyright__ = 'Copyright 2023, Daniel Ward'
 __license__ = 'GPL v3'
 plt.style.use('dark_background')
 verbose = False
