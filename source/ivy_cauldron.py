@@ -15,15 +15,19 @@ DEVICE = torch.device(DEVICE_TYPE)
 FLOAT = torch.float
 PI = torch.pi
 topk = torch.topk
-abspath = path.abspath
 vstack = torch.vstack
 leaky_relu = torch.nn.functional.leaky_relu
+dirname = path.dirname
+realpath = path.realpath
+abspath = path.abspath
 
 
 class Cauldron(torch.nn.Module):
     def __init__(
         self,
         candelabrum=None,
+        root_folder=None,
+        symbols=None,
         input_index=-1,
         target_index=-1,
         verbosity=2,
@@ -38,14 +42,25 @@ class Cauldron(torch.nn.Module):
             if verbosity > 1:
                 print('Disabled CUDA memory caching.')
             torch.cuda.empty_cache()
+        if root_folder is None:
+            root_folder = abspath(path.join(dirname(realpath(__file__)), '..'))
+            print(root_folder)
+        candelabrum_path = abspath(path.join(root_folder, 'candelabrum'))
+        candles_path = path.join(candelabrum_path, 'candelabrum.candles')
+        symbols_path = path.join(candelabrum_path, 'candelabrum.symbols')
+        network_path = path.join(root_folder, 'cauldron')
+        if not path.exists(network_path):
+                mkdir(network_path)
+        self.state_path = path.join(network_path, 'cauldron.state')
+        self.session_path = path.join(network_path, f'{self.start_time}.state')
         if candelabrum is None:
-            cdl_path = abspath('./candelabrum')
-            candelabrum = torch.load(f'{cdl_path}/candelabrum.candles')
+            candelabrum = torch.load(candles_path)
         else:
             candelabrum = candelabrum.clone().detach()
         candelabrum.to(DEVICE)
-        with open(f'{cdl_path}/candelabrum.symbols', 'r') as f:
-            self.symbols = json.loads(f.read())['symbols']
+        if symbols is None:
+            with open(symbols_path, 'r') as f:
+                self.symbols = json.loads(f.read())['symbols']
         n_batch = 6
         n_slice = n_batch * 2
         n_time, n_symbols, n_data = candelabrum.shape
@@ -88,11 +103,6 @@ class Cauldron(torch.nn.Module):
             training_error=0,
             training_time=0,
             )
-        network_path = abspath('./cauldron')
-        if not path.exists(network_path):
-                mkdir(network_path)
-        self.state_path = f'{network_path}/cauldron.state'
-        self.session_path = f'{network_path}/{self.start_time}.state'
         self.set_weights = set_weights
         self.verbosity = verbosity
         self.candelabrum = candelabrum
@@ -141,11 +151,16 @@ class Cauldron(torch.nn.Module):
             'state': self.state_dict(),
             }
 
-    def save_state(self, real_path):
+    def save_state(self, real_path, to_buffer=False, buffer_io=None):
         """Saves the Module."""
-        torch.save(self.get_state_dicts(), real_path)
-        if self.verbosity > 0:
-            print(f'Saved state to {real_path}.')
+        if not to_buffer:
+            torch.save(self.get_state_dicts(), real_path)
+            if self.verbosity > 0:
+                print(f'Saved state to {real_path}.')
+        else:
+            bytes_obj = self.get_state_dicts()
+            bytes_obj = torch.save(bytes_obj, buffer_io)
+            return bytes_obj
 
     def random_batch(self):
         """Returns a random batch of inputs and targets"""

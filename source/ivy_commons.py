@@ -1,5 +1,6 @@
 """Common functions used by the Infinitus Vigilantis application"""
 import traceback
+import json
 from statistics import stdev
 from statistics import mean
 from numpy import inf, nan
@@ -144,3 +145,36 @@ def get_indicators(df, index_key='time'):
     indicators.replace([inf, -inf], nan, inplace=True)
     indicators.fillna(0, inplace=True)
     return indicators.copy()
+
+
+class Javafy():
+    """Handles saving and loading of Java objects."""
+
+    def load(self, data=None, file_path=None):
+        """Returns a Python Dictionary from a Java String."""
+        javad = dict()
+        try:
+            if file_path is not None:
+                with open(file_path, 'r') as data_obj:
+                    data = data_obj.read()
+            javad = json.loads(data)
+        except Exception as details:
+            print(*details)
+        finally:
+            return javad
+
+    def save(self, data=None, file_path=None):
+        """Returns or saves a Java String from a Python Dictionary."""
+        javad = False
+        try:
+            javad = json.dumps(data)
+            if file_path is not None:
+                with open(file_path, 'w+') as data_obj:
+                    data_obj.write(javad)
+                javad = True
+            else:
+                javad = json.dumps(data)
+        except Exception as details:
+            print(*details)
+        finally:
+            return javad

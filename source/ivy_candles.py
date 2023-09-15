@@ -13,7 +13,7 @@ from datetime import datetime
 from queue import Queue
 from multiprocessing import Queue as mpQueue
 from source.ivy_cartography import cartography
-from source.ivy_mouse import ThreeBlindMice
+#from source.ivy_mouse import ThreeBlindMice
 from source.ivy_watchlist import ivy_watchlist
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2023, Daniel Ward'
