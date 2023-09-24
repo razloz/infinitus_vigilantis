@@ -9,9 +9,6 @@ from torch.nn.init import uniform_
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2023, Daniel Ward'
 __license__ = 'GPL v3'
-torch.autograd.set_detect_anomaly(True)
-DEVICE_TYPE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-DEVICE = torch.device(DEVICE_TYPE)
 FLOAT = torch.float
 PI = torch.pi
 topk = torch.topk
@@ -30,21 +27,29 @@ class Cauldron(torch.nn.Module):
         symbols=None,
         input_index=-1,
         target_index=-1,
-        verbosity=2,
+        verbosity=0,
         no_caching=True,
         set_weights=True,
+        try_cuda=False,
+        detect_anomaly=False,
         ):
         """Predicts the future sentiment from stock data."""
         super(Cauldron, self).__init__()
         self.start_time = time.time()
-        if DEVICE_TYPE != 'cpu' and no_caching:
-            environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
-            if verbosity > 1:
-                print('Disabled CUDA memory caching.')
-            torch.cuda.empty_cache()
+        if detect_anomaly:
+            torch.autograd.set_detect_anomaly(True)
+        if not try_cuda:
+            self.DEVICE_TYPE = 'cpu'
+        else:
+            self.DEVICE_TYPE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+            if self.DEVICE_TYPE != 'cpu' and no_caching:
+                environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
+                if verbosity > 1:
+                    print('Disabled CUDA memory caching.')
+                torch.cuda.empty_cache()
+        self.DEVICE = torch.device(self.DEVICE_TYPE)
         if root_folder is None:
             root_folder = abspath(path.join(dirname(realpath(__file__)), '..'))
-            print(root_folder)
         candelabrum_path = abspath(path.join(root_folder, 'candelabrum'))
         candles_path = path.join(candelabrum_path, 'candelabrum.candles')
         symbols_path = path.join(candelabrum_path, 'candelabrum.symbols')
@@ -57,7 +62,7 @@ class Cauldron(torch.nn.Module):
             candelabrum = torch.load(candles_path)
         else:
             candelabrum = candelabrum.clone().detach()
-        candelabrum.to(DEVICE)
+        candelabrum.to(self.DEVICE)
         if symbols is None:
             with open(symbols_path, 'r') as f:
                 self.symbols = json.loads(f.read())['symbols']
@@ -68,7 +73,7 @@ class Cauldron(torch.nn.Module):
         self.pattern_range = range(n_batch)
         self.patterns = torch.zeros(
             [n_batch, 3],
-            device=DEVICE,
+            device=self.DEVICE,
             dtype=FLOAT,
             )
         self.dataset = DataLoader(
@@ -79,7 +84,7 @@ class Cauldron(torch.nn.Module):
         self.input_mask = torch.full(
             [1, n_batch],
             0.382,
-            device=DEVICE,
+            device=self.DEVICE,
             dtype=FLOAT,
             )
         self.network = torch.nn.Transformer(
@@ -93,7 +98,7 @@ class Cauldron(torch.nn.Module):
             layer_norm_eps=1.18e-6,
             batch_first=True,
             norm_first=True,
-            device=DEVICE,
+            device=self.DEVICE,
             dtype=FLOAT,
             )
         self.loss_fn = torch.nn.CrossEntropyLoss()
@@ -121,7 +126,7 @@ class Cauldron(torch.nn.Module):
         state_path = self.state_path
         try:
             if state is None:
-                state = torch.load(state_path, map_location=DEVICE_TYPE)
+                state = torch.load(state_path, map_location=self.DEVICE_TYPE)
             if 'metrics' in state:
                 self.metrics = dict(state['metrics'])
             self.load_state_dict(state['state'])
@@ -233,7 +238,6 @@ class Cauldron(torch.nn.Module):
             while depth <= n_depth:
                 state_time = time.time()
                 state = forward(inputs, mask, use_mask=True)
-                print('forward pass:', time.time() - state_time, 'seconds.')
                 loss = loss_fn(state, targets)
                 loss.backward()
                 optimizer.step()
@@ -263,7 +267,6 @@ class Cauldron(torch.nn.Module):
             self.save_state(state_path)
         if verbosity > 0:
             print(f'Training finished after {elapsed} hours.')
-        return False
 
     def validate_network(self, threshold=0.001):
         """Validates the network and store the results."""

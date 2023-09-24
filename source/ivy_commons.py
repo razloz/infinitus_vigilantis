@@ -149,32 +149,20 @@ def get_indicators(df, index_key='time'):
 
 class Javafy():
     """Handles saving and loading of Java objects."""
-
     def load(self, data=None, file_path=None):
         """Returns a Python Dictionary from a Java String."""
         javad = dict()
-        try:
-            if file_path is not None:
-                with open(file_path, 'r') as data_obj:
-                    data = data_obj.read()
-            javad = json.loads(data)
-        except Exception as details:
-            print(*details)
-        finally:
-            return javad
+        if type(file_path) == str:
+            with open(file_path, 'r') as data_obj:
+                data = data_obj.read()
+        javad = json.loads(data)
+        return javad
 
     def save(self, data=None, file_path=None):
         """Returns or saves a Java String from a Python Dictionary."""
-        javad = False
-        try:
+        if type(data) in (dict, list, tuple):
             javad = json.dumps(data)
-            if file_path is not None:
-                with open(file_path, 'w+') as data_obj:
-                    data_obj.write(javad)
-                javad = True
-            else:
-                javad = json.dumps(data)
-        except Exception as details:
-            print(*details)
-        finally:
-            return javad
+        if type(file_path) == str:
+            with open(file_path, 'w+') as data_obj:
+                data_obj.write(javad)
+        return javad
