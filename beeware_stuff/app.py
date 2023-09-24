@@ -3,9 +3,11 @@ Market Forecasting
 """
 import asyncio
 import logging
+import secrets
 import time
 import toga
 import torch
+import socket
 from io import BytesIO
 from os import path
 from os.path import abspath, dirname, getmtime, realpath
@@ -13,8 +15,6 @@ from toga import Icon
 from toga.command import Command, Group
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
-from websockets.server import serve
-from websockets.sync.client import connect
 import infinitus_vigilantis.source.ivy_commons as icy
 import infinitus_vigilantis.source.ivy_cauldron as ivy_cauldron
 from infinitus_vigilantis.screens.about import AboutScreen
@@ -66,7 +66,7 @@ async def __teapot__(*args, **kwargs):
                 if settings['run.server'] == 1:
                     if host_proc is None:
                         logging.warning('dispatching server process...')
-                        host_proc = dispatcher(__run_serve__, ftype='process')
+                        host_proc = dispatcher(__run_server__, ftype='process')
                 else:
                     if host_proc is not None:
                         logging.warning('killing server process...')
@@ -87,132 +87,108 @@ async def __teapot__(*args, **kwargs):
         await asyncio.sleep(teapot_sleep)
 
 
-async def __wss__(websocket, *args, **kwargs):
+async def __start_server__(*args, **kwargs):
     """
-    Web Socket Server for distributed learning.
+    TCP/IP Server for distributed learning.
     """
-    #_javafy = icy.Javafy()
-    #buffer_io = BytesIO()
-    #cauldron.save_state(None, to_buffer=True, buffer_io=buffer_io)
-    torch_save = torch.save
-    cauldron = ivy_cauldron.Cauldron()
+    address = ('localhost', 33333)
     root_path, settings_path = __pathing__()
-    state_path = abspath(path.join(root_path, 'cauldron', '{}.state_dict'))
-    ts = time.time()
-    async for rx in websocket:
-        ts = time.time()
-        logging.debug(f'{ts} rx type: {type(rx)}')
-        if not type(rx) == str:
-            logging.debug('received non-string data from client')
-            continue
-        if len(rx) < 10:
-            logging.debug('received malformed data from client')
-            continue
-        logging.debug(f'rx len: {len(rx)}')
-        message_type = rx[0:10]
-        logging.debug(f'message_header: {message_header}')
-        if message_type == b'^∙^,01,^∙^':
-            message_data = rx[2:]
-            logging.debug('got state dicts push request from client')
-            logging.debug(f'type: {type(message_data)}')
-            torch_save(message_data, state_path)
-            logging.debug('saved torch state')
-        elif message_type == b'^∙^,02,^∙^':
-            logging.debug('got state dicts pull request from client')
-        elif message_type == b'^∙^,03,^∙^':
-            logging.debug('got candelabrum pull request from client')
+    state_path = abspath(path.join(root_path, 'cauldron', '{}.{}.state'))
+    def __open_connection__(client_socket, address):
+        logging.info(f'{address}: connection open')
+        with client_socket as connection:
+            connection.send(b'From which old one were you spawned?')
+            while True:
+                try:
+                    data = connection.recv(1024)
+                    if not data or len(data) < 9:
+                        break
+                    data_header = data[:8]
+                    if data_header == b'00010001':
+                        nbytes = int(data[8:].decode())
+                        token = secrets.token_urlsafe(8)
+                        real_path = state_path.format(token, time.time())
+                        consumed_bytes = 0
+                        state_parts = list()
+                        connection.send(b'Feed Me!')
+                        while consumed_bytes < nbytes:
+                            chunk = connection.recv(4096)
+                            if not chunk:
+                                break
+                            state_parts.append(chunk)
+                            consumed_bytes += len(chunk)
+                        state = b''.join(state_parts)
+                        if len(state) == nbytes:
+                            with open(real_path, 'wb+') as state_file:
+                                state_file.write(state)
+                            logging.info(f'{address}: file transfer complete.')
+                            connection.send(b'My power levels are over 9000!')
+                        break
+                except Exception as details:
+                    break
+        return False
+    server_socket = socket.create_server(
+        address,
+        family=socket.AF_INET,
+        backlog=1000,
+        reuse_port=True,
+    )
+    dispatcher = icy.ivy_dispatcher
+    with server_socket as server:
+        while True:
+            connection, address = server.accept()
+            dispatcher(__open_connection__, args=[connection, address])
 
 
-async def __serve__(*args, serve_addr='localhost', serve_port='3333', **kwargs):
-    """
-    Server for collecting state_dict data.
-    """
-    logging.debug('Starting __wss__')
-    async with serve(__wss__, serve_addr, serve_port):
-        await asyncio.Future()
-
-
-def __run_serve__(*args, **kwargs):
+def __run_server__(*args, **kwargs):
     """
     Create the server thread.
     """
-    logging.debug('Starting __serve__')
-    asyncio.run(__serve__(), debug=True)
+    logging.info('*** starting __start_server__')
+    asyncio.run(__start_server__(), debug=True)
     return False
-
-
-def __push_state_dicts__(cauldron, host_addr='localhost', host_port='3333'):
-    """
-    Send state_dict to the server.
-    """
-    buffer_io = BytesIO()
-    cauldron.save_state(None, to_buffer=True, buffer_io=buffer_io)
-    state_dict = b'^∙^,01,^∙^' + buffer_io.getvalue()
-    uri = f'ws://{host_addr}:{host_port}'
-    try:
-        with connect(uri, max_size=1e13) as websocket:
-            logging.debug('pushing state dicts to server')
-            websocket.send(state_dict)
-    except Exception as details:
-        logging.error(details)
-    finally:
-        return False
-
-
-def __pull_state_dicts__(host_addr='localhost', host_port='3333'):
-    """
-    Send state_dict to the server.
-    """
-    try:
-        with connect(f'ws://{host_addr}:{host_port}') as websocket:
-            logging.debug('pulling state dicts from server')
-            websocket.send(b'^∙^,02,^∙^')
-            state_dicts = websocket.recv()
-            logging.debug(f'state_dict type: {type(state_dicts)}')
-    except Exception as details:
-        logging.error(details)
-    finally:
-        return False
-
-
-def __pull_candelabrum__(host_addr='localhost', host_port='3333'):
-    """
-    Get candelabrum from the server.
-    """
-    try:
-        logging.info('Pulling candelabrum from server.')
-        with connect(f'ws://{host_addr}:{host_port}') as websocket:
-            logging.debug(f'pulling candelabrum from server')
-            websocket.send(b'^∙^,03,^∙^')
-            candelabrum = websocket.recv()
-            logging.debug(f'candelabrum: {candelabrum.shape}')
-    except Exception as details:
-        logging.error(details)
-    finally:
-        return False
 
 
 def __study__(*args, **kwargs):
     """
     Cauldronic machine learning.
     """
+    #getsize = path.getsize
     cauldron = ivy_cauldron.Cauldron()
+    state_path = cauldron.state_path
     n_depth = 9
     hours = 1e-5
     checkpoint = 1
+    address = ('localhost', 33333)
     msg = 'Starting study with n_depth of {}, '
     msg += 'for {} hours, and a checkpoint every {} iterations.'
     msg = msg.format(n_depth, hours, checkpoint)
+    logging.debug(msg)
+    loops = 0
     while True:
+        loops += 1
+        logging.info(f'Starting loop #{loops}')
         try:
-            logging.debug(msg)
             cauldron.train_network(
                 n_depth=n_depth,
                 hours=hours,
                 checkpoint=checkpoint,
             )
-            logging.debug('Pushing state_dicts to server.')
-            __push_state_dicts__(cauldron)
+            with open(state_path, 'rb') as state_file:
+                state = state_file.read()
+            nbytes = bytes(str(len(state)), 'utf-8')
+            with socket.create_connection(address) as connection:
+                while True:
+                    message = connection.recv(1024)
+                    if not message:
+                        break
+                    elif message == b'From which old one were you spawned?':
+                        connection.send(b'00010001' + nbytes)
+                    elif message == b'Feed Me!':
+                        connection.sendall(state)
+                    elif message == b'My power levels are over 9000!':
+                        connection.shutdown(socket.SHUT_RDWR)
+                        break
         except Exception as details:
             logging.error(details)
 
@@ -276,7 +252,7 @@ class InfinitusVigilantis(toga.App):
                 'server.host.port': '3333',
                 'run.server': 0,
                 'run.study': 0,
-                'teapot.sleep': 0.333,
+                'teapot.sleep': 0.0333,
             }
             javafy.save(data=self.settings, file_path=settings_path)
         self.viewports = {
