@@ -13,7 +13,22 @@ if __name__ == '__main__':
     with open('./license/Disclaimer.txt', 'r') as f:
         DISCLAIMER = f.read()
     print(f'\n{LICENSE}\n{DISCLAIMER}\n')
-    print('Loading GUI...')
-    import source.ivy_gui as ivy
-    print('Starting IVy GUI...')
-    ivy.start_app()
+    import source.ivy_mouse as ivy
+    mice = ivy.ThreeBlindMice()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--start_learning',
+        action='store_true',
+        help='Start learning.',
+    )
+    parser.add_argument(
+        '--start_serving',
+        action='store_true',
+        help='Start the server.',
+    )
+    args = parser.parse_args()
+    if args.start_learning:
+        mice.start_learning()
+    elif args.start_serving:
+        mice.start_serving()
