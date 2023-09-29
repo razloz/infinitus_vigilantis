@@ -1,4 +1,4 @@
-from toga import Box, Button, Divider, Label, MultilineTextInput
+from toga import Box, Button, Divider, Label
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
@@ -24,14 +24,6 @@ class HomeScreen(Box):
             state_text,
             on_press=self.__start_server__,
         )
-        self.messages = MultilineTextInput(
-            readonly=True,
-            style=Pack(
-                direction=COLUMN,
-                flex=1,
-                padding=5,
-            ),
-        )
         self.status_text = Label(
             'Welcome to the Infinitus Vigilantis application.',
             style=Pack(
@@ -46,9 +38,6 @@ class HomeScreen(Box):
                 self.client_state,
                 self.server_state,
                 Divider(direction=HORIZONTAL, style=Pack(padding=5)),
-                self.messages,
-                Divider(direction=HORIZONTAL, style=Pack(padding=5)),
-                self.messages,
                 self.status_text,
             ],
             style=Pack(direction=COLUMN),

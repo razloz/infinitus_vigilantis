@@ -2,13 +2,13 @@
 Market Forecasting
 """
 import asyncio
+import hashlib
 import logging
 import secrets
+import socket
 import time
 import toga
 import torch
-import socket
-from io import BytesIO
 from os import path
 from os.path import abspath, dirname, getmtime, realpath
 from toga import Icon
@@ -22,7 +22,8 @@ from infinitus_vigilantis.screens.config import ConfigScreen
 from infinitus_vigilantis.screens.home import HomeScreen
 ROOT_PATH = dirname(realpath(__file__))
 SETTINGS_PATH = abspath(path.join(ROOT_PATH, 'resources', 'ivy.settings'))
-LOG_PATH = abspath(path.join(ROOT_PATH, 'logs', f'{time.time()}.log'))
+LOG_NAME = f'{time.time()}.log'
+LOG_PATH = abspath(path.join(ROOT_PATH, 'logs', LOG_NAME))
 logging.getLogger('asyncio').setLevel(logging.DEBUG)
 logging.basicConfig(
     filename=LOG_PATH,
@@ -62,11 +63,24 @@ async def __teapot__(*args, **kwargs):
         if tea is not None:
             settings, last_change = tea
             keys = list(settings.keys())
+            if 'host.addr' in keys:
+                host_addr = settings['host.addr']
+            else:
+                host_addr = 'localhost'
+            if 'host.port' in keys:
+                host_port = settings['host.port']
+            else:
+                host_port = '33333'
+            address = (host_addr, host_port)
             if 'run.server' in keys:
                 if settings['run.server'] == 1:
                     if host_proc is None:
                         logging.warning('dispatching server process...')
-                        host_proc = dispatcher(__run_server__, ftype='process')
+                        host_proc = dispatcher(
+                            __run_server__,
+                            args=(address,),
+                            ftype='process',
+                        )
                 else:
                     if host_proc is not None:
                         logging.warning('killing server process...')
@@ -76,7 +90,11 @@ async def __teapot__(*args, **kwargs):
                 if settings['run.study'] == 1:
                     if study_proc is None:
                         logging.warning('dispatching study process...')
-                        study_proc = dispatcher(__study__, ftype='process')
+                        study_proc = dispatcher(
+                            __study__,
+                            args=(address,),
+                            ftype='process',
+                        )
                 else:
                     if study_proc is not None:
                         logging.warning('killing study process...')
@@ -87,30 +105,40 @@ async def __teapot__(*args, **kwargs):
         await asyncio.sleep(teapot_sleep)
 
 
-async def __start_server__(*args, **kwargs):
+async def __start_server__(address, *args, **kwargs):
     """
     TCP/IP Server for distributed learning.
     """
-    address = ('localhost', 33333)
-    root_path, settings_path = __pathing__()
-    state_path = abspath(path.join(root_path, 'cauldron', '{}.{}.state'))
+    _join = path.join
+    root_path = __pathing__()[0]
+    state_path = abspath(_join(root_path, 'cauldron', '{}.{}.state'))
+    PATHING = (
+        abspath(_join(root_path,'cauldron','cauldron.state')),
+        abspath(_join(root_path,'candelabrum','candelabrum.candles')),
+        abspath(_join(root_path,'candelabrum','candelabrum.features')),
+        abspath(_join(root_path,'candelabrum','candelabrum.symbols')),
+    )
+    REQUEST_HEADERS = (
+        b'10001000',
+        b'10000100',
+        b'10000010',
+        b'10000001',
+    )
     def __open_connection__(client_socket, address):
         logging.info(f'{address}: connection open')
         with client_socket as connection:
-            connection.send(b'From which old one were you spawned?')
+            connection.sendall(b'11111111')
             while True:
                 try:
-                    data = connection.recv(1024)
+                    data = connection.recv(4096)
                     if not data or len(data) < 9:
                         break
                     data_header = data[:8]
                     if data_header == b'00010001':
                         nbytes = int(data[8:].decode())
-                        token = secrets.token_urlsafe(8)
-                        real_path = state_path.format(token, time.time())
                         consumed_bytes = 0
                         state_parts = list()
-                        connection.send(b'Feed Me!')
+                        connection.sendall(b'00010010')
                         while consumed_bytes < nbytes:
                             chunk = connection.recv(4096)
                             if not chunk:
@@ -119,12 +147,43 @@ async def __start_server__(*args, **kwargs):
                             consumed_bytes += len(chunk)
                         state = b''.join(state_parts)
                         if len(state) == nbytes:
+                            connection.sendall(b'00010100')
+                        else:
+                            break
+                    elif data_header == b'00011000':
+                        client_hash = data[8:].decode()
+                        server_hash = hashlib.sha512(state).digest()
+                        if client_hash == server_hash:
+                            token = secrets.token_urlsafe(8)
+                            real_path = state_path.format(token, time.time())
                             with open(real_path, 'wb+') as state_file:
                                 state_file.write(state)
-                            logging.info(f'{address}: file transfer complete.')
-                            connection.send(b'My power levels are over 9000!')
+                            connection.sendall(b'00000000')
+                            logging.info(f'{address}: saved {real_path}')
                         break
+                    elif data_header in REQUEST_HEADERS:
+                        header_index = REQUEST_HEADERS.index(data_header)
+                        real_path = PATHING[header_index]
+                        with open(real_path, 'rb') as requested_file:
+                            binary_file = requested_file.read()
+                        nbytes = bytes(str(len(binary_file)), 'utf-8')
+                        connection.sendall(b'00010001' + nbytes)
+                        while True:
+                            message = connection.recv(4096)
+                            if not message:
+                                break
+                            if message == b'00010010':
+                                connection.sendall(binary_file)
+                            elif message == b'00010100':
+                                file_hash = hashlib.sha512(binary_file).digest()
+                                connection.sendall(b'00011000' + file_hash)
+                            elif message == b'00000000':
+                                nbytes = 0
+                                binary_file = None
+                                logging.info(f'{address}: got {real_path}')
+                                break
                 except Exception as details:
+                    logging.error(f'{address}: {repr(details)}')
                     break
         return False
     server_socket = socket.create_server(
@@ -140,34 +199,83 @@ async def __start_server__(*args, **kwargs):
             dispatcher(__open_connection__, args=[connection, address])
 
 
-def __run_server__(*args, **kwargs):
+def __run_server__(address, *args, **kwargs):
     """
     Create the server thread.
     """
-    logging.info('*** starting __start_server__')
-    asyncio.run(__start_server__(), debug=True)
+    asyncio.run(__start_server__(address), debug=True)
     return False
 
 
-def __study__(*args, **kwargs):
+def __update_network__(address, *args, **kwargs):
+    """
+    Get current cauldron state and candelabrum files from server.
+    """
+    _join = path.join
+    root_path = __pathing__()[0]
+    PATHING = (
+        abspath(_join(root_path,'cauldron','cauldron.state')),
+        abspath(_join(root_path,'candelabrum','candelabrum.candles')),
+        abspath(_join(root_path,'candelabrum','candelabrum.features')),
+        abspath(_join(root_path,'candelabrum','candelabrum.symbols')),
+    )
+    REQUEST_HEADERS = (
+        b'10001000',
+        b'10000100',
+        b'10000010',
+        b'10000001',
+    )
+    file_path = ''
+    with socket.create_connection(address) as connection:
+        for request_header in REQUEST_HEADERS:
+            connection.sendall(request_header)
+            while True:
+                message = connection.recv(4096)
+                if not message:
+                    break
+                if len(message) < 9:
+                    break
+                data_header = data[:8]
+                if data_header == b'00010001':
+                    file_path = PATHING[REQUEST_HEADERS.index(request_header)]
+                    nbytes = int(data[8:].decode())
+                    consumed_bytes = 0
+                    file_parts = list()
+                    connection.sendall(b'00010010')
+                    while consumed_bytes < nbytes:
+                        chunk = connection.recv(4096)
+                        if not chunk:
+                            break
+                        file_parts.append(chunk)
+                        consumed_bytes += len(chunk)
+                    binary_file = b''.join(file_parts)
+                    if len(binary_file) == nbytes:
+                        connection.sendall(b'00010100')
+                    else:
+                        break
+                elif data_header == b'00011000':
+                    server_hash = data[8:].decode()
+                    client_hash = hashlib.sha512(binary_file).digest()
+                    if client_hash == server_hash:
+                        with open(file_path, 'wb+') as local_file:
+                            local_file.write(binary_file)
+                        connection.sendall(b'00000000')
+                    break
+
+
+def __study__(address, *args, **kwargs):
     """
     Cauldronic machine learning.
     """
-    #getsize = path.getsize
+    __update_network__(address)
     cauldron = ivy_cauldron.Cauldron()
     state_path = cauldron.state_path
     n_depth = 9
-    hours = 1e-5
-    checkpoint = 1
-    address = ('localhost', 33333)
-    msg = 'Starting study with n_depth of {}, '
-    msg += 'for {} hours, and a checkpoint every {} iterations.'
-    msg = msg.format(n_depth, hours, checkpoint)
-    logging.debug(msg)
+    hours = 0.5
+    checkpoint = 1000
     loops = 0
     while True:
         loops += 1
-        logging.info(f'Starting loop #{loops}')
         try:
             cauldron.train_network(
                 n_depth=n_depth,
@@ -179,18 +287,21 @@ def __study__(*args, **kwargs):
             nbytes = bytes(str(len(state)), 'utf-8')
             with socket.create_connection(address) as connection:
                 while True:
-                    message = connection.recv(1024)
+                    message = connection.recv(4096)
                     if not message:
                         break
-                    elif message == b'From which old one were you spawned?':
-                        connection.send(b'00010001' + nbytes)
-                    elif message == b'Feed Me!':
+                    elif message == b'11111111':
+                        connection.sendall(b'00010001' + nbytes)
+                    elif message == b'00010010':
                         connection.sendall(state)
-                    elif message == b'My power levels are over 9000!':
-                        connection.shutdown(socket.SHUT_RDWR)
+                    elif message == b'00010100':
+                        file_hash = hashlib.sha512(state).digest()
+                        connection.sendall(b'00011000' + file_hash)
+                    elif message == b'00000000':
+                        state = None
                         break
         except Exception as details:
-            logging.error(details)
+            logging.error(repr(details))
 
 
 class InfinitusVigilantis(toga.App):
@@ -216,20 +327,6 @@ class InfinitusVigilantis(toga.App):
         """
         self.main_window.content = self.viewports['home']
 
-    async def __check_log__(self, *args, **kwargs):
-        log_path = self.log_path
-        while True:
-            last_change = self.log_change
-            change = getmtime(log_path)
-            if change > last_change:
-                with open(log_path, 'r') as log_file:
-                    log_data = log_file.read()
-                self.log_change = change
-                self.viewports['home'].messages.value = log_data
-                self.viewports['home'].messages.value += '\n'
-                self.viewports['home'].messages.scroll_to_bottom()
-            await asyncio.sleep(0.5)
-
     def startup(self):
         """
         Construct and show the Toga application.
@@ -239,6 +336,7 @@ class InfinitusVigilantis(toga.App):
         HORIZONTAL = Divider.HORIZONTAL
         VERTICAL = Divider.VERTICAL
         WINDOW = Group.WINDOW
+        self.log_name = LOG_NAME
         self.log_path = LOG_PATH
         self.log_change = 0
         root_path, settings_path = __pathing__()
@@ -246,13 +344,11 @@ class InfinitusVigilantis(toga.App):
             self.settings = javafy.load(file_path=settings_path)
         else:
             self.settings = {
-                'client.host.addr': 'localhost',
-                'client.host.port': '3333',
-                'server.host.addr': 'localhost',
-                'server.host.port': '3333',
+                'host.addr': 'localhost',
+                'host.port': '33333',
                 'run.server': 0,
                 'run.study': 0,
-                'teapot.sleep': 0.0333,
+                'teapot.sleep': 0.05,
             }
             javafy.save(data=self.settings, file_path=settings_path)
         self.viewports = {
@@ -298,7 +394,6 @@ class InfinitusVigilantis(toga.App):
         self.settings_path = settings_path
         self.main_window.show()
         self.add_background_task(__teapot__)
-        self.add_background_task(self.__check_log__)
 
     def update_param(self, param, value):
         """
