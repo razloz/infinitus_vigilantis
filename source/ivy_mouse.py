@@ -31,8 +31,14 @@ __copyright__ = 'Copyright 2023, Daniel Ward'
 __license__ = 'GPL v3'
 
 
-def chit_chat(msg, log_level=0, log_msg=True, print_msg=True):
+def chit_chat(msg, log_level=0, log_msg=True, print_msg=True, timestamp=True):
+    """
+    Talk with the mice over a nice cup of tea.
+    """
     msg = repr(msg) if not type(msg) == str else msg
+    if timestamp:
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        msg = f'{timestamp} {msg}'
     if print_msg:
         print(msg)
     if log_msg:
@@ -52,16 +58,14 @@ async def __start_server__(address, *args, **kwargs):
     """
     def __open_connection__(client_socket, address):
         with client_socket as connection:
-            chit_chat(f'{address}: connection open')
+            chit_chat(f'{address[0]}: connection open')
             connection.sendall(b'11111111')
             while True:
                 try:
-                    chit_chat(f'{address}: awaiting messages')
                     data = connection.recv(4096)
                     if not data or len(data) < 8:
                         break
                     data_header = data[:8]
-                    chit_chat(f'{address}: got {data_header.decode()}')
                     if data_header == b'00010001':
                         nbytes = int(data[8:].decode())
                         consumed_bytes = 0
@@ -87,7 +91,8 @@ async def __start_server__(address, *args, **kwargs):
                             with open(real_path, 'wb+') as state_file:
                                 state_file.write(state)
                             connection.sendall(b'00000000')
-                            chit_chat(f'{address}: saved {real_path}')
+                            chit_chat(f'{address[0]}: state transfer complete')
+                            chit_chat(f'{address[0]}: saved to {real_path}')
                         break
                     elif data_header in REQUEST_HEADERS:
                         header_index = REQUEST_HEADERS.index(data_header)
@@ -108,13 +113,16 @@ async def __start_server__(address, *args, **kwargs):
                             elif data == b'00000000':
                                 nbytes = 0
                                 binary_file = None
-                                chit_chat(f'{address}: got {real_path}')
                                 connection.sendall(b'11111111')
+                                chit_chat(f'{address[0]}: sent updated file')
                                 break
+                    else:
+                        chit_chat(f'{address[0]}: got malformed data header')
+                        break
                 except Exception as details:
-                    chit_chat(f'{address}: {repr(details)}')
+                    chit_chat(f'{address[0]}: {repr(details)}')
                     break
-        chit_chat(f'{address}: connection closed')
+        chit_chat(f'{address[0]}: connection closed')
         return False
     server_socket = socket.create_server(
         address,
@@ -134,21 +142,19 @@ def __update_network__(address, *args, **kwargs):
     Get current cauldron state and candelabrum files from server.
     """
     with socket.create_connection(address) as connection:
-        chit_chat(f'__update_network__: opened connection with {repr(address)}')
-        for request_header in REQUEST_HEADERS:
-            chit_chat(f'__update_network__: sending {request_header.decode()}')
+        chit_chat(f'{address[0]}: connected... updating...')
+        for header_id, request_header in enumerate(REQUEST_HEADERS):
+            chit_chat(f'{address[0]}: requesting file #{header_id + 1}')
             try:
                 while True:
                     data = connection.recv(4096)
                     if not data or len(data) < 8:
                         break
                     data_header = data[:8]
-                    chit_chat(f'__update_network__: got {data_header.decode()}')
                     if data_header == b'11111111':
                         connection.sendall(request_header)
                     elif data_header == b'00010001':
-                        file_index = REQUEST_HEADERS.index(request_header)
-                        file_path = PATHING[file_index]
+                        file_path = PATHING[header_id]
                         nbytes = int(data[8:].decode())
                         consumed_bytes = 0
                         file_parts = list()
@@ -171,10 +177,18 @@ def __update_network__(address, *args, **kwargs):
                             with open(file_path, 'wb+') as local_file:
                                 local_file.write(binary_file)
                             connection.sendall(b'00000000')
+                            chit_chat(f'{address[0]}: got file {file_path}')
+                        else:
+                            chit_chat(f'{address[0]}: file hash mismatch')
+                        break
+                    else:
+                        chit_chat(f'{address[0]}: got malformed data header')
                         break
             except Exception as details:
-                chit_chat(f'__update_network__: {repr(details)}')
+                chit_chat(f'{address[0]}: {repr(details)}')
                 break
+        chit_chat(f'{address[0]}: exited update loop')
+    chit_chat(f'{address[0]}: connection closed')
 
 
 def __study__(address, *args, n_depth=9, hours=0.5, checkpoint=1000, **kwargs):
@@ -187,7 +201,7 @@ def __study__(address, *args, n_depth=9, hours=0.5, checkpoint=1000, **kwargs):
     while True:
         try:
             loops += 1
-            chit_chat(f'__study__: Starting loop #{loops}')
+            chit_chat(f'ThreeBlindMice: Starting loop #{loops}')
             cauldron.train_network(
                 n_depth=n_depth,
                 hours=hours,
@@ -197,7 +211,7 @@ def __study__(address, *args, n_depth=9, hours=0.5, checkpoint=1000, **kwargs):
                 state = state_file.read()
             nbytes = bytes(str(len(state)), 'utf-8')
             with socket.create_connection(address) as connection:
-                chit_chat(f'__study__: opened connection with {repr(address)}')
+                chit_chat(f'{address[0]}: connected... pushing state...')
                 while True:
                     data = connection.recv(4096)
                     if not data:
@@ -205,18 +219,17 @@ def __study__(address, *args, n_depth=9, hours=0.5, checkpoint=1000, **kwargs):
                     elif data == b'11111111':
                         connection.sendall(b'00010001' + nbytes)
                     elif data == b'00010010':
-                        chit_chat('__study__: sending state to server')
                         connection.sendall(state)
                     elif data == b'00010100':
                         file_hash = hashlib.sha512(state).digest()
                         connection.sendall(b'00011000' + file_hash)
                     elif data == b'00000000':
-                        chit_chat('__study__: got success code from server')
+                        chit_chat(f'{address[0]}: state transfer complete')
                         state = None
                         break
+            chit_chat(f'{address[0]}: connection closed')
         except Exception as details:
-            chit_chat(details)
-
+            chit_chat(f'{address[0]}: {repr(details)}')
 
 
 class ThreeBlindMice():

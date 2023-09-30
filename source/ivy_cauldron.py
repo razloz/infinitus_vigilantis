@@ -30,7 +30,7 @@ class Cauldron(torch.nn.Module):
         verbosity=0,
         no_caching=True,
         set_weights=True,
-        try_cuda=False,
+        try_cuda=True,
         detect_anomaly=False,
         ):
         """Predicts the future sentiment from stock data."""
@@ -38,16 +38,17 @@ class Cauldron(torch.nn.Module):
         self.start_time = time.time()
         if detect_anomaly:
             torch.autograd.set_detect_anomaly(True)
-        if not try_cuda:
-            self.DEVICE_TYPE = 'cpu'
-        else:
+        if try_cuda:
             self.DEVICE_TYPE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
             if self.DEVICE_TYPE != 'cpu' and no_caching:
                 environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
                 if verbosity > 1:
                     print('Disabled CUDA memory caching.')
                 torch.cuda.empty_cache()
+        else:
+            self.DEVICE_TYPE = 'cpu'
         self.DEVICE = torch.device(self.DEVICE_TYPE)
+        self.to(self.DEVICE)
         if root_folder is None:
             root_folder = abspath(path.join(dirname(realpath(__file__)), '..'))
         candelabrum_path = abspath(path.join(root_folder, 'candelabrum'))
@@ -55,11 +56,14 @@ class Cauldron(torch.nn.Module):
         symbols_path = path.join(candelabrum_path, 'candelabrum.symbols')
         network_path = path.join(root_folder, 'cauldron')
         if not path.exists(network_path):
-                mkdir(network_path)
+            mkdir(network_path)
         self.state_path = path.join(network_path, 'cauldron.state')
         self.session_path = path.join(network_path, f'{self.start_time}.state')
         if candelabrum is None:
-            candelabrum = torch.load(candles_path)
+            candelabrum = torch.load(
+                candles_path,
+                map_location=self.DEVICE_TYPE,
+                )
         else:
             candelabrum = candelabrum.clone().detach()
         candelabrum.to(self.DEVICE)
@@ -129,9 +133,12 @@ class Cauldron(torch.nn.Module):
                 state = torch.load(state_path, map_location=self.DEVICE_TYPE)
             if 'metrics' in state:
                 self.metrics = dict(state['metrics'])
-            self.load_state_dict(state['state'])
-            self.optimizer.load_state_dict(state['optimizer'])
-            self.network.load_state_dict(state['network'])
+            if 'state' in state:
+                self.load_state_dict(state['state'])
+            if 'optimizer' in state:
+                self.optimizer.load_state_dict(state['optimizer'])
+            if 'network' in state:
+                self.network.load_state_dict(state['network'])
         except FileNotFoundError:
             i = (1 / 137) ** 3
             if self.verbosity > 0:
