@@ -113,53 +113,6 @@ class Candelabrum:
         else:
             self._QUEUE.join()
 
-    def make_offering(self, paterae, cook_time=None, epochs=-1):
-        """Spend time with the Norn researching candles."""
-        from torch import load
-        abspath = path.abspath
-        prefix = self._PREFIX
-        if type(paterae) not in [list, tuple]:
-            paterae = ivy_watchlist
-            #paterae = random.sample(paterae, k=len(paterae))
-        epoch = 0
-        aeternalis = True
-        offerings = list()
-        print(prefix, f'Gathering daily candles.')
-        offerings = load(abspath('./candelabrum/candelabrum.candles'))
-        with open(abspath('./candelabrum/candelabrum.symbols'), 'r') as f:
-            symbols = json.loads(f.read())['symbols']
-        if len(symbols) != offerings.shape[0]:
-            print('Symbol length mismatch.')
-            return False
-        if cook_time:
-            moirai = ThreeBlindMice(
-                ivy_watchlist,
-                offerings,
-                cook_time=cook_time,
-                verbosity=1,
-                )
-        else:
-            moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
-        while aeternalis:
-            trade_array = moirai.research()
-            epoch += 1
-            if epoch == epochs:
-                aeternalis = False
-
-    def trade_signals(self, freeze=False):
-        from torch import load
-        abspath = path.abspath
-        prefix = self._PREFIX
-        print(prefix, f'Gathering daily candles.')
-        offerings = load(abspath('./candelabrum/candelabrum.candles'))
-        with open(abspath('./candelabrum/candelabrum.symbols'), 'r') as f:
-            symbols = json.loads(f.read())['symbols']
-        if len(symbols) != offerings.shape[0]:
-            print('Symbol length mismatch.')
-            return False
-        moirai = ThreeBlindMice(ivy_watchlist, offerings, verbosity=1)
-        moirai.trade(freeze=freeze)
-
 def candle_maker(candles):
     """Makes a candle."""
     if len(candles) > 0 and type(candles) == pd.Series:

@@ -6,11 +6,12 @@ import secrets
 import socket
 import time
 import torch
-from os import path
+from os import path, listdir
 from os.path import abspath, dirname, getmtime, realpath
 import source.ivy_commons as icy
 import source.ivy_cauldron as ivy_cauldron
 ROOT_PATH = dirname(realpath(__file__))
+CAULDRON_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron'))
 LOG_PATH = abspath(path.join(ROOT_PATH, '..', 'logs', f'{time.time()}.log'))
 STATE_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron', '{}.{}.state'))
 SETTINGS_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.settings'))
@@ -56,10 +57,13 @@ async def __start_server__(address, *args, **kwargs):
     """
     TCP/IP Server for distributed learning.
     """
+    update_key = secrets.token_urlsafe(32)
+    chit_chat(f'Server: update_key is {update_key}')
+    update_key = bytes(update_key, 'utf-8')
     def __open_connection__(client_socket, address):
         with client_socket as connection:
             chit_chat(f'{address[0]}: connection open')
-            connection.sendall(b'11111111')
+            connection.sendall(b'11111111' + update_key)
             while True:
                 try:
                     data = connection.recv(4096)
@@ -113,7 +117,7 @@ async def __start_server__(address, *args, **kwargs):
                             elif data == b'00000000':
                                 nbytes = 0
                                 binary_file = None
-                                connection.sendall(b'11111111')
+                                connection.sendall(b'11111111' + update_key)
                                 chit_chat(f'{address[0]}: sent updated file')
                                 break
                     else:
@@ -141,6 +145,7 @@ def __update_network__(address, *args, **kwargs):
     """
     Get current cauldron state and candelabrum files from server.
     """
+    update_key = ''
     with socket.create_connection(address) as connection:
         chit_chat(f'{address[0]}: connected... updating...')
         for header_id, request_header in enumerate(REQUEST_HEADERS):
@@ -152,6 +157,7 @@ def __update_network__(address, *args, **kwargs):
                         break
                     data_header = data[:8]
                     if data_header == b'11111111':
+                        update_key = data[8:]
                         connection.sendall(request_header)
                     elif data_header == b'00010001':
                         file_path = PATHING[header_id]
@@ -189,16 +195,18 @@ def __update_network__(address, *args, **kwargs):
                 break
         chit_chat(f'{address[0]}: exited update loop')
     chit_chat(f'{address[0]}: connection closed')
+    return update_key
 
 
-def __study__(address, *args, n_depth=9, hours=0.5, checkpoint=1000, **kwargs):
+def __study__(address, update_key, n_depth=9, hours=0.5, checkpoint=1000):
     """
     Cauldronic machine learning.
     """
-    cauldron = ivy_cauldron.Cauldron(try_cuda=True)
+    cauldron = ivy_cauldron.Cauldron()
     state_path = cauldron.state_path
     loops = 0
     while True:
+        new_key = update_key
         try:
             loops += 1
             chit_chat(f'ThreeBlindMice: Starting loop #{loops}')
@@ -214,28 +222,93 @@ def __study__(address, *args, n_depth=9, hours=0.5, checkpoint=1000, **kwargs):
                 chit_chat(f'{address[0]}: connected... pushing state...')
                 while True:
                     data = connection.recv(4096)
-                    if not data:
+                    if not data or len(data) < 8:
                         break
-                    elif data == b'11111111':
+                    data_header = data[:8]
+                    if data_header == b'11111111':
+                        new_key = data[8:]
                         connection.sendall(b'00010001' + nbytes)
-                    elif data == b'00010010':
+                    elif data_header == b'00010010':
                         connection.sendall(state)
-                    elif data == b'00010100':
+                    elif data_header == b'00010100':
                         file_hash = hashlib.sha512(state).digest()
                         connection.sendall(b'00011000' + file_hash)
-                    elif data == b'00000000':
+                    elif data_header == b'00000000':
                         chit_chat(f'{address[0]}: state transfer complete')
                         state = None
                         break
             chit_chat(f'{address[0]}: connection closed')
         except Exception as details:
             chit_chat(f'{address[0]}: {repr(details)}')
+        if new_key != update_key:
+            chit_chat(f'{address[0]}: update available')
+            update_key = __update_network__(address)
+
+
+def __merge_states__(*args, **kwargs):
+    """
+    Load client cauldron states and merge with server state.
+    """
+    from os import remove as __remove_file__
+    TENSOR = torch.Tensor
+    def __merge_params__(client_state, server_state):
+        for key, value in client_state.items():
+            if type(value) == TENSOR and key in server_state:
+                server_state[key] = (server_state[key] + value) / 2
+        return server_state
+    __path_exists__ = path.exists
+    __path_join__ = path.join
+    state_path = str(PATHING[0])
+    cauldron_folder = CAULDRON_PATH
+    cauldron_files = listdir(CAULDRON_PATH)
+    client_cauldron = ivy_cauldron.Cauldron()
+    server_cauldron = ivy_cauldron.Cauldron()
+    chit_chat('ThreeBlindMice: loading server state')
+    server_cauldron.load_state(state_path=state_path)
+    for file_name in cauldron_files:
+        if file_name == 'cauldron.state':
+            continue
+        if '.state' in file_name and file_name[-6:] == '.state':
+            chit_chat(f'ThreeBlindMice: merging {file_name}')
+            file_path = None
+            try:
+                file_path = __path_join__(cauldron_folder, file_name)
+                client_cauldron.load_state(state_path=file_path)
+                server_cauldron.load_state_dict(
+                    __merge_params__(
+                        client_cauldron.state_dict(),
+                        server_cauldron.state_dict(),
+                    )
+                )
+                server_cauldron.network.load_state_dict(
+                    __merge_params__(
+                        client_cauldron.network.state_dict(),
+                        server_cauldron.network.state_dict(),
+                    )
+                )
+                server_cauldron.optimizer.load_state_dict(
+                    __merge_params__(
+                        client_cauldron.optimizer.state_dict(),
+                        server_cauldron.optimizer.state_dict(),
+                    )
+                )
+                server_cauldron.save_state(state_path)
+            except Exception as details:
+                chit_chat(f'ThreeBlindMice: {repr(details)}')
+                continue
+            if file_path and __path_exists__(file_path):
+                __remove_file__(file_path)
+    chit_chat('ThreeBlindMice: merge complete')
 
 
 class ThreeBlindMice():
-    """Let the daughters of necessity shape the candles of the future."""
+    """
+    Let the daughters of necessity shape the candles of the future.
+    """
     def __init__(self):
-        """Beckon the Norn."""
+        """
+        Beckon the Norn.
+        """
         logging.getLogger('asyncio').setLevel(logging.DEBUG)
         logging.basicConfig(
             filename=LOG_PATH,
@@ -259,22 +332,37 @@ class ThreeBlindMice():
         self.address = (self.host_addr, self.host_port)
         chit_chat('ThreeBlindMice: beckoning the Norn')
 
-    def start_serving(self, *args, debug=False, **kwargs):
-        """Create server thread."""
-        chit_chat('ThreeBlindMice: creating server thread')
-        asyncio.run(__start_server__(self.address), debug=debug)
+    def merge_states(self, *args, **kwargs):
+        """
+        Take state files and merge values with server.
+        """
+        chit_chat(f'ThreeBlindMice: merging client states with server')
+        try:
+            __merge_states__()
+        except Exception as details:
+            chit_chat(f'ThreeBlindMice: {repr(details)}')
 
-    def start_learning(self, *args, debug=False, **kwargs):
-        """Create study thread."""
+    def start_learning(self, *args, **kwargs):
+        """
+        Create study thread.
+        """
         n_depth = int(self.settings['n_depth'])
         hours = float(self.settings['hours'])
         checkpoint = int(self.settings['checkpoint'])
         chit_chat('ThreeBlindMice: updating neural network')
-        __update_network__(self.address)
+        update_key = __update_network__(self.address)
         chit_chat('ThreeBlindMice: creating study thread')
         __study__(
             self.address,
+            update_key,
             n_depth=n_depth,
             hours=hours,
             checkpoint=checkpoint,
         )
+
+    def start_serving(self, *args, debug=False, **kwargs):
+        """
+        Create server thread.
+        """
+        chit_chat('ThreeBlindMice: creating server thread')
+        asyncio.run(__start_server__(self.address), debug=debug)

@@ -125,9 +125,10 @@ class Cauldron(torch.nn.Module):
         self.target_index = target_index
         self.load_state()
 
-    def load_state(self, state=None):
+    def load_state(self, state_path=None, state=None):
         """Loads the Module."""
-        state_path = self.state_path
+        if state_path is None:
+            state_path = self.state_path
         try:
             if state is None:
                 state = torch.load(state_path, map_location=self.DEVICE_TYPE)
