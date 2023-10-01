@@ -40,7 +40,7 @@ if __name__ == '__main__':
         if not args.build:
             candelabrum = updater.Candelabrum()
     else:
-        raise('Missing argument.')
+        raise(Exception('Missing argument.'))
     if args.build:
         updater.build_historical_database()
     elif args.clean:
