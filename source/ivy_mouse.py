@@ -1,20 +1,26 @@
 """Three blind mice to predict the future."""
 import asyncio
 import hashlib
+import json
 import logging
+import pandas
+import pickle
 import secrets
 import socket
 import time
 import torch
-from os import path, listdir
-from os.path import abspath, dirname, getmtime, realpath
 import source.ivy_commons as icy
 import source.ivy_cauldron as ivy_cauldron
+import source.ivy_https as ivy_https
+from os import path, listdir
+from os.path import abspath, dirname, getmtime, realpath
+from source.ivy_cartography import cartography
 ROOT_PATH = dirname(realpath(__file__))
 CAULDRON_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron'))
 LOG_PATH = abspath(path.join(ROOT_PATH, '..', 'logs', f'{time.time()}.log'))
 STATE_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron', '{}.{}.state'))
 SETTINGS_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.settings'))
+HTTPS_PATH = abspath(path.join(ROOT_PATH, '..', 'https'))
 PATHING = (
     abspath(path.join(ROOT_PATH, '..', 'cauldron', 'cauldron.state')),
     abspath(path.join(ROOT_PATH, '..', 'candelabrum', 'candelabrum.candles')),
@@ -243,6 +249,7 @@ def __study__(address, update_key, n_depth=9, hours=0.5, checkpoint=1000):
         if new_key != update_key:
             chit_chat(f'{address[0]}: update available')
             update_key = __update_network__(address)
+            cauldron = ivy_cauldron.Cauldron()
 
 
 def __merge_states__(*args, **kwargs):
@@ -364,5 +371,35 @@ class ThreeBlindMice():
         """
         Create server thread.
         """
-        chit_chat('ThreeBlindMice: creating server thread')
+        chit_chat('ThreeBlindMice: building website')
+        self.build_https()
+        chit_chat('ThreeBlindMice: starting server')
         asyncio.run(__start_server__(self.address), debug=debug)
+
+    def build_https(self):
+        from pandas import read_csv
+        candles_path = abspath(path.join(ROOT_PATH, '..', 'candelabrum'))
+        https_path = HTTPS_PATH
+        charts_path = abspath(path.join(https_path, 'charts'))
+        cauldron = ivy_cauldron.Cauldron()
+        #chit_chat('build_https: validating neural network')
+        #cauldron.validate_network()
+        chit_chat('build_https: inscribing sigils')
+        metrics = cauldron.inscribe_sigil(charts_path)
+        symbols = cauldron.symbols
+        candelabrum = cauldron.candelabrum
+        with open(PATHING[2], 'rb') as features_file:
+            features = pickle.load(features_file)
+        # chit_chat('build_https: plotting charts')
+        # for symbol in symbols:
+            # chart_path = abspath(path.join(charts_path, f'{symbol}_market.png'))
+            # candles = abspath(path.join(candles_path, f'{symbol}.ivy'))
+            # candles = read_csv(candles)
+            # candles.set_index('time', inplace=True)
+            # cartography(symbol, candles, chart_path=chart_path, chart_size=365)
+        chit_chat('build_https: building html documents')
+        cabinet = ivy_https.build(symbols, features, candelabrum, metrics)
+        for file_path, file_data in cabinet.items():
+            file_path = abspath(path.join(https_path, file_path))
+            with open(file_path, 'w+') as html_file:
+                html_file.write(file_data)

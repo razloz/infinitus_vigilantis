@@ -1,6 +1,7 @@
 """Transformer-based Sentiment Rank generator."""
 import torch
 import json
+import pickle
 import time
 from random import randint
 from os import path, mkdir, environ
@@ -51,6 +52,7 @@ class Cauldron(torch.nn.Module):
         self.to(self.DEVICE)
         if root_folder is None:
             root_folder = abspath(path.join(dirname(realpath(__file__)), '..'))
+        self.root_folder = root_folder
         candelabrum_path = abspath(path.join(root_folder, 'candelabrum'))
         candles_path = path.join(candelabrum_path, 'candelabrum.candles')
         symbols_path = path.join(candelabrum_path, 'candelabrum.symbols')
@@ -58,6 +60,7 @@ class Cauldron(torch.nn.Module):
         if not path.exists(network_path):
             mkdir(network_path)
         self.state_path = path.join(network_path, 'cauldron.state')
+        self.validation_path = path.join(network_path, 'cauldron.validation')
         self.session_path = path.join(network_path, f'{self.start_time}.state')
         if candelabrum is None:
             candelabrum = torch.load(
@@ -68,8 +71,8 @@ class Cauldron(torch.nn.Module):
             candelabrum = candelabrum.clone().detach()
         candelabrum.to(self.DEVICE)
         if symbols is None:
-            with open(symbols_path, 'r') as f:
-                self.symbols = json.loads(f.read())['symbols']
+            with open(symbols_path, 'rb') as f:
+                self.symbols = pickle.load(f)
         n_batch = 6
         n_slice = n_batch * 2
         n_time, n_symbols, n_data = candelabrum.shape
@@ -207,13 +210,13 @@ class Cauldron(torch.nn.Module):
         else:
             return pattern
 
-    def forward(self, inputs, mask, use_mask=True):
+    def forward(self, inputs, mask, use_mask=True, softmax=True):
         """Takes batched inputs and returns the future sentiment."""
         if use_mask:
             state = self.network(inputs * mask, inputs)
         else:
             state = self.network(inputs, inputs)
-        return self.encoder(state)
+        return self.encoder(state, softmax=softmax)
 
     def train_network(self, n_depth=9, hours=96, checkpoint=60, validate=False):
         """Studies masked random batches for a specified amount of hours."""
@@ -276,7 +279,7 @@ class Cauldron(torch.nn.Module):
         if verbosity > 0:
             print(f'Training finished after {elapsed} hours.')
 
-    def validate_network(self, threshold=0.001):
+    def validate_network(self):
         """Validates the network and store the results."""
         dataset = self.dataset
         verbosity = self.verbosity
@@ -307,29 +310,18 @@ class Cauldron(torch.nn.Module):
             epoch_time = time.time()
             batch = batch[0].transpose(0, 1)
             for symbol in symbol_range:
-                time_track = time.time()
                 inputs = batch[symbol, :n_batch, input_index].view(1, n_batch)
                 targets = batch[symbol, n_batch:, target_index].view(1, n_batch)
-                print('select data:', time.time() - time_track, 'seconds.')
-                time_track = time.time()
                 state = forward(inputs, None, use_mask=False).flatten()
-                print('encode state:', time.time() - time_track, 'seconds.')
-                time_track = time.time()
                 targets = encoder(targets, softmax=False).flatten()
-                print('encode targets:', time.time() - time_track, 'seconds.')
-                time_track = time.time()
                 state_pred = topk(state, n_batch, largest=True, sorted=False)
                 target_pred = topk(targets, n_batch, largest=True, sorted=False)
-                print('topk:', time.time() - time_track, 'seconds.')
-                time_track = time.time()
                 state_pred = state_pred.indices
                 target_pred = target_pred.indices
                 correct = 0
                 for i in batch_range:
                     if state_pred[i] == target_pred[i]:
                         correct += 1
-                print('check correct:', time.time() - time_track, 'seconds.')
-                time_track = time.time()
                 error = correct / n_batch
                 if symbol not in results.keys():
                     results[symbol] = dict()
@@ -342,14 +334,45 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['total'] += n_batch
                 n_correct += correct
                 n_total += n_batch
-                print('store results:', time.time() - time_track, 'seconds.')
-                print('correct:', correct, 'out of', n_batch, '(', error, ')')
             ts = time.time()
             elapsed = ((ts - start_time) / 60) / 60
             epoch_time = (ts - epoch_time) / 60
-            print('n_correct / n_total:', n_correct, '/', n_total)
-            print('epoch:', epoch_time, 'minutes.')
-            print('elapsed:', elapsed, 'hours.')
-        print(batches)
-        print(results)
+            results['validation.metrics'] = {
+                'elapsed_hours': elapsed,
+                'epoch_time_minutes': epoch_time,
+                'n_correct': n_correct,
+                'n_total': n_total,
+                }
+        with open(self.validation_path, 'wb+') as validation_file:
+            pickle.dump(results, validation_file)
 
+    def inscribe_sigil(self, charts_path):
+        """Plot final batch predictions from the candelabrum."""
+        import matplotlib.pyplot as plt
+        plt.rcParams['figure.figsize'] = [10, 2]
+        symbols = self.symbols
+        n_batch = self.n_batch
+        forward = self.forward
+        input_index = self.input_index
+        candelabrum = self.candelabrum[-n_batch:].transpose(0, 1)
+        forecast_path = path.join(charts_path, '{0}_forecast.png')
+        self.eval()
+        for index in range(len(symbols)):
+            inputs = candelabrum[index, :, input_index].view(1, n_batch)
+            sigil = forward(inputs, None, use_mask=False)
+            lines = list()
+            for prob in sigil.split(1):
+                case = prob.flatten().argmax(0)
+                if case == 0:
+                    lines.append(1)
+                elif case == 1:
+                    lines.append(0)
+                elif case == 2:
+                    lines.append(-1)
+            plt.plot(lines)
+            plt.savefig(forecast_path.format(symbols[index]))
+            plt.clf()
+            plt.close()
+        with open(self.validation_path, 'rb') as validation_file:
+            metrics = pickle.load(validation_file)
+        return metrics

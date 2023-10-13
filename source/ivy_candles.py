@@ -205,9 +205,9 @@ def build_historical_database(start_date='2018-01-01'):
     candelabrum = stack(candelabrum).transpose(0, 1)
     candelabrum = candelabrum[market_days]
     save(candelabrum, p.format('candelabrum.candles'))
-    with open(path.abspath('./candelabrum/candelabrum.symbols'), 'w+') as f:
-        f.write(json.dumps(dict(symbols=list(candles.keys()))))
-    with open(path.abspath('./candelabrum/candelabrum.features'), 'w+') as f:
-        f.write(json.dumps(dict(columns=list(cdls.keys()))))
+    with open(path.abspath('./candelabrum/candelabrum.symbols'), 'wb+') as f:
+        pickle.dump(list(candles.keys()), f)
+    with open(path.abspath('./candelabrum/candelabrum.features'), 'wb+') as f:
+        pickle.dump(list(cdls.keys()), f)
     m = 'Candelabrum created with {} candles for {} symbols with {} features.'
     print(msg.format(m.format(*candelabrum.shape)))
