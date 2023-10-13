@@ -382,21 +382,21 @@ class ThreeBlindMice():
         https_path = HTTPS_PATH
         charts_path = abspath(path.join(https_path, 'charts'))
         cauldron = ivy_cauldron.Cauldron()
-        #chit_chat('build_https: validating neural network')
-        #cauldron.validate_network()
+        chit_chat('build_https: validating neural network')
+        cauldron.validate_network()
         chit_chat('build_https: inscribing sigils')
         metrics = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
         candelabrum = cauldron.candelabrum
         with open(PATHING[2], 'rb') as features_file:
             features = pickle.load(features_file)
-        # chit_chat('build_https: plotting charts')
-        # for symbol in symbols:
-            # chart_path = abspath(path.join(charts_path, f'{symbol}_market.png'))
-            # candles = abspath(path.join(candles_path, f'{symbol}.ivy'))
-            # candles = read_csv(candles)
-            # candles.set_index('time', inplace=True)
-            # cartography(symbol, candles, chart_path=chart_path, chart_size=365)
+        chit_chat('build_https: plotting charts')
+        for symbol in symbols:
+            chart_path = abspath(path.join(charts_path, f'{symbol}_market.png'))
+            candles = abspath(path.join(candles_path, f'{symbol}.ivy'))
+            candles = read_csv(candles)
+            candles.set_index('time', inplace=True)
+            cartography(symbol, candles, chart_path=chart_path, chart_size=365)
         chit_chat('build_https: building html documents')
         cabinet = ivy_https.build(symbols, features, candelabrum, metrics)
         for file_path, file_data in cabinet.items():
