@@ -258,52 +258,82 @@ def __merge_states__(*args, **kwargs):
     """
     from os import remove as __remove_file__
     TENSOR = torch.Tensor
-    def __merge_params__(client_state, server_state):
-        for key, value in client_state.items():
-            if type(value) == TENSOR and key in server_state:
-                server_state[key] = (server_state[key] + value) / 2
-        return server_state
+    cauldron_folder = CAULDRON_PATH
+    cauldron_files = listdir(cauldron_folder)
+    state_count = sum([1 if p[-6:] == '.state' else 0 for p in cauldron_files])
+    def __merge_params__(old_state, new_state, finalize=False):
+        for key, value in new_state.items():
+            if type(value) == TENSOR and key in old_state:
+                if finalize:
+                    old_state[key] = (old_state[key] + value) / 2
+                else:
+                    old_state[key] += value * state_count
+        return old_state
     __path_exists__ = path.exists
     __path_join__ = path.join
     state_path = str(PATHING[0])
-    cauldron_folder = CAULDRON_PATH
-    cauldron_files = listdir(CAULDRON_PATH)
-    client_cauldron = ivy_cauldron.Cauldron()
-    server_cauldron = ivy_cauldron.Cauldron()
+    base_cauldron = ivy_cauldron.Cauldron()
+    proxy_cauldron = ivy_cauldron.Cauldron()
     chit_chat('ThreeBlindMice: loading server state')
-    server_cauldron.load_state(state_path=state_path)
+    proxy_cauldron.load_state(state_path=state_path)
     for file_name in cauldron_files:
         if file_name == 'cauldron.state':
             continue
         if '.state' in file_name and file_name[-6:] == '.state':
             chit_chat(f'ThreeBlindMice: merging {file_name}')
-            file_path = None
-            try:
-                file_path = __path_join__(cauldron_folder, file_name)
-                client_cauldron.load_state(state_path=file_path)
-                server_cauldron.load_state_dict(
-                    __merge_params__(
-                        client_cauldron.state_dict(),
-                        server_cauldron.state_dict(),
-                    )
+            file_path = __path_join__(cauldron_folder, file_name)
+            base_cauldron.load_state(state_path=file_path)
+            proxy_cauldron.load_state_dict(
+                __merge_params__(
+                    proxy_cauldron.state_dict(),
+                    base_cauldron.state_dict(),
                 )
-                server_cauldron.network.load_state_dict(
-                    __merge_params__(
-                        client_cauldron.network.state_dict(),
-                        server_cauldron.network.state_dict(),
-                    )
+            )
+            proxy_cauldron.network.load_state_dict(
+                __merge_params__(
+                    proxy_cauldron.network.state_dict(),
+                    base_cauldron.network.state_dict(),
                 )
-                server_cauldron.optimizer.load_state_dict(
-                    __merge_params__(
-                        client_cauldron.optimizer.state_dict(),
-                        server_cauldron.optimizer.state_dict(),
-                    )
+            )
+            proxy_cauldron.optimizer.load_state_dict(
+                __merge_params__(
+                    proxy_cauldron.optimizer.state_dict(),
+                    base_cauldron.optimizer.state_dict(),
                 )
-                server_cauldron.save_state(state_path)
-            except Exception as details:
-                chit_chat(f'ThreeBlindMice: {repr(details)}')
-                continue
-            if file_path and __path_exists__(file_path):
+            )
+    chit_chat('ThreeBlindMice: finalizing merge')
+    base_cauldron = ivy_cauldron.Cauldron()
+    base_cauldron.load_state(state_path=state_path)
+    base_cauldron.load_state_dict(
+        __merge_params__(
+            base_cauldron.state_dict(),
+            proxy_cauldron.state_dict(),
+            finalize=True,
+        )
+    )
+    base_cauldron.network.load_state_dict(
+        __merge_params__(
+            base_cauldron.network.state_dict(),
+            proxy_cauldron.network.state_dict(),
+            finalize=True,
+        )
+    )
+    base_cauldron.optimizer.load_state_dict(
+        __merge_params__(
+            base_cauldron.optimizer.state_dict(),
+            proxy_cauldron.optimizer.state_dict(),
+            finalize=True,
+        )
+    )
+    base_cauldron.save_state(state_path)
+    chit_chat(f'ThreeBlindMice: removing client state files')
+    for file_name in cauldron_files:
+        if file_name == 'cauldron.state':
+            continue
+        if '.state' in file_name and file_name[-6:] == '.state':
+            chit_chat(f'ThreeBlindMice: removing {file_name}')
+            file_path = __path_join__(cauldron_folder, file_name)
+            if __path_exists__(file_path):
                 __remove_file__(file_path)
     chit_chat('ThreeBlindMice: merge complete')
 
