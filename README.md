@@ -15,8 +15,12 @@ Dependencies:
 
 Usage:
   - with IVY as an absolute path to infinitus vigilantis folder
-  - cd $IVY && ./infinitus_vigilantis.py --build && ./infinitus_vigilantis.py --start_learning
-  - (or in linux use .desktop files in resources folder / in windows use .bat file in windows_stuff)
+  - cd $IVY && ./updater.py --build && ./updater.py --study && ./updater.py --train
+
+Systemd Daemon:
+  - Shell script, timer, and service located in daemon folder.
+  - Don't forget to set key, secret key, and path in the .service file
+
 
 Disclaimer:
     The information provided by Infinitus Vigilantis for Python (the
