@@ -73,7 +73,7 @@ class Cauldron(torch.nn.Module):
         if symbols is None:
             with open(symbols_path, 'rb') as f:
                 self.symbols = pickle.load(f)
-        n_batch = 9
+        n_batch = 6
         n_slice = n_batch * 2
         n_time, n_symbols, n_data = candelabrum.shape
         n_data -= 1
@@ -90,16 +90,16 @@ class Cauldron(torch.nn.Module):
             )
         self.input_mask = torch.full(
             [1, n_batch],
-            0.382,
+            0.5,
             device=self.DEVICE,
             dtype=FLOAT,
             )
         self.network = torch.nn.Transformer(
             d_model=n_batch,
             nhead=n_batch,
-            num_encoder_layers=n_slice * 2,
-            num_decoder_layers=n_slice * 2,
-            dim_feedforward=n_batch ** 3,
+            num_encoder_layers=256,
+            num_decoder_layers=256,
+            dim_feedforward=4096,
             dropout=0.618033988749894,
             activation=leaky_relu,
             layer_norm_eps=1.18e-6,
@@ -231,9 +231,12 @@ class Cauldron(torch.nn.Module):
         state_path = self.state_path
         epoch = self.metrics['training_epochs']
         elapsed = 0
-        self.train()
+        n_batch = self.n_batch
+        mask_min = 2
+        mask_max = n_batch - 2
         if verbosity > 0:
             print('Training started.')
+        self.train()
         start_time = time.time()
         while elapsed < hours:
             epoch_time = time.time()
@@ -244,6 +247,10 @@ class Cauldron(torch.nn.Module):
             inputs, targets = random_batch()
             targets = encoder(targets, softmax=False)
             mask = bernoulli(input_mask)
+            mask_sum = mask[0].sum(0)
+            while mask_min > mask_sum or mask_sum > mask_max:
+                mask = bernoulli(input_mask)
+                mask_sum = mask[0].sum(0)
             error = 0
             depth = 0
             while depth <= n_depth:
