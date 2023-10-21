@@ -31,7 +31,7 @@ class Cauldron(torch.nn.Module):
         verbosity=0,
         no_caching=True,
         set_weights=True,
-        try_cuda=True,
+        try_cuda=False,
         detect_anomaly=False,
         ):
         """Predicts the future sentiment from stock data."""
@@ -73,7 +73,7 @@ class Cauldron(torch.nn.Module):
         if symbols is None:
             with open(symbols_path, 'rb') as f:
                 self.symbols = pickle.load(f)
-        n_batch = 6
+        n_batch = 9
         n_slice = n_batch * 2
         n_time, n_symbols, n_data = candelabrum.shape
         n_data -= 1
@@ -99,7 +99,7 @@ class Cauldron(torch.nn.Module):
             nhead=n_batch,
             num_encoder_layers=n_slice * 2,
             num_decoder_layers=n_slice * 2,
-            dim_feedforward=3 ** n_batch,
+            dim_feedforward=n_batch ** 3,
             dropout=0.618033988749894,
             activation=leaky_relu,
             layer_norm_eps=1.18e-6,
@@ -294,9 +294,7 @@ class Cauldron(torch.nn.Module):
         forward = self.forward
         input_index = self.input_index
         target_index = self.target_index
-        accuracy = 0
         batches = 0
-        error = 0
         n_correct = 0
         n_total = 0
         results = dict()
@@ -305,9 +303,7 @@ class Cauldron(torch.nn.Module):
         if verbosity > 0:
             print('Starting validation routine.')
         self.eval()
-        start_time = time.time()
         for batches, batch in enumerate(dataset):
-            epoch_time = time.time()
             batch = batch[0].transpose(0, 1)
             for symbol in symbol_range:
                 inputs = batch[symbol, :n_batch, input_index].view(1, n_batch)
@@ -322,27 +318,22 @@ class Cauldron(torch.nn.Module):
                 for i in batch_range:
                     if state_pred[i] == target_pred[i]:
                         correct += 1
-                error = correct / n_batch
-                if symbol not in results.keys():
+                if symbol not in results:
                     results[symbol] = dict()
                     results[symbol]['correct'] = 0
                     results[symbol]['total'] = 0
-                    results[symbol]['error'] = error
-                else:
-                    results[symbol]['error'] += error
                 results[symbol]['correct'] += correct
                 results[symbol]['total'] += n_batch
                 n_correct += correct
                 n_total += n_batch
-            ts = time.time()
-            elapsed = ((ts - start_time) / 60) / 60
-            epoch_time = (ts - epoch_time) / 60
-            results['validation.metrics'] = {
-                'elapsed_hours': elapsed,
-                'epoch_time_minutes': epoch_time,
-                'n_correct': n_correct,
-                'n_total': n_total,
-                }
+        results['validation.metrics'] = {
+            'correct': n_correct,
+            'total': n_total,
+            }
+        for key in results:
+            correct = results[key]['correct']
+            total = results[key]['total']
+            results[key]['accuracy'] = round((correct / total) * 100, 4)
         with open(self.validation_path, 'wb+') as validation_file:
             pickle.dump(results, validation_file)
 

@@ -29,32 +29,83 @@ HOME_BODY = """
                 document.getElementById("viewport_chart").src=chart;
                 document.getElementById("viewport_forecast").src=forecast;
             }
+            function quickJump() {
+                let symbol = document.getElementById("symbol_select").value.toUpperCase();
+                let features = symbol + "_features.html";
+                let metrics = symbol + "_metrics.html";
+                let chart = "./charts/" + symbol + "_market.png";
+                let forecast = "./charts/" + symbol + "_forecast.png";
+                changeView(features, metrics, chart, forecast);
+            }
         </script>
         <div style="display:grid;gap:5px;">
-            <div style="grid-column:1/1;grid-row:1/9;height:850px;width:100%;overflow:scroll;">
 """
 
 HOME_FOOT = """
+            <div style="grid-column:2/2;grid-row:1/20;height:auto;width:100%;overflow:scroll;">
+                <div style="display:grid;gap:0px;">
+                    <div style="grid-column:1/1;grid-row:1/1;">
+                        <b><i>TOTAL VALIDATION RESULTS</i></b>
+                        <iframe width="100%" height="auto" src="validation_results.html" id="viewport_validation"></iframe>
+                    </div>
+                    <div style="grid-column:1/1;grid-row:2/7;">
+                        <b><i>SYMBOL FEATURES</i></b>
+                        <iframe width="100%" height="550px" src="{0}" id="viewport_features"></iframe>
+                    </div>
+                    <div style="grid-column:1/1;grid-row:8/8;">
+                        <b><i>INDIVIDUAL METRICS</i></b>
+                        <iframe width="100%" height="auto" src="{1}" id="viewport_metrics"></iframe>
+                    </div>
+                </div>
             </div>
-            <div style="grid-column:2/20;grid-row:1/6;">
-                <iframe width="30%" height="700px" src="" id="viewport_features"></iframe>
-                <img width="60%" height="700px" src="" id="viewport_chart"></img>
-            <div style="grid-column:2/20;grid-row:6/9;">
-                <iframe width="30%" height="auto" src="" id="viewport_metrics"></iframe>
-                <img width="60%" height="auto" src="" id="viewport_forecast"></img>
+            <div style="grid-column:3/3;grid-row:1/20;height:auto;width:100%;overflow:scroll;">
+                <div style="display:grid;gap:0px;">
+                    <div style="grid-column:1/1;grid-row:1/9;">
+                        <img width="100%" height="700px" src="{2}" id="viewport_chart"></img>
+                    </div>
+                    <div style="grid-column:1/1;grid-row:10/15;">
+                        <img width="100%" height="60%" src="{3}" id="viewport_forecast"></img>
+                    </div>
+                </div>
             </div>
         </div>
     </body>
 </html>
 """
 
+COMPASS_SELECT_HEAD = """
+            <div style="grid-column:1/1;grid-row:1/20;height:auto;width:100%;overflow:scroll;">
+                <div style="display:grid;gap:0px;">
+                    <div style="grid-column:1/1;grid-row:1/2;height:auto;width:100%;overflow:scroll;">
+                        <b>Quick Jump:</b><br>
+                        <select style="width:125px;height:35px;" id="symbol_select">
+                            <option value="" selected></option>
+"""
+COMPASS_OPTION = """
+                            <option value="{0}">{1}</option>
+"""
+COMPASS_SELECT_TAIL = """
+                        </select>
+                        <button style="width:50px;" onClick="quickJump()"><b>Go</b></button><br><br>
+                    </div>
+"""
+
+COMPASS_PICKS_HEAD = """
+                    <div style="grid-column:1/1;grid-row:2/9;height:auto;width:100%;overflow:scroll;">
+                        <b>Top Picks:</b><br>
+"""
 COMPASS_BUTTON = """
-                <button onClick="changeView({0}, {1}, {2}, {3})"><b>{4}</b></button><br>
+                        <button onClick="changeView({0}, {1}, {2}, {3})"><b>{4}</b></button><br>
+"""
+COMPASS_PICKS_TAIL = """
+                    </div>
+                </div>
+            </div>
 """
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html style="color:#fff;background-color:#111;">
+<html style="color:#fff;background-color:#000;">
     <body>
         <div style="width:100%;height:100%;overflow:scroll;display:grid;">
             {0}
@@ -75,13 +126,16 @@ def build_features(features, data):
 
 
 def build_metrics(metrics):
-    label_string = """<div style="padding:5px;grid-column:1/1;">"""
-    value_string = """<div style="padding:5px;grid-column:2/10;">"""
+    label_string = """<div style="padding:5px;grid-column:1/1;"><h3>"""
+    value_string = """<div style="padding:5px;grid-column:2/10;"><h3>"""
     for key, value in metrics.items():
         label_string += f'{key}:<br>'.upper()
-        value_string += f'{value}<br>'
-    label_string += """</div>"""
-    value_string += """</div>"""
+        if key == 'accuracy':
+            value_string += f'{value}%<br>'
+        else:
+            value_string += f'{value}<br>'
+    label_string += """</h3></div>"""
+    value_string += """</h3></div>"""
     return HTML_TEMPLATE.format(label_string + value_string)
 
 
@@ -91,12 +145,18 @@ def generate_compass(symbols, features, candelabrum, metrics):
         data = candelabrum[-1][index].tolist()
         files[f'{symbol}_features.html'] = build_features(features, data)
         files[f'{symbol}_metrics.html'] = build_metrics(metrics[index])
+    files['validation_results.html'] = build_metrics(metrics['validation.metrics'])
     return files
 
 
-def make_compass(symbols):
+def make_compass(symbols, picks):
     COMPASS = list()
+    COMPASS.append(COMPASS_SELECT_HEAD)
     for symbol in symbols:
+        COMPASS.append(COMPASS_OPTION.format(symbol, symbol))
+    COMPASS.append(COMPASS_SELECT_TAIL)
+    COMPASS.append(COMPASS_PICKS_HEAD)
+    for symbol in picks:
         COMPASS.append(
             COMPASS_BUTTON.format(
                 """'{}_features.html'""".format(symbol),
@@ -106,13 +166,21 @@ def make_compass(symbols):
                 """{}""".format(symbol),
             )
         )
+    COMPASS.append(COMPASS_PICKS_TAIL)
     return ''.join(COMPASS)
 
 
-def build(symbols, features, candelabrum, metrics):
+def build(symbols, features, candelabrum, metrics, picks):
     cabinet = dict()
-    HTML_DOC = [HOME_HEAD, HOME_BODY, make_compass(symbols), HOME_FOOT]
-    cabinet['home.html'] = ''.join(HTML_DOC)
+    COMPASS = make_compass(symbols, picks)
+    default_symbol = symbols[0]
+    FOOTER = HOME_FOOT.format(
+        f'{default_symbol}_features.html',
+        f'{default_symbol}_metrics.html',
+        f'./charts/{default_symbol}_market.png',
+        f'./charts/{default_symbol}_forecast.png',
+    )
+    cabinet['home.html'] = ''.join([HOME_HEAD, HOME_BODY, COMPASS, FOOTER])
     compass_files = generate_compass(symbols, features, candelabrum, metrics)
     cabinet.update(compass_files)
     return cabinet

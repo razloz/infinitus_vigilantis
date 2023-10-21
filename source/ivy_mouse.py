@@ -152,11 +152,11 @@ def __update_network__(address, *args, **kwargs):
     Get current cauldron state and candelabrum files from server.
     """
     update_key = ''
-    with socket.create_connection(address) as connection:
-        chit_chat(f'{address[0]}: connected... updating...')
-        for header_id, request_header in enumerate(REQUEST_HEADERS):
-            chit_chat(f'{address[0]}: requesting file #{header_id + 1}')
-            try:
+    try:
+        with socket.create_connection(address) as connection:
+            chit_chat(f'{address[0]}: connected... updating...')
+            for header_id, request_header in enumerate(REQUEST_HEADERS):
+                chit_chat(f'{address[0]}: requesting file #{header_id + 1}')
                 while True:
                     data = connection.recv(4096)
                     if not data or len(data) < 8:
@@ -196,12 +196,12 @@ def __update_network__(address, *args, **kwargs):
                     else:
                         chit_chat(f'{address[0]}: got malformed data header')
                         break
-            except Exception as details:
-                chit_chat(f'{address[0]}: {repr(details)}')
-                break
-        chit_chat(f'{address[0]}: exited update loop')
-    chit_chat(f'{address[0]}: connection closed')
-    return update_key
+            chit_chat(f'{address[0]}: exited update loop')
+    except Exception as details:
+        chit_chat(f'{address[0]}: {repr(details)}')
+    finally:
+        chit_chat(f'{address[0]}: connection closed')
+        return update_key
 
 
 def __study__(address, update_key, n_depth=9, hours=0.5, checkpoint=1000):
@@ -213,17 +213,17 @@ def __study__(address, update_key, n_depth=9, hours=0.5, checkpoint=1000):
     loops = 0
     while True:
         new_key = update_key
+        loops += 1
+        chit_chat(f'ThreeBlindMice: Starting loop #{loops}')
+        cauldron.train_network(
+            n_depth=n_depth,
+            hours=hours,
+            checkpoint=checkpoint,
+        )
+        with open(state_path, 'rb') as state_file:
+            state = state_file.read()
+        nbytes = bytes(str(len(state)), 'utf-8')
         try:
-            loops += 1
-            chit_chat(f'ThreeBlindMice: Starting loop #{loops}')
-            cauldron.train_network(
-                n_depth=n_depth,
-                hours=hours,
-                checkpoint=checkpoint,
-            )
-            with open(state_path, 'rb') as state_file:
-                state = state_file.read()
-            nbytes = bytes(str(len(state)), 'utf-8')
             with socket.create_connection(address) as connection:
                 chit_chat(f'{address[0]}: connected... pushing state...')
                 while True:
@@ -246,10 +246,11 @@ def __study__(address, update_key, n_depth=9, hours=0.5, checkpoint=1000):
             chit_chat(f'{address[0]}: connection closed')
         except Exception as details:
             chit_chat(f'{address[0]}: {repr(details)}')
-        if new_key != update_key:
-            chit_chat(f'{address[0]}: update available')
-            update_key = __update_network__(address)
-            cauldron = ivy_cauldron.Cauldron()
+        finally:
+            if '' != new_key != update_key:
+                chit_chat(f'{address[0]}: update available')
+                update_key = __update_network__(address)
+                cauldron = ivy_cauldron.Cauldron()
 
 
 def __merge_states__(*args, **kwargs):
@@ -260,7 +261,13 @@ def __merge_states__(*args, **kwargs):
     TENSOR = torch.Tensor
     cauldron_folder = CAULDRON_PATH
     cauldron_files = listdir(cauldron_folder)
-    state_count = sum([1 if p[-6:] == '.state' else 0 for p in cauldron_files])
+    state_offset = sum([1 if p[-6:] == '.state' else 0 for p in cauldron_files])
+    chit_chat(f'ThreeBlindMice: found {state_offset} state files.')
+    if state_offset > 1:
+        state_offset = 1 / (state_offset - 1)
+        chit_chat(f'ThreeBlindMice: state_offset set to {state_offset}')
+    else:
+        return False
     def __merge_params__(old_state, new_state, finalize=False):
         for key, value in new_state.items():
             if type(value) == TENSOR and key in old_state:
@@ -336,6 +343,7 @@ def __merge_states__(*args, **kwargs):
             if __path_exists__(file_path):
                 __remove_file__(file_path)
     chit_chat('ThreeBlindMice: merge complete')
+    return True
 
 
 class ThreeBlindMice():
@@ -428,7 +436,14 @@ class ThreeBlindMice():
             candles.set_index('time', inplace=True)
             cartography(symbol, candles, chart_path=chart_path, chart_size=365)
         chit_chat('build_https: building html documents')
-        cabinet = ivy_https.build(symbols, features, candelabrum, metrics)
+        picks = symbols[:20]
+        cabinet = ivy_https.build(
+            symbols,
+            features,
+            candelabrum,
+            metrics,
+            picks,
+        )
         for file_path, file_data in cabinet.items():
             file_path = abspath(path.join(https_path, file_path))
             with open(file_path, 'w+') as html_file:
