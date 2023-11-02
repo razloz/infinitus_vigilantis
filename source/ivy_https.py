@@ -45,16 +45,16 @@ HOME_FOOT = """
             <div style="grid-column:2/2;grid-row:1/20;height:auto;width:100%;overflow:scroll;">
                 <div style="display:grid;gap:0px;">
                     <div style="grid-column:1/1;grid-row:1/1;">
-                        <b><i>TOTAL VALIDATION RESULTS</i></b>
-                        <iframe width="100%" height="auto" src="validation_results.html" id="viewport_validation"></iframe>
+                        <b><i>INDIVIDUAL METRICS</i></b>
+                        <iframe width="100%" height="auto" src="{1}" id="viewport_metrics"></iframe>
                     </div>
                     <div style="grid-column:1/1;grid-row:2/7;">
                         <b><i>SYMBOL FEATURES</i></b>
                         <iframe width="100%" height="550px" src="{0}" id="viewport_features"></iframe>
                     </div>
                     <div style="grid-column:1/1;grid-row:8/8;">
-                        <b><i>INDIVIDUAL METRICS</i></b>
-                        <iframe width="100%" height="auto" src="{1}" id="viewport_metrics"></iframe>
+                        <b><i>TOTAL VALIDATION RESULTS</i></b>
+                        <iframe width="100%" height="auto" src="validation_results.html" id="viewport_validation"></iframe>
                     </div>
                 </div>
             </div>
@@ -173,7 +173,7 @@ def make_compass(symbols, picks):
 def build(symbols, features, candelabrum, metrics, picks):
     cabinet = dict()
     COMPASS = make_compass(symbols, picks)
-    default_symbol = symbols[0]
+    default_symbol = picks[0]
     FOOTER = HOME_FOOT.format(
         f'{default_symbol}_features.html',
         f'{default_symbol}_metrics.html',

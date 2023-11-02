@@ -354,6 +354,7 @@ class Cauldron(torch.nn.Module):
         input_index = self.input_index
         candelabrum = self.candelabrum[-n_batch:].transpose(0, 1)
         forecast_path = path.join(charts_path, '{0}_forecast.png')
+        forecast = list()
         self.eval()
         for index in range(len(symbols)):
             inputs = candelabrum[index, :, input_index].view(1, n_batch)
@@ -371,6 +372,7 @@ class Cauldron(torch.nn.Module):
             plt.savefig(forecast_path.format(symbols[index]))
             plt.clf()
             plt.close()
+            forecast.append(lines)
         with open(self.validation_path, 'rb') as validation_file:
             metrics = pickle.load(validation_file)
-        return metrics
+        return (metrics, forecast)

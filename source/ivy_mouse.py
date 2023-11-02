@@ -20,6 +20,8 @@ CAULDRON_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron'))
 LOG_PATH = abspath(path.join(ROOT_PATH, '..', 'logs', f'{time.time()}.log'))
 STATE_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron', '{}.{}.state'))
 SETTINGS_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.settings'))
+HASH_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.hash'))
+PUSHED_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.pushed'))
 HTTPS_PATH = abspath(path.join(ROOT_PATH, '..', 'https'))
 PATHING = (
     abspath(path.join(ROOT_PATH, '..', 'cauldron', 'cauldron.state')),
@@ -59,13 +61,47 @@ def chit_chat(msg, log_level=0, log_msg=True, print_msg=True, timestamp=True):
             logging.debug(msg)
 
 
+def __load_pickle__(real_path):
+    """
+    Returns unpickled object.
+    """
+    file_data = ''
+    if path.exists(real_path):
+        with open(real_path, 'rb') as file_obj:
+            file_data = pickle.load(file_obj)
+    return file_data
+
+
+def __save_pickle__(obj, real_path):
+    """
+    Save pickled object.
+    """
+    with open(real_path, 'wb+') as file_obj:
+        pickle.dump(obj, file_obj)
+
+
+def __get_file_hash__(real_path):
+    """
+    Returns SHA512 digest for local cauldron state.
+    """
+    file_hash = ''
+    try:
+        if path.exists(real_path):
+            with open(real_path, 'rb') as file_obj:
+                file_data = file_obj.read()
+            file_hash = hashlib.sha512(file_data).digest()
+    except Exception as details:
+        chit_chat(f'\b: {repr(details)}', log_level=2)
+    finally:
+        return file_hash
+
+
 async def __start_server__(address, *args, **kwargs):
     """
     TCP/IP Server for distributed learning.
     """
-    update_key = secrets.token_urlsafe(32)
-    chit_chat(f'Server: update_key is {update_key}')
-    update_key = bytes(update_key, 'utf-8')
+    update_key = __get_file_hash__(PATHING[0])
+    chit_chat('\b: server started')
     def __open_connection__(client_socket, address):
         with client_socket as connection:
             chit_chat(f'{address[0]}: connection open')
@@ -130,7 +166,7 @@ async def __start_server__(address, *args, **kwargs):
                         chit_chat(f'{address[0]}: got malformed data header')
                         break
                 except Exception as details:
-                    chit_chat(f'{address[0]}: {repr(details)}')
+                    chit_chat(f'{address[0]}: {repr(details)}', log_level=2)
                     break
         chit_chat(f'{address[0]}: connection closed')
         return False
@@ -147,16 +183,15 @@ async def __start_server__(address, *args, **kwargs):
             dispatcher(__open_connection__, args=[connection, address])
 
 
-def __update_network__(address, *args, **kwargs):
+def __update_network__(address, last_key, *args, **kwargs):
     """
     Get current cauldron state and candelabrum files from server.
     """
     update_key = ''
     try:
         with socket.create_connection(address) as connection:
-            chit_chat(f'{address[0]}: connected... updating...')
+            chit_chat('\b: connected... checking for updates...')
             for header_id, request_header in enumerate(REQUEST_HEADERS):
-                chit_chat(f'{address[0]}: requesting file #{header_id + 1}')
                 while True:
                     data = connection.recv(4096)
                     if not data or len(data) < 8:
@@ -164,6 +199,10 @@ def __update_network__(address, *args, **kwargs):
                     data_header = data[:8]
                     if data_header == b'11111111':
                         update_key = data[8:]
+                        if update_key == last_key:
+                            chit_chat(f'\b: no update available, breaking loop')
+                            return last_key
+                        chit_chat(f'\b: requesting file #{header_id + 1}')
                         connection.sendall(request_header)
                     elif data_header == b'00010001':
                         file_path = PATHING[header_id]
@@ -189,68 +228,82 @@ def __update_network__(address, *args, **kwargs):
                             with open(file_path, 'wb+') as local_file:
                                 local_file.write(binary_file)
                             connection.sendall(b'00000000')
-                            chit_chat(f'{address[0]}: got file {file_path}')
+                            chit_chat(f'\b: got file {file_path}')
                         else:
-                            chit_chat(f'{address[0]}: file hash mismatch')
+                            chit_chat('\b: file hash mismatch')
                         break
                     else:
-                        chit_chat(f'{address[0]}: got malformed data header')
+                        chit_chat('\b: got malformed data header')
                         break
-            chit_chat(f'{address[0]}: exited update loop')
     except Exception as details:
-        chit_chat(f'{address[0]}: {repr(details)}')
+        chit_chat(f'\b: {repr(details)}', log_level=2)
     finally:
-        chit_chat(f'{address[0]}: connection closed')
         return update_key
 
 
-def __study__(address, update_key, n_depth=9, hours=0.5, checkpoint=1000):
+def __push_state__(address, state_path, update_key):
+    """
+    Send cauldron state to the server.
+    """
+    new_key = update_key
+    try:
+        with open(state_path, 'rb') as state_file:
+            state = state_file.read()
+        nbytes = bytes(str(len(state)), 'utf-8')
+        with socket.create_connection(address) as connection:
+            chit_chat('\b: connected... pushing state...')
+            while True:
+                data = connection.recv(4096)
+                if not data or len(data) < 8:
+                    break
+                data_header = data[:8]
+                if data_header == b'11111111':
+                    new_key = data[8:]
+                    connection.sendall(b'00010001' + nbytes)
+                elif data_header == b'00010010':
+                    connection.sendall(state)
+                elif data_header == b'00010100':
+                    file_hash = hashlib.sha512(state).digest()
+                    connection.sendall(b'00011000' + file_hash)
+                elif data_header == b'00000000':
+                    chit_chat('\b: state transfer complete')
+                    state = None
+                    break
+    except Exception as details:
+        chit_chat(f'\b: {repr(details)}', log_level=2)
+    finally:
+        return new_key
+
+
+def __study__(address, update_key, last_push, n_depth=9, hours=3, checkpoint=5):
     """
     Cauldronic machine learning.
     """
     cauldron = ivy_cauldron.Cauldron()
+    hash_path = HASH_PATH
+    pushed_path = PUSHED_PATH
     state_path = cauldron.state_path
     loops = 0
     while True:
-        new_key = update_key
         loops += 1
-        chit_chat(f'ThreeBlindMice: Starting loop #{loops}')
+        chit_chat(f'\b: starting loop #{loops}')
         cauldron.train_network(
             n_depth=n_depth,
             hours=hours,
             checkpoint=checkpoint,
         )
-        with open(state_path, 'rb') as state_file:
-            state = state_file.read()
-        nbytes = bytes(str(len(state)), 'utf-8')
-        try:
-            with socket.create_connection(address) as connection:
-                chit_chat(f'{address[0]}: connected... pushing state...')
-                while True:
-                    data = connection.recv(4096)
-                    if not data or len(data) < 8:
-                        break
-                    data_header = data[:8]
-                    if data_header == b'11111111':
-                        new_key = data[8:]
-                        connection.sendall(b'00010001' + nbytes)
-                    elif data_header == b'00010010':
-                        connection.sendall(state)
-                    elif data_header == b'00010100':
-                        file_hash = hashlib.sha512(state).digest()
-                        connection.sendall(b'00011000' + file_hash)
-                    elif data_header == b'00000000':
-                        chit_chat(f'{address[0]}: state transfer complete')
-                        state = None
-                        break
-            chit_chat(f'{address[0]}: connection closed')
-        except Exception as details:
-            chit_chat(f'{address[0]}: {repr(details)}')
-        finally:
-            if '' != new_key != update_key:
-                chit_chat(f'{address[0]}: update available')
-                update_key = __update_network__(address)
-                cauldron = ivy_cauldron.Cauldron()
+        new_key = ''
+        state_hash = __get_file_hash__(state_path)
+        if state_hash != last_push:
+            new_key = __push_state__(address, state_path, update_key)
+            last_push = state_hash
+            __save_pickle__(last_push, pushed_path)
+        if '' != new_key != update_key:
+            chit_chat('\b: update available')
+            update_key = __update_network__(address, update_key)
+            if update_key != '':
+                __save_pickle__(update_key, hash_path)
+            cauldron = ivy_cauldron.Cauldron()
 
 
 def __merge_states__(*args, **kwargs):
@@ -262,10 +315,10 @@ def __merge_states__(*args, **kwargs):
     cauldron_folder = CAULDRON_PATH
     cauldron_files = listdir(cauldron_folder)
     state_offset = sum([1 if p[-6:] == '.state' else 0 for p in cauldron_files])
-    chit_chat(f'ThreeBlindMice: found {state_offset} state files.')
+    chit_chat(f'\b: found {state_offset} state files.')
     if state_offset > 1:
         state_offset = 1 / (state_offset - 1)
-        chit_chat(f'ThreeBlindMice: state_offset set to {state_offset}')
+        chit_chat(f'\b: state_offset set to {state_offset}')
     else:
         return False
     def __merge_params__(old_state, new_state, finalize=False):
@@ -274,20 +327,20 @@ def __merge_states__(*args, **kwargs):
                 if finalize:
                     old_state[key] = (old_state[key] + value) / 2
                 else:
-                    old_state[key] += value * state_count
+                    old_state[key] += value * state_offset
         return old_state
     __path_exists__ = path.exists
     __path_join__ = path.join
     state_path = str(PATHING[0])
     base_cauldron = ivy_cauldron.Cauldron()
     proxy_cauldron = ivy_cauldron.Cauldron()
-    chit_chat('ThreeBlindMice: loading server state')
+    chit_chat('\b: loading server state')
     proxy_cauldron.load_state(state_path=state_path)
     for file_name in cauldron_files:
         if file_name == 'cauldron.state':
             continue
         if '.state' in file_name and file_name[-6:] == '.state':
-            chit_chat(f'ThreeBlindMice: merging {file_name}')
+            chit_chat(f'\b: merging {file_name}')
             file_path = __path_join__(cauldron_folder, file_name)
             base_cauldron.load_state(state_path=file_path)
             proxy_cauldron.load_state_dict(
@@ -308,7 +361,7 @@ def __merge_states__(*args, **kwargs):
                     base_cauldron.optimizer.state_dict(),
                 )
             )
-    chit_chat('ThreeBlindMice: finalizing merge')
+    chit_chat('\b: finalizing merge')
     base_cauldron = ivy_cauldron.Cauldron()
     base_cauldron.load_state(state_path=state_path)
     base_cauldron.load_state_dict(
@@ -333,16 +386,16 @@ def __merge_states__(*args, **kwargs):
         )
     )
     base_cauldron.save_state(state_path)
-    chit_chat(f'ThreeBlindMice: removing client state files')
+    chit_chat('\b: removing client state files')
     for file_name in cauldron_files:
         if file_name == 'cauldron.state':
             continue
         if '.state' in file_name and file_name[-6:] == '.state':
-            chit_chat(f'ThreeBlindMice: removing {file_name}')
+            chit_chat(f'\b: removing {file_name}')
             file_path = __path_join__(cauldron_folder, file_name)
             if __path_exists__(file_path):
                 __remove_file__(file_path)
-    chit_chat('ThreeBlindMice: merge complete')
+    chit_chat('\b: merge complete')
     return True
 
 
@@ -368,38 +421,56 @@ class ThreeBlindMice():
                 'host.addr': 'localhost',
                 'host.port': '33333',
                 'n_depth': '9',
-                'hours': '0.5',
-                'checkpoint': '1000',
+                'hours': '3',
+                'checkpoint': '30',
             }
             javafy.save(data=self.settings, file_path=SETTINGS_PATH)
         self.host_addr = str(self.settings['host.addr'])
         self.host_port = int(self.settings['host.port'])
         self.address = (self.host_addr, self.host_port)
-        chit_chat('ThreeBlindMice: beckoning the Norn')
+        chit_chat('\b: beckoning the Norn')
 
     def merge_states(self, *args, **kwargs):
         """
         Take state files and merge values with server.
         """
-        chit_chat(f'ThreeBlindMice: merging client states with server')
+        chit_chat('\b: merging client states with server')
         try:
             __merge_states__()
         except Exception as details:
-            chit_chat(f'ThreeBlindMice: {repr(details)}')
+            chit_chat(f'\b: {repr(details)}', log_level=2)
 
     def start_learning(self, *args, **kwargs):
         """
         Create study thread.
         """
+        address = self.address
         n_depth = int(self.settings['n_depth'])
         hours = float(self.settings['hours'])
         checkpoint = int(self.settings['checkpoint'])
-        chit_chat('ThreeBlindMice: updating neural network')
-        update_key = __update_network__(self.address)
-        chit_chat('ThreeBlindMice: creating study thread')
+        hash_path = HASH_PATH
+        pushed_path = PUSHED_PATH
+        state_path = PATHING[0]
+        last_hash = __load_pickle__(hash_path)
+        last_push = __load_pickle__(pushed_path)
+        state_hash = __get_file_hash__(state_path)
+        update_key = last_hash
+        if path.exists(state_path):
+            if state_hash != last_push:
+                chit_chat('\b: pushing state to server')
+                update_key = __push_state__(address, state_path, update_key)
+                last_push = state_hash
+                __save_pickle__(last_push, pushed_path)
+        if update_key == '' or update_key != last_hash:
+            chit_chat('\b: updating neural network')
+            update_key = __update_network__(address, update_key)
+            if update_key != '':
+                __save_pickle__(update_key, hash_path)
+        chit_chat('\b: creating study thread')
         __study__(
-            self.address,
+            address,
             update_key,
+            last_push,
             n_depth=n_depth,
             hours=hours,
             checkpoint=checkpoint,
@@ -409,34 +480,42 @@ class ThreeBlindMice():
         """
         Create server thread.
         """
-        chit_chat('ThreeBlindMice: building website')
-        self.build_https()
-        chit_chat('ThreeBlindMice: starting server')
+        chit_chat('\b: starting server')
         asyncio.run(__start_server__(self.address), debug=debug)
 
-    def build_https(self):
+    def build_https(self, skip_validation=True):
         from pandas import read_csv
+        chit_chat('\b: building website')
         candles_path = abspath(path.join(ROOT_PATH, '..', 'candelabrum'))
         https_path = HTTPS_PATH
         charts_path = abspath(path.join(https_path, 'charts'))
         cauldron = ivy_cauldron.Cauldron()
-        chit_chat('build_https: validating neural network')
-        cauldron.validate_network()
-        chit_chat('build_https: inscribing sigils')
-        metrics = cauldron.inscribe_sigil(charts_path)
+        if not skip_validation:
+            chit_chat('\b: validating neural network')
+            cauldron.validate_network()
+        chit_chat('\b: inscribing sigils')
+        metrics, forecast = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
+        picks = dict()
+        for key, value in metrics.items():
+            if key == 'validation.metrics': continue
+            key = int(key)
+            picks[symbols[key]] = value
+            picks[symbols[key]]['forecast'] = sum(forecast[key])
+        picks = pandas.DataFrame(picks).transpose()
+        picks = picks.sort_values(by=['accuracy', 'forecast'], ascending=False)
+        picks = picks.index[:20].tolist()
         candelabrum = cauldron.candelabrum
         with open(PATHING[2], 'rb') as features_file:
             features = pickle.load(features_file)
-        chit_chat('build_https: plotting charts')
+        chit_chat('\b: plotting charts')
         for symbol in symbols:
             chart_path = abspath(path.join(charts_path, f'{symbol}_market.png'))
             candles = abspath(path.join(candles_path, f'{symbol}.ivy'))
             candles = read_csv(candles)
             candles.set_index('time', inplace=True)
             cartography(symbol, candles, chart_path=chart_path, chart_size=365)
-        chit_chat('build_https: building html documents')
-        picks = symbols[:20]
+        chit_chat('\b: building html documents')
         cabinet = ivy_https.build(
             symbols,
             features,
