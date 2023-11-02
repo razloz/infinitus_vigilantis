@@ -21,9 +21,19 @@ if __name__ == '__main__':
         help='Build the Candelabrum historical database.',
     )
     parser.add_argument(
+        '--create_website',
+        action='store_true',
+        help='Validate network, plot charts, and build HTML documents.',
+    )
+    parser.add_argument(
         '--merge_states',
         action='store_true',
         help='Merge client states with server.',
+    )
+    parser.add_argument(
+        '--skip_validation',
+        action='store_true',
+        help='Start learning.',
     )
     parser.add_argument(
         '--start_learning',
@@ -45,11 +55,16 @@ if __name__ == '__main__':
             if args.build:
                 import source.ivy_candles as ivy_candles
                 ivy_candles.build_historical_database()
-            if args.merge_states or args.start_serving:
+            if args.merge_states or args.start_serving or args.create_website:
                 import source.ivy_mouse as ivy
                 mice = ivy.ThreeBlindMice()
                 if args.merge_states:
                     mice.merge_states()
+                if args.create_website:
+                    if args.skip_validation:
+                        mice.build_https(skip_validation=True)
+                    else:
+                        mice.build_https(skip_validation=False)
                 if args.start_serving:
                     mice.start_serving()
     else:
