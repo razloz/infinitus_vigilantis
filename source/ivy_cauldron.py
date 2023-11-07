@@ -25,9 +25,10 @@ class Cauldron(torch.nn.Module):
         self,
         candelabrum=None,
         root_folder=None,
+        features=None,
         symbols=None,
-        input_index=-1,
-        target_index=-1,
+        input_labels=('close', 'trend', 'price_zs', 'price_wema', 'pct_chg',),
+        target_labels=('pct_chg',),
         verbosity=0,
         no_caching=True,
         set_weights=True,
@@ -55,6 +56,7 @@ class Cauldron(torch.nn.Module):
         self.root_folder = root_folder
         candelabrum_path = abspath(path.join(root_folder, 'candelabrum'))
         candles_path = path.join(candelabrum_path, 'candelabrum.candles')
+        features_path = path.join(candelabrum_path, 'candelabrum.features')
         symbols_path = path.join(candelabrum_path, 'candelabrum.symbols')
         network_path = path.join(root_folder, 'cauldron')
         if not path.exists(network_path):
@@ -73,8 +75,16 @@ class Cauldron(torch.nn.Module):
         if symbols is None:
             with open(symbols_path, 'rb') as f:
                 self.symbols = pickle.load(f)
+        if features is None:
+            with open(features_path, 'rb') as features_file:
+                features = pickle.load(features_file)
+        input_indices = [features.index(l) for l in input_labels]
+        target_indices = [features.index(l) for l in target_labels]
         n_batch = 6
         n_slice = n_batch * 2
+        n_inputs = len(input_indices)
+        n_targets = len(target_indices)
+        n_heads = n_batch * n_inputs
         n_time, n_symbols, n_data = candelabrum.shape
         n_data -= 1
         self.pattern_range = range(n_batch)
@@ -89,18 +99,18 @@ class Cauldron(torch.nn.Module):
             drop_last=True,
             )
         self.input_mask = torch.full(
-            [1, n_batch],
-            0.5,
+            [n_batch, n_inputs],
+            1 - 0.618033988749894,
             device=self.DEVICE,
             dtype=FLOAT,
             )
         self.network = torch.nn.Transformer(
-            d_model=n_batch,
-            nhead=n_batch,
-            num_encoder_layers=256,
-            num_decoder_layers=256,
-            dim_feedforward=4096,
-            dropout=0.618033988749894,
+            d_model=n_heads,
+            nhead=n_heads,
+            num_encoder_layers=512,
+            num_decoder_layers=512,
+            dim_feedforward=2048,
+            dropout=0.03,
             activation=leaky_relu,
             layer_norm_eps=1.18e-6,
             batch_first=True,
@@ -109,7 +119,7 @@ class Cauldron(torch.nn.Module):
             dtype=FLOAT,
             )
         self.loss_fn = torch.nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.Adagrad(self.parameters())
+        self.optimizer = torch.optim.Adagrad(self.network.parameters())
         self.metrics = dict(
             training_epochs=0,
             training_error=0,
@@ -118,14 +128,18 @@ class Cauldron(torch.nn.Module):
         self.set_weights = set_weights
         self.verbosity = verbosity
         self.candelabrum = candelabrum
+        self.input_indices = input_indices
+        self.target_indices = target_indices
+        self.n_inputs = n_inputs
+        self.n_targets = n_targets
+        self.n_heads = n_heads
         self.n_batch = n_batch
         self.n_slice = n_slice
         self.n_time = n_time
         self.n_symbol = n_symbols - 1
         self.n_data = n_data
         self.batch_max = n_time - n_slice - 1
-        self.input_index = input_index
-        self.target_index = target_index
+        self.n_forecast = n_batch * 3
         self.load_state()
 
     def load_state(self, state_path=None, state=None):
@@ -144,13 +158,13 @@ class Cauldron(torch.nn.Module):
             if 'network' in state:
                 self.network.load_state_dict(state['network'])
         except FileNotFoundError:
-            i = (1 / 137) ** 3
             if self.verbosity > 0:
                 print('No state found, creating default.')
             if self.set_weights:
                 if self.verbosity > 0:
                     print(f'Initializing weights with bounds of {-i} to {i}')
-                for name, param in self.named_parameters():
+                i = (1 / 137) ** 3
+                for name, param in self.network.named_parameters():
                     if param.requires_grad:
                         uniform_(param, -i, i)
             self.save_state(state_path)
@@ -180,8 +194,10 @@ class Cauldron(torch.nn.Module):
 
     def random_batch(self):
         """Returns a random batch of inputs and targets"""
-        input_index = self.input_index
-        target_index = self.target_index
+        input_indices = self.input_indices
+        target_indices = self.target_indices
+        n_inputs = self.n_inputs
+        n_targets = self.n_targets
         n_batch = self.n_batch
         n_data = self.n_data
         batch_start = randint(0, self.batch_max)
@@ -189,8 +205,8 @@ class Cauldron(torch.nn.Module):
         batch_symbol = randint(0, self.n_symbol)
         batch = self.candelabrum[batch_start:batch_end, batch_symbol, :]
         return (
-            batch[:n_batch, input_index].view(1, n_batch),
-            batch[n_batch:, target_index].view(1, n_batch),
+            batch[:n_batch, input_indices].view(n_batch, n_inputs),
+            batch[n_batch:, target_indices].view(n_batch, n_targets),
             )
 
     def encoder(self, tensor, softmax=True):
@@ -210,13 +226,17 @@ class Cauldron(torch.nn.Module):
         else:
             return pattern
 
-    def forward(self, inputs, mask, use_mask=True, softmax=True):
+    def forward(self, inputs, mask=None):
         """Takes batched inputs and returns the future sentiment."""
-        if use_mask:
-            state = self.network(inputs * mask, inputs)
-        else:
-            state = self.network(inputs, inputs)
-        return self.encoder(state, softmax=softmax)
+        n_batch = self.n_batch
+        n_forecast = self.n_forecast
+        n_heads = self.n_heads
+        if mask is not None:
+            state = inputs * mask
+        state = inputs.view(1, n_heads)
+        state = self.network(state, inputs.view(1, n_heads)).flatten()
+        predictions = topk(state, n_forecast, sorted=False, largest=True)
+        return state[predictions.indices].view(n_batch, 3).softmax(-1)
 
     def train_network(self, n_depth=9, hours=96, checkpoint=60, validate=False):
         """Studies masked random batches for a specified amount of hours."""
@@ -229,11 +249,9 @@ class Cauldron(torch.nn.Module):
         bernoulli = torch.bernoulli
         forward = self.forward
         state_path = self.state_path
-        epoch = self.metrics['training_epochs']
-        elapsed = 0
         n_batch = self.n_batch
-        mask_min = 2
-        mask_max = n_batch - 2
+        epoch = 0
+        elapsed = 0
         if verbosity > 0:
             print('Training started.')
         self.train()
@@ -246,16 +264,11 @@ class Cauldron(torch.nn.Module):
             optimizer.zero_grad()
             inputs, targets = random_batch()
             targets = encoder(targets, softmax=False)
-            mask = bernoulli(input_mask)
-            mask_sum = mask[0].sum(0)
-            while mask_min > mask_sum or mask_sum > mask_max:
-                mask = bernoulli(input_mask)
-                mask_sum = mask[0].sum(0)
             error = 0
             depth = 0
             while depth <= n_depth:
-                state_time = time.time()
-                state = forward(inputs, mask, use_mask=True)
+                mask = bernoulli(input_mask)
+                state = forward(inputs, mask=mask)
                 loss = loss_fn(state, targets)
                 loss.backward()
                 optimizer.step()
@@ -264,17 +277,6 @@ class Cauldron(torch.nn.Module):
             ts = time.time()
             elapsed = ((ts - start_time) / 60) / 60
             epoch_time = ((ts - epoch_time) / 60) / 60
-            self.metrics['training_epochs'] = epoch
-            self.metrics['training_error'] = error
-            self.metrics['training_time'] += epoch_time
-            if verbosity > 1:
-                print(state, 'state')
-                print(targets, 'targets')
-            if verbosity > 0:
-                print('epoch_time:', epoch_time * 60, 'minutes')
-                print('training_error:', self.metrics['training_error'])
-                print('training_time:', self.metrics['training_time'], 'hours')
-                print('session_time:', elapsed, 'hours')
             if validate and epoch % validate == 0:
                 self.validate_network()
             if epoch % checkpoint == 0:
@@ -299,8 +301,10 @@ class Cauldron(torch.nn.Module):
         batch_max = self.batch_max
         encoder = self.encoder
         forward = self.forward
-        input_index = self.input_index
-        target_index = self.target_index
+        input_indices = self.input_indices
+        target_indices = self.target_indices
+        n_inputs = self.n_inputs
+        n_targets = self.n_targets
         batches = 0
         n_correct = 0
         n_total = 0
@@ -313,10 +317,12 @@ class Cauldron(torch.nn.Module):
         for batches, batch in enumerate(dataset):
             batch = batch[0].transpose(0, 1)
             for symbol in symbol_range:
-                inputs = batch[symbol, :n_batch, input_index].view(1, n_batch)
-                targets = batch[symbol, n_batch:, target_index].view(1, n_batch)
-                state = forward(inputs, None, use_mask=False).flatten()
+                inputs = batch[symbol, :n_batch, input_indices]
+                inputs = inputs.view(n_batch, n_inputs)
+                targets = batch[symbol, n_batch:, target_indices]
+                targets = targets.view(n_batch, n_targets)
                 targets = encoder(targets, softmax=False).flatten()
+                state = forward(inputs).flatten()
                 state_pred = topk(state, n_batch, largest=True, sorted=False)
                 target_pred = topk(targets, n_batch, largest=True, sorted=False)
                 state_pred = state_pred.indices

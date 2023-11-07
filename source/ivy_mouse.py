@@ -101,7 +101,7 @@ async def __start_server__(address, *args, **kwargs):
     TCP/IP Server for distributed learning.
     """
     update_key = __get_file_hash__(PATHING[0])
-    chit_chat('\b: server started')
+    chit_chat(f'\b: {address[0]} serving on port {address[1]}')
     def __open_connection__(client_socket, address):
         with client_socket as connection:
             chit_chat(f'{address[0]}: connection open')
@@ -324,10 +324,10 @@ def __merge_states__(*args, **kwargs):
     def __merge_params__(old_state, new_state, finalize=False):
         for key, value in new_state.items():
             if type(value) == TENSOR and key in old_state:
-                if finalize:
-                    old_state[key] = (old_state[key] + value) / 2
-                else:
+                if not finalize:
                     old_state[key] += value * state_offset
+                else:
+                    old_state[key] = (old_state[key] + value) / 2
         return old_state
     __path_exists__ = path.exists
     __path_join__ = path.join
@@ -496,18 +496,33 @@ class ThreeBlindMice():
         chit_chat('\b: inscribing sigils')
         metrics, forecast = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
+        candelabrum = cauldron.candelabrum
+        with open(PATHING[2], 'rb') as features_file:
+            features = pickle.load(features_file)
+        rating_features = ('close', 'trend', 'price_zs', 'price_wema')
+        feature_indices = {k: features.index(k) for k in rating_features}
         picks = dict()
         for key, value in metrics.items():
             if key == 'validation.metrics': continue
             key = int(key)
             picks[symbols[key]] = value
-            picks[symbols[key]]['forecast'] = sum(forecast[key])
+            symbol_forecast = sum(forecast[key])
+            symbol_close = candelabrum[-1, key, feature_indices['close']]
+            symbol_trend = candelabrum[-1, key, feature_indices['trend']]
+            symbol_zs = candelabrum[-1, key, feature_indices['price_zs']]
+            symbol_wema = candelabrum[-1, key, feature_indices['price_wema']]
+            rating = symbol_forecast * 10
+            if symbol_close > symbol_wema:
+                rating += 10
+            if symbol_trend > 0:
+                rating += 10
+            if -1 <= symbol_zs <= 1:
+                rating += 10
+            rating = 1 * (1 / (100 / rating))
+            picks[symbols[key]]['rating'] = 100 * float(rating)
         picks = pandas.DataFrame(picks).transpose()
-        picks = picks.sort_values(by=['accuracy', 'forecast'], ascending=False)
+        picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
         picks = picks.index[:20].tolist()
-        candelabrum = cauldron.candelabrum
-        with open(PATHING[2], 'rb') as features_file:
-            features = pickle.load(features_file)
         chit_chat('\b: plotting charts')
         for symbol in symbols:
             chart_path = abspath(path.join(charts_path, f'{symbol}_market.png'))
