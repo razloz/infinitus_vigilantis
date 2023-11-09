@@ -288,7 +288,7 @@ def __study__(address, update_key, last_push, n_depth=9, hours=3, checkpoint=5):
         loops += 1
         chit_chat(f'\b: starting loop #{loops}')
         cauldron.train_network(
-            n_depth=n_depth,
+            depth=n_depth,
             hours=hours,
             checkpoint=checkpoint,
         )
