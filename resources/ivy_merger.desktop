@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=IVy State Merger
-Comment=Infinitus Vigilantis for Python State Merger
-Path=$IVY
-Exec=/bin/bash -c "$IVY/infinitus_vigilantis.py --merge_states"
-Icon=ivy_merge_states
-Terminal=true
-Categories=System;

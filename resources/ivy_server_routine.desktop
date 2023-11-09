@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=IVy Routine
-Comment=Infinitus Vigilantis for Python Distributed Learning Server
-Path=$IVY
-Exec=/bin/bash -c "$IVY/infinitus_vigilantis.py --build --merge_states --create_website --start_serving"
-Icon=ivy_server
-Terminal=true
-Categories=System;
