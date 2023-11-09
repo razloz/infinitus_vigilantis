@@ -45,6 +45,11 @@ if __name__ == '__main__':
         action='store_true',
         help='Start the server.',
     )
+    parser.add_argument(
+        '--study',
+        action='store_true',
+        help='Study the candelabrum.',
+    )
     args = parser.parse_args()
     if args:
         if args.start_learning:
@@ -67,5 +72,10 @@ if __name__ == '__main__':
                         mice.build_https(skip_validation=False)
                 if args.start_serving:
                     mice.start_serving()
+            elif args.study:
+                import source.ivy_cauldron as ivy_cauldron
+                cauldron = ivy_cauldron.Cauldron(verbosity=1)
+                while True:
+                    cauldron.train_network()
     else:
         raise(Exception('Missing argument.'))
