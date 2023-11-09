@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=IVy Client
+Comment=Infinitus Vigilantis for Python Distributed Learning Client
+Path=$IVY
+Exec=/bin/bash -c "$IVY/infinitus_vigilantis.py --start_learning"
+Icon=ivy_client
+Terminal=true
+Categories=System;

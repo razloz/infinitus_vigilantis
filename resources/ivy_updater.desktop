@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=IVy Updater
+Comment=Infinitus Vigilantis for Python Candelabrum Updater
+Path=$IVY
+Exec=/bin/bash -c "$IVY/infinitus_vigilantis.py --build"
+Icon=infinitus_vigilantis
+Terminal=true
+Categories=System;

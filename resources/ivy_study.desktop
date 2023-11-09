@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=IVy Study
+Comment=Infinitus Vigilantis for Python Study Session
+Path=$IVY
+Exec=/bin/bash -c "$IVY/infinitus_vigilantis.py --study"
+Icon=ivy_client
+Terminal=true
+Categories=System;
