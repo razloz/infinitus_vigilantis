@@ -1,5 +1,6 @@
 """Three blind mice to predict the future."""
 import asyncio
+import gc
 import hashlib
 import json
 import logging
@@ -169,6 +170,7 @@ async def __start_server__(address, *args, **kwargs):
                     chit_chat(f'{address[0]}: {repr(details)}', log_level=2)
                     break
         chit_chat(f'{address[0]}: connection closed')
+        gc.collect()
         return False
     server_socket = socket.create_server(
         address,
@@ -188,6 +190,7 @@ def __update_network__(address, last_key, *args, **kwargs):
     Get current cauldron state and candelabrum files from server.
     """
     update_key = ''
+    binary_file = None
     try:
         with socket.create_connection(address) as connection:
             chit_chat('\b: connected... checking for updates...')
@@ -238,6 +241,8 @@ def __update_network__(address, last_key, *args, **kwargs):
     except Exception as details:
         chit_chat(f'\b: {repr(details)}', log_level=2)
     finally:
+        del(binary_file)
+        gc.collect()
         return update_key
 
 
@@ -246,6 +251,7 @@ def __push_state__(address, state_path, update_key):
     Send cauldron state to the server.
     """
     new_key = update_key
+    state = None
     try:
         with open(state_path, 'rb') as state_file:
             state = state_file.read()
@@ -272,6 +278,8 @@ def __push_state__(address, state_path, update_key):
     except Exception as details:
         chit_chat(f'\b: {repr(details)}', log_level=2)
     finally:
+        del(state)
+        gc.collect()
         return new_key
 
 
@@ -303,6 +311,8 @@ def __study__(address, update_key, last_push, n_depth=9, hours=3, checkpoint=5):
             update_key = __update_network__(address, update_key)
             if update_key != '':
                 __save_pickle__(update_key, hash_path)
+            del(cauldron)
+            gc.collect()
             cauldron = ivy_cauldron.Cauldron()
 
 
@@ -362,6 +372,8 @@ def __merge_states__(*args, **kwargs):
                 )
             )
     chit_chat('\b: finalizing merge')
+    del(base_cauldron)
+    gc.collect()
     base_cauldron = ivy_cauldron.Cauldron()
     base_cauldron.load_state(state_path=state_path)
     base_cauldron.load_state_dict(
@@ -396,6 +408,9 @@ def __merge_states__(*args, **kwargs):
             if __path_exists__(file_path):
                 __remove_file__(file_path)
     chit_chat('\b: merge complete')
+    del(base_cauldron)
+    del(proxy_cauldron)
+    gc.collect()
     return True
 
 
@@ -530,6 +545,8 @@ class ThreeBlindMice():
             candles = read_csv(candles)
             candles.set_index('time', inplace=True)
             cartography(symbol, candles, chart_path=chart_path, chart_size=365)
+            del(candles)
+            gc.collect()
         chit_chat('\b: building html documents')
         cabinet = ivy_https.build(
             symbols,
