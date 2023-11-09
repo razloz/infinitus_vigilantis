@@ -289,6 +289,8 @@ class Cauldron(torch.nn.Module):
             if validate and epoch % validate == 0:
                 self.validate_network()
             if epoch % checkpoint == 0:
+                if verbosity > 0:
+                    print('epoch:', epoch, '|| elapsed:', elapsed)
                 self.save_state(state_path)
         if validate and epoch % validate != 0:
             self.validate_network()
