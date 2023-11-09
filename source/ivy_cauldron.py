@@ -10,8 +10,10 @@ from torch.nn.init import uniform_
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2023, Daniel Ward'
 __license__ = 'GPL v3'
+π = torch.pi
+φ = 1.618033988749894
+ε = 1.18e-6
 FLOAT = torch.float
-PI = torch.pi
 topk = torch.topk
 vstack = torch.vstack
 leaky_relu = torch.nn.functional.leaky_relu
@@ -31,7 +33,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('pct_chg',),
         verbosity=0,
         no_caching=True,
-        set_weights=True,
+        set_weights=False,
         try_cuda=False,
         detect_anomaly=False,
         ):
@@ -84,9 +86,13 @@ class Cauldron(torch.nn.Module):
         n_slice = n_batch * 2
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
-        n_heads = n_batch * n_inputs
         n_time, n_symbols, n_data = candelabrum.shape
         n_data -= 1
+        self.pi_phi = torch.tensor(
+            [[φ, 1, π], [-1, 0, 1], [-π, -1, -φ]],
+            device=self.DEVICE,
+            dtype=FLOAT,
+            )
         self.pattern_range = range(n_batch)
         self.patterns = torch.zeros(
             [n_batch, 3],
@@ -100,19 +106,21 @@ class Cauldron(torch.nn.Module):
             )
         self.input_mask = torch.full(
             [n_batch, n_inputs],
-            1 - 0.618033988749894,
+            2 - φ,
             device=self.DEVICE,
             dtype=FLOAT,
             )
+        n_heads = n_batch * n_inputs
+        d_model = n_heads * 9
         self.network = torch.nn.Transformer(
-            d_model=n_heads,
+            d_model=d_model,
             nhead=n_heads,
-            num_encoder_layers=512,
-            num_decoder_layers=512,
-            dim_feedforward=2048,
+            num_encoder_layers=64,
+            num_decoder_layers=64,
+            dim_feedforward=3 ** n_batch,
             dropout=0.03,
             activation=leaky_relu,
-            layer_norm_eps=1.18e-6,
+            layer_norm_eps=ε,
             batch_first=True,
             norm_first=True,
             device=self.DEVICE,
@@ -130,6 +138,7 @@ class Cauldron(torch.nn.Module):
         self.candelabrum = candelabrum
         self.input_indices = input_indices
         self.target_indices = target_indices
+        self.d_model = d_model
         self.n_inputs = n_inputs
         self.n_targets = n_targets
         self.n_heads = n_heads
@@ -161,9 +170,9 @@ class Cauldron(torch.nn.Module):
             if self.verbosity > 0:
                 print('No state found, creating default.')
             if self.set_weights:
+                i = (1 / 137) ** 3
                 if self.verbosity > 0:
                     print(f'Initializing weights with bounds of {-i} to {i}')
-                i = (1 / 137) ** 3
                 for name, param in self.network.named_parameters():
                     if param.requires_grad:
                         uniform_(param, -i, i)
@@ -228,17 +237,24 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, inputs, mask=None):
         """Takes batched inputs and returns the future sentiment."""
+        global ε
+        cat = torch.cat
         n_batch = self.n_batch
         n_forecast = self.n_forecast
-        n_heads = self.n_heads
+        d_model = self.d_model
+        πφ = self.pi_phi
         if mask is not None:
-            state = inputs * mask
-        state = inputs.view(1, n_heads)
-        state = self.network(state, inputs.view(1, n_heads)).flatten()
+            state = (inputs * mask).flatten()
+        else:
+            state = inputs.flatten()
+        state = cat([(t * πφ).view(1, 9) * ε for t in state]).view(1, d_model)
+        inputs = inputs.flatten()
+        inputs = cat([(t * πφ).view(1, 9) * ε for t in inputs]).view(1, d_model)
+        state = self.network(state, inputs).flatten()
         predictions = topk(state, n_forecast, sorted=False, largest=True)
         return state[predictions.indices].view(n_batch, 3).softmax(-1)
 
-    def train_network(self, n_depth=9, hours=96, checkpoint=60, validate=False):
+    def train_network(self, depth=9, hours=120, checkpoint=150, validate=False):
         """Studies masked random batches for a specified amount of hours."""
         verbosity = self.verbosity
         loss_fn = self.loss_fn
@@ -250,6 +266,7 @@ class Cauldron(torch.nn.Module):
         forward = self.forward
         state_path = self.state_path
         n_batch = self.n_batch
+        depth_range = range(depth)
         epoch = 0
         elapsed = 0
         if verbosity > 0:
@@ -257,26 +274,18 @@ class Cauldron(torch.nn.Module):
         self.train()
         start_time = time.time()
         while elapsed < hours:
-            epoch_time = time.time()
             epoch += 1
-            if verbosity > 0:
-                print('Epoch:', epoch)
-            optimizer.zero_grad()
+            if verbosity > 1:
+                print('epoch:', epoch, '|| elapsed:', elapsed)
             inputs, targets = random_batch()
             targets = encoder(targets, softmax=False)
-            error = 0
-            depth = 0
-            while depth <= n_depth:
-                mask = bernoulli(input_mask)
-                state = forward(inputs, mask=mask)
+            for _ in depth_range:
+                optimizer.zero_grad()
+                state = forward(inputs, mask=bernoulli(input_mask))
                 loss = loss_fn(state, targets)
                 loss.backward()
                 optimizer.step()
-                error = loss.item()
-                depth += 1
-            ts = time.time()
-            elapsed = ((ts - start_time) / 60) / 60
-            epoch_time = ((ts - epoch_time) / 60) / 60
+            elapsed = (time.time() - start_time) / 3600
             if validate and epoch % validate == 0:
                 self.validate_network()
             if epoch % checkpoint == 0:
