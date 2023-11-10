@@ -533,7 +533,8 @@ class ThreeBlindMice():
                 rating += 10
             if -1 <= symbol_zs <= 1:
                 rating += 10
-            rating = 1 * (1 / (100 / rating))
+            if rating > 0:
+                rating = 1 / (100 / rating)
             picks[symbols[key]]['rating'] = 100 * float(rating)
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)

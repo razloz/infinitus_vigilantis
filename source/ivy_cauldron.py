@@ -367,18 +367,19 @@ class Cauldron(torch.nn.Module):
         plt.rcParams['figure.figsize'] = [10, 2]
         symbols = self.symbols
         n_batch = self.n_batch
+        n_inputs = self.n_inputs
         forward = self.forward
-        input_index = self.input_index
+        input_indices = self.input_indices
         candelabrum = self.candelabrum[-n_batch:].transpose(0, 1)
         forecast_path = path.join(charts_path, '{0}_forecast.png')
         forecast = list()
         self.eval()
         for index in range(len(symbols)):
-            inputs = candelabrum[index, :, input_index].view(1, n_batch)
-            sigil = forward(inputs, None, use_mask=False)
+            inputs = candelabrum[index, :, input_indices]
+            sigil = forward(inputs.view(n_batch, n_inputs))
             lines = list()
-            for prob in sigil.split(1):
-                case = prob.flatten().argmax(0)
+            for prob in sigil:
+                case = prob.argmax(0)
                 if case == 0:
                     lines.append(1)
                 elif case == 1:
