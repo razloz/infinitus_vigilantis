@@ -437,7 +437,7 @@ class ThreeBlindMice():
                 'host.port': '33333',
                 'n_depth': '9',
                 'hours': '3',
-                'checkpoint': '30',
+                'checkpoint': '90',
             }
             javafy.save(data=self.settings, file_path=SETTINGS_PATH)
         self.host_addr = str(self.settings['host.addr'])
