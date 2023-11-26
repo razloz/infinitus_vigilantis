@@ -80,10 +80,10 @@ if __name__ == '__main__':
             elif args.study:
                 import source.ivy_cauldron as ivy_cauldron
                 cauldron = ivy_cauldron.Cauldron(verbosity=1)
-                depth = 1 if args.cook else 9
+                depth = 1 #if args.cook else 9
                 hours = 168 if args.cook else 9999
-                checkpoint = 500 if args.cook else 90
-                use_mask = True if args.cook else False
+                checkpoint = 90 #500 if args.cook else 90
+                use_mask = False #True if args.cook else False
                 while True:
                     cauldron.train_network(
                         depth=depth,
