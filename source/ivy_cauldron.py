@@ -12,7 +12,7 @@ __copyright__ = 'Copyright 2023, Daniel Ward'
 __license__ = 'GPL v3'
 π = torch.pi
 φ = 1.618033988749894
-ε = 1.18e-6
+ε = (1 / 137) ** 3
 FLOAT = torch.float
 topk = torch.topk
 vstack = torch.vstack
@@ -29,11 +29,11 @@ class Cauldron(torch.nn.Module):
         root_folder=None,
         features=None,
         symbols=None,
-        input_labels=('close', 'trend', 'price_zs', 'price_wema', 'pct_chg',),
+        input_labels=('pct_chg', 'trend', 'volume_zs', 'price_zs',),
         target_labels=('pct_chg',),
         verbosity=0,
         no_caching=True,
-        set_weights=True,
+        set_weights=False,
         try_cuda=False,
         detect_anomaly=False,
         ):
@@ -82,7 +82,7 @@ class Cauldron(torch.nn.Module):
                 features = pickle.load(features_file)
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
-        n_batch = 13
+        n_batch = 8
         n_slice = n_batch * 2
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
@@ -115,10 +115,10 @@ class Cauldron(torch.nn.Module):
         self.network = torch.nn.Transformer(
             d_model=d_model,
             nhead=n_heads,
-            num_encoder_layers=90,
-            num_decoder_layers=90,
-            dim_feedforward=2048,
-            dropout=0.03,
+            num_encoder_layers=512,
+            num_decoder_layers=512,
+            dim_feedforward=256,
+            dropout=0.1,
             activation=leaky_relu,
             layer_norm_eps=ε,
             batch_first=True,
@@ -126,8 +126,14 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=FLOAT,
             )
-        self.loss_fn = torch.nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.Adagrad(self.network.parameters())
+        self.loss_fn = torch.nn.BCEWithLogitsLoss()
+        self.optimizer = torch.optim.AdamW(
+            self.network.parameters(),
+            lr=0.001,
+            betas=(0.9, 0.999),
+            eps=ε,
+            weight_decay=0.01,
+            )
         self.metrics = dict(
             training_epochs=0,
             training_error=0,
@@ -170,7 +176,7 @@ class Cauldron(torch.nn.Module):
             if self.verbosity > 0:
                 print('No state found, creating default.')
             if self.set_weights:
-                i = (1 / 137) ** 3
+                i = ε
                 if self.verbosity > 1:
                     print(f'Initializing weights with bounds of {-i} to {i}')
                 for name, param in self.network.named_parameters():
@@ -235,7 +241,7 @@ class Cauldron(torch.nn.Module):
         else:
             return pattern
 
-    def forward(self, inputs, mask=None):
+    def forward(self, inputs):
         """Takes batched inputs and returns the future sentiment."""
         global ε
         n_batch = self.n_batch
@@ -245,8 +251,6 @@ class Cauldron(torch.nn.Module):
         πφ = self.pi_phi
         cat = torch.cat
         topk = torch.topk
-        if mask is not None:
-            inputs = inputs * mask
         sigil = list()
         for d0 in inputs:
             for d1 in d0:
@@ -257,9 +261,6 @@ class Cauldron(torch.nn.Module):
                 sigil.append(inscription.clone().detach())
         sigil = torch.cat(sigil).view(n_batch, n_inputs, 9)
         sigil = sigil.sigmoid().log_softmax(2).view(n_batch, d_model)
-        #state = self.network(sigil, sigil).view(n_batch, n_inputs, 3, 3)
-        #sigil = topk(state, 1, dim=2, sorted=False, largest=True).values
-        #sigil = topk(sigil, 1, dim=1, sorted=False, largest=True).values
         state = self.network(sigil, sigil).flatten()
         sigil = topk(state, n_forecast, sorted=False, largest=True).values
         return sigil.view(n_batch, 2).log_softmax(-1)
@@ -299,7 +300,7 @@ class Cauldron(torch.nn.Module):
             for _ in depth_range:
                 optimizer.zero_grad()
                 if use_mask:
-                    state = forward(inputs, mask=bernoulli(input_mask))
+                    state = forward(inputs * bernoulli(input_mask))
                 else:
                     state = forward(inputs)
                 loss = loss_fn(state, targets)
