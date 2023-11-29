@@ -33,7 +33,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('pct_chg',),
         verbosity=0,
         no_caching=True,
-        set_weights=False,
+        set_weights=True,
         try_cuda=False,
         detect_anomaly=False,
         ):
@@ -115,9 +115,9 @@ class Cauldron(torch.nn.Module):
         self.network = torch.nn.Transformer(
             d_model=d_model,
             nhead=n_heads,
-            num_encoder_layers=512,
-            num_decoder_layers=512,
-            dim_feedforward=256,
+            num_encoder_layers=128,
+            num_decoder_layers=128,
+            dim_feedforward=1024,
             dropout=0.1,
             activation=leaky_relu,
             layer_norm_eps=ε,
@@ -145,6 +145,7 @@ class Cauldron(torch.nn.Module):
         self.input_indices = input_indices
         self.target_indices = target_indices
         self.d_model = d_model
+        self.d_split = int(d_model / 2)
         self.n_inputs = n_inputs
         self.n_targets = n_targets
         self.n_heads = n_heads
@@ -246,8 +247,8 @@ class Cauldron(torch.nn.Module):
         global ε
         n_batch = self.n_batch
         n_inputs = self.n_inputs
-        n_forecast = self.n_forecast
         d_model = self.d_model
+        d_split = self.d_split
         πφ = self.pi_phi
         cat = torch.cat
         topk = torch.topk
@@ -260,16 +261,15 @@ class Cauldron(torch.nn.Module):
                     inscription = (πφ * 0) + ε
                 sigil.append(inscription.clone().detach())
         sigil = torch.cat(sigil).view(n_batch, n_inputs, 9)
-        sigil = sigil.sigmoid().log_softmax(2).view(n_batch, d_model)
-        state = self.network(sigil, sigil).flatten()
-        sigil = topk(state, n_forecast, sorted=False, largest=True).values
-        return sigil.view(n_batch, 2).log_softmax(-1)
+        sigil = sigil.sigmoid().log_softmax(-1).view(n_batch, d_model)
+        state = self.network(sigil, sigil).view(n_batch, 2, d_split)
+        return state.sum(-1).log_softmax(-1)
 
     def train_network(
         self,
-        depth=9,
-        hours=120,
-        checkpoint=90,
+        depth=500,
+        hours=168,
+        checkpoint=1,
         validate=False,
         use_mask=False,
         ):
@@ -391,7 +391,24 @@ class Cauldron(torch.nn.Module):
     def inscribe_sigil(self, charts_path):
         """Plot final batch predictions from the candelabrum."""
         import matplotlib.pyplot as plt
+        # chart stuff
+        plt.style.use('dark_background')
         plt.rcParams['figure.figsize'] = [10, 2]
+        fig = plt.figure()
+        fig.suptitle('Daily Forecast', fontsize=18)
+        ax = fig.add_subplot()
+        ax.set_ylabel('Confidence', fontweight='bold')
+        ax.grid(True, color=(0.3, 0.3, 0.3))
+        ax.set_xlim([0, 9])
+        ax.set_ylim([0, 1])
+        x_labels = ax.xaxis.get_ticklabels()
+        x_labels[0].set_text('')
+        x_labels[-1].set_text('')
+        ax.set_xticklabels(x_labels)
+        bar_width = ax.get_tightbbox(fig.canvas.get_renderer()).get_points()
+        bar_width = ((bar_width[1][0] - bar_width[0][0]) / 7) * 0.5
+        midline_args = dict(color=(0.5, 0.5, 0.5), linewidth=1.5, alpha=0.9)
+        # imported values
         symbols = self.symbols
         n_batch = self.n_batch
         n_inputs = self.n_inputs
@@ -400,22 +417,22 @@ class Cauldron(torch.nn.Module):
         candelabrum = self.candelabrum[-n_batch:].transpose(0, 1)
         forecast_path = path.join(charts_path, '{0}_forecast.png')
         forecast = list()
+        # plot forecast
         self.eval()
         for index in range(len(symbols)):
             inputs = candelabrum[index, :, input_indices]
-            sigil = forward(inputs.view(n_batch, n_inputs))
-            lines = list()
-            for prob in sigil:
-                case = prob.argmax(0)
-                if case == 0:
-                    lines.append(1)
-                else:
-                    lines.append(0)
-            plt.plot(lines)
+            sigil = forward(inputs.view(n_batch, n_inputs)).exp()
+            probs = sigil[:, 0].tolist()
+            forecast.append(probs)
+            for i, p in enumerate(probs):
+                i = i + 1
+                ax.plot([i, i], [p, 1], color='red', linewidth=bar_width)
+                ax.plot([i, i], [0, p], color='green', linewidth=bar_width)
+            ax.plot([0, 9], [0.5, 0.5], **midline_args)
             plt.savefig(forecast_path.format(symbols[index]))
+            fig.clf()
             plt.clf()
-            plt.close()
-            forecast.append(lines)
+        plt.close()
         with open(self.validation_path, 'rb') as validation_file:
             metrics = pickle.load(validation_file)
         return (metrics, forecast)

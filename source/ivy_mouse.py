@@ -435,9 +435,9 @@ class ThreeBlindMice():
             self.settings = {
                 'host.addr': 'localhost',
                 'host.port': '33333',
-                'n_depth': '9',
-                'hours': '3',
-                'checkpoint': '90',
+                'n_depth': '50',
+                'hours': '0.5',
+                'checkpoint': '10',
             }
             javafy.save(data=self.settings, file_path=SETTINGS_PATH)
         self.host_addr = str(self.settings['host.addr'])
@@ -514,8 +514,8 @@ class ThreeBlindMice():
         candelabrum = cauldron.candelabrum
         with open(PATHING[2], 'rb') as features_file:
             features = pickle.load(features_file)
-        rating_features = ('close', 'trend', 'price_zs', 'price_wema')
-        feature_indices = {k: features.index(k) for k in rating_features}
+        _labels = ('close', 'trend', 'price_zs', 'price_wema', 'volume_zs')
+        feature_indices = {k: features.index(k) for k in _labels}
         picks = dict()
         for key, value in metrics.items():
             if key == 'validation.metrics': continue
@@ -525,6 +525,7 @@ class ThreeBlindMice():
             symbol_close = candelabrum[-1, key, feature_indices['close']]
             symbol_trend = candelabrum[-1, key, feature_indices['trend']]
             symbol_zs = candelabrum[-1, key, feature_indices['price_zs']]
+            volume_zs = candelabrum[-1, key, feature_indices['volume_zs']]
             symbol_wema = candelabrum[-1, key, feature_indices['price_wema']]
             rating = symbol_forecast * 10
             if symbol_close > symbol_wema:
@@ -532,6 +533,8 @@ class ThreeBlindMice():
             if symbol_trend > 0:
                 rating += 10
             if -1 <= symbol_zs <= 1:
+                rating += 10
+            if -1 <= volume_zs <= 1:
                 rating += 10
             if rating > 0:
                 rating = 1 / (100 / rating)
