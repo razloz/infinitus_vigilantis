@@ -435,9 +435,9 @@ class ThreeBlindMice():
             self.settings = {
                 'host.addr': 'localhost',
                 'host.port': '33333',
-                'n_depth': '50',
+                'n_depth': '1',
                 'hours': '0.5',
-                'checkpoint': '10',
+                'checkpoint': '1000',
             }
             javafy.save(data=self.settings, file_path=SETTINGS_PATH)
         self.host_addr = str(self.settings['host.addr'])
@@ -512,6 +512,7 @@ class ThreeBlindMice():
         metrics, forecast = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
         candelabrum = cauldron.candelabrum
+        n_half = int(cauldron.n_batch / 2)
         with open(PATHING[2], 'rb') as features_file:
             features = pickle.load(features_file)
         _labels = ('close', 'trend', 'price_zs', 'price_wema', 'volume_zs')
@@ -521,24 +522,26 @@ class ThreeBlindMice():
             if key == 'validation.metrics': continue
             key = int(key)
             picks[symbols[key]] = value
-            symbol_forecast = sum(forecast[key])
+            predictions = forecast[key]
+            forecast_probs = [1 if p > 0.5 else 0 for p in predictions]
+            symbol_forecast = sum(forecast_probs)
             symbol_close = candelabrum[-1, key, feature_indices['close']]
             symbol_trend = candelabrum[-1, key, feature_indices['trend']]
             symbol_zs = candelabrum[-1, key, feature_indices['price_zs']]
             volume_zs = candelabrum[-1, key, feature_indices['volume_zs']]
             symbol_wema = candelabrum[-1, key, feature_indices['price_wema']]
-            rating = symbol_forecast * 10
-            if symbol_close > symbol_wema:
-                rating += 10
-            if symbol_trend > 0:
-                rating += 10
-            if -1 <= symbol_zs <= 1:
-                rating += 10
-            if -1 <= volume_zs <= 1:
-                rating += 10
-            if rating > 0:
-                rating = 1 / (100 / rating)
-            picks[symbols[key]]['rating'] = 100 * float(rating)
+            rating = 1
+            if symbol_forecast > n_half:
+                rating += symbol_forecast
+                if symbol_close > symbol_wema:
+                    rating += 1
+                    if symbol_trend > 0:
+                        rating *= 1 + (1 - (1 / symbol_trend))
+                if -0.5 <= symbol_zs <= 0.5:
+                    rating += 0.5
+                if -0.5 <= volume_zs <= 0.5:
+                    rating += 0.5
+            picks[symbols[key]]['rating'] = float(rating)
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
         picks = picks.index[:20].tolist()

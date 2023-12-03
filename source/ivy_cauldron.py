@@ -267,9 +267,9 @@ class Cauldron(torch.nn.Module):
 
     def train_network(
         self,
-        depth=500,
+        depth=100,
         hours=168,
-        checkpoint=1,
+        checkpoint=10,
         validate=False,
         use_mask=False,
         ):
@@ -391,23 +391,6 @@ class Cauldron(torch.nn.Module):
     def inscribe_sigil(self, charts_path):
         """Plot final batch predictions from the candelabrum."""
         import matplotlib.pyplot as plt
-        # chart stuff
-        plt.style.use('dark_background')
-        plt.rcParams['figure.figsize'] = [10, 2]
-        fig = plt.figure()
-        fig.suptitle('Daily Forecast', fontsize=18)
-        ax = fig.add_subplot()
-        ax.set_ylabel('Confidence', fontweight='bold')
-        ax.grid(True, color=(0.3, 0.3, 0.3))
-        ax.set_xlim([0, 9])
-        ax.set_ylim([0, 1])
-        x_labels = ax.xaxis.get_ticklabels()
-        x_labels[0].set_text('')
-        x_labels[-1].set_text('')
-        ax.set_xticklabels(x_labels)
-        bar_width = ax.get_tightbbox(fig.canvas.get_renderer()).get_points()
-        bar_width = ((bar_width[1][0] - bar_width[0][0]) / 7) * 0.5
-        midline_args = dict(color=(0.5, 0.5, 0.5), linewidth=1.5, alpha=0.9)
         # imported values
         symbols = self.symbols
         n_batch = self.n_batch
@@ -417,6 +400,11 @@ class Cauldron(torch.nn.Module):
         candelabrum = self.candelabrum[-n_batch:].transpose(0, 1)
         forecast_path = path.join(charts_path, '{0}_forecast.png')
         forecast = list()
+        # chart stuff
+        plt.style.use('dark_background')
+        plt.rcParams['figure.figsize'] = [10, 2]
+        fig = plt.figure()
+        midline_args = dict(color='red', linewidth=1.5, alpha=0.8)
         # plot forecast
         self.eval()
         for index in range(len(symbols)):
@@ -424,11 +412,42 @@ class Cauldron(torch.nn.Module):
             sigil = forward(inputs.view(n_batch, n_inputs)).exp()
             probs = sigil[:, 0].tolist()
             forecast.append(probs)
+            ax = fig.add_subplot()
+            ax.set_ylabel('Confidence', fontweight='bold')
+            ax.grid(True, color=(0.3, 0.3, 0.3))
+            ax.set_xlim(0, 9)
+            ax.set_ylim(0, 1)
+            bar_width = ax.get_tightbbox(fig.canvas.get_renderer()).get_points()
+            bar_width = ((bar_width[1][0] - bar_width[0][0]) / 7) * 0.5
             for i, p in enumerate(probs):
                 i = i + 1
-                ax.plot([i, i], [p, 1], color='red', linewidth=bar_width)
-                ax.plot([i, i], [0, p], color='green', linewidth=bar_width)
-            ax.plot([0, 9], [0.5, 0.5], **midline_args)
+                ax.plot(
+                    [i, i],
+                    [p, 1],
+                    color='red',
+                    linewidth=bar_width,
+                    alpha=0.7,
+                    )
+                ax.plot(
+                    [i, i],
+                    [0, p],
+                    color='green',
+                    linewidth=bar_width,
+                    alpha=0.9,
+                    )
+            ax.plot(
+                [0, 9],
+                [0.5, 0.5],
+                color=(0.5, 0.5, 0.5),
+                linewidth=1.5,
+                alpha=0.9,
+                )
+            ax.set_xticks(ax.get_xticks())
+            x_labels = ax.get_xticklabels()
+            x_labels[0].set_text('')
+            x_labels[-1].set_text('')
+            ax.set_xticklabels(x_labels)
+            fig.suptitle('Daily Forecast', fontsize=18)
             plt.savefig(forecast_path.format(symbols[index]))
             fig.clf()
             plt.clf()
