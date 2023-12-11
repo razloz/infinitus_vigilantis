@@ -522,26 +522,22 @@ class ThreeBlindMice():
             if key == 'validation.metrics': continue
             key = int(key)
             picks[symbols[key]] = value
+            accuracy = float(value['accuracy'] * 0.01)
             predictions = forecast[key]
-            forecast_probs = [1 if p > 0.5 else 0 for p in predictions]
-            symbol_forecast = sum(forecast_probs)
+            symbol_forecast = [1 if p > 0.5 else 0 for p in predictions]
             symbol_close = candelabrum[-1, key, feature_indices['close']]
             symbol_trend = candelabrum[-1, key, feature_indices['trend']]
             symbol_zs = candelabrum[-1, key, feature_indices['price_zs']]
             volume_zs = candelabrum[-1, key, feature_indices['volume_zs']]
             symbol_wema = candelabrum[-1, key, feature_indices['price_wema']]
-            rating = 1
-            if symbol_forecast > n_half:
-                rating += symbol_forecast
-                if symbol_close > symbol_wema:
-                    rating += 1
-                    if symbol_trend > 0:
-                        rating *= 1 + (1 - (1 / symbol_trend))
-                if -0.5 <= symbol_zs <= 0.5:
-                    rating += 0.5
-                if -0.5 <= volume_zs <= 0.5:
-                    rating += 0.5
-            picks[symbols[key]]['rating'] = float(rating)
+            rating = sum(symbol_forecast)
+            if rating >= n_half:
+                rating += sum([float(p) for p in predictions])
+                rating += 1 if -0.5 <= symbol_zs <= 0.5 else 0
+                rating += 1 if -0.5 <= volume_zs <= 0.5 else 0
+                rating += 1 if symbol_close > symbol_wema else 0
+                rating *= 1 + (1 - (1/symbol_trend)) if symbol_trend > 0 else 1
+            picks[symbols[key]]['rating'] = accuracy * float(rating)
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
         picks = picks.index[:20].tolist()
