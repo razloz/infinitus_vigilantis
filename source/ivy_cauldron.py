@@ -127,7 +127,6 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        self.loss_fn = torch.nn.BCEWithLogitsLoss()
         n_learning_rate = 0.001
         n_betas = (0.9, 0.999)
         n_weight_decay = 0.01
@@ -138,6 +137,7 @@ class Cauldron(torch.nn.Module):
             eps=n_eps,
             weight_decay=n_weight_decay,
             )
+        self.candelabrum = candelabrum
         self.set_weights = set_weights
         self.verbosity = verbosity
         self.constants = {
@@ -210,16 +210,25 @@ class Cauldron(torch.nn.Module):
     def forward(self, batch, targets=None):
         """Takes batched inputs and returns the future sentiment."""
         n_batch, n_symbols, n_features = batch.shape
-        loss_fn = self.loss_fn
-        optimizer = self.optimizer
         network = self.network
         predictions = list()
         if targets is not None:
+            bce = torch.nn.BCEWithLogitsLoss
+            optimizer = self.optimizer
             optimizer.zero_grad()
         for i, inputs in enumerate(batch):
             state = network(inputs, inputs).var(dim=1, correction=0)
             if targets is not None:
-                loss = loss_fn(state, targets[i])
+                target = targets[i]
+                pos_targets = target.sum(0)
+                if pos_targets > 0:
+                    neg_targets = n_symbols - pos_targets
+                    target_ratio = (neg_targets / pos_targets)
+                    weights = (target * target_ratio) + 1
+                else:
+                    weights = (target + 1)
+                loss_fn = bce(pos_weight=weights)
+                loss = loss_fn(state, target)
                 loss.backward()
             predictions.append(state.clone().detach())
         if targets is not None:
@@ -229,13 +238,14 @@ class Cauldron(torch.nn.Module):
         predictions[predictions < 0] = 0
         return predictions.clone().detach()
 
-    def train_network(self, depth=1, hours=168, checkpoint=1, validate=False):
+    def train_network(self, depth=1, hours=168, checkpoint=1, quicksave=True, validate=False):
         """Batched training over hours."""
         constants = self.constants
         n_batch = constants['n_batch']
         n_symbols = constants['n_symbols']
         verbosity = self.verbosity
         forward = self.forward
+        save_state = self.save_state
         state_path = self.state_path
         dataset = self.training_data
         temp_target = self.temp_target
@@ -253,62 +263,55 @@ class Cauldron(torch.nn.Module):
                 temp_target *= 0
                 temp_target[targets.view(n_batch, n_symbols) > 0] += 1
                 predictions = forward(batch, targets=temp_target)
+                if quicksave:
+                    save_state(state_path)
                 if verbosity > 0:
                     print(repr(predictions))
                     print('predictions', predictions.shape)
             elapsed = (time.time() - start_time) / 3600
-            if epoch % checkpoint == 0:
-                if verbosity > 0:
-                    ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-                    print(f'{ts}: epoch = {epoch} || elapsed = {elapsed}')
-                self.save_state(state_path)
-        if epoch % checkpoint != 0:
-            self.save_state(state_path)
+            if not quicksave:
+                if epoch % checkpoint == 0:
+                    if verbosity > 0:
+                        ts = time.localtime()
+                        ts = time.strftime('%Y-%m-%d %H:%M:%S', ts)
+                        print(f'{ts}: epoch = {epoch} || elapsed = {elapsed}')
+                save_state(state_path)
+        if not quicksave:
+            if epoch % checkpoint != 0:
+                save_state(state_path)
         if verbosity > 0:
             print(f'Training finished after {elapsed} hours.')
 
     def validate_network(self):
         """Tests the network on new data."""
-        dataset = self.dataset
+        constants = self.constants
+        n_batch = constants['n_batch']
+        n_symbols = constants['n_symbols']
+        dataset = self.validation_data
         verbosity = self.verbosity
         network = self.network
-        n_batch = self.n_batch
-        n_slice = self.n_slice
-        n_time = self.n_time
-        n_symbol = self.n_symbol
-        n_data = self.n_data
-        batch_max = self.batch_max
-        encoder = self.encoder
         forward = self.forward
-        input_indices = self.input_indices
-        target_indices = self.target_indices
-        n_inputs = self.n_inputs
-        n_targets = self.n_targets
-        batches = 0
+        temp_target = self.temp_target
         n_correct = 0
         n_total = 0
         results = dict()
-        batch_range = range(n_batch)
-        symbol_range = range(n_symbol + 1)
         if verbosity > 0:
             print('Starting validation routine.')
         self.eval()
-        for batches, batch in enumerate(dataset):
-            batch = batch[0].transpose(0, 1)
-            for symbol in symbol_range:
-                inputs = batch[symbol, :n_batch, input_indices]
-                inputs = inputs.view(n_batch, n_inputs)
-                targets = batch[symbol, n_batch:, target_indices]
-                targets = targets.view(n_batch, n_targets)
-                targets = encoder(targets, softmax=False).flatten()
-                state = forward(inputs).flatten()
-                state_pred = topk(state, n_batch, largest=True, sorted=False)
-                target_pred = topk(targets, n_batch, largest=True, sorted=False)
-                state_pred = state_pred.indices
-                target_pred = target_pred.indices
+        for batch, targets in dataset:
+            predictions = forward(batch, targets=None)
+            temp_target *= 0
+            temp_target[targets.view(n_batch, n_symbols) > 0] += 1
+            targets = temp_target.transpose(0, 1)
+            for symbol, forecast in enumerate(predictions.transpose(0, 1)):
                 correct = 0
-                for i in batch_range:
-                    if state_pred[i] == target_pred[i]:
+                for target_prob, prob in enumerate(forecast):
+                    target = targets[symbol, target_prob]
+                    target_match = any((
+                        target == 1 and prob > 0.5,
+                        target == 0 and prob <= 0.5,
+                        ))
+                    if target_match:
                         correct += 1
                 if symbol not in results:
                     results[symbol] = dict()
@@ -332,27 +335,18 @@ class Cauldron(torch.nn.Module):
     def inscribe_sigil(self, charts_path):
         """Plot final batch predictions from the candelabrum."""
         import matplotlib.pyplot as plt
-        # imported values
+        final_data = self.final_data
         symbols = self.symbols
-        n_batch = self.n_batch
-        n_inputs = self.n_inputs
-        forward = self.forward
-        input_indices = self.input_indices
-        candelabrum = self.candelabrum[-n_batch:].transpose(0, 1)
         forecast_path = path.join(charts_path, '{0}_forecast.png')
         forecast = list()
-        # chart stuff
         plt.style.use('dark_background')
         plt.rcParams['figure.figsize'] = [10, 2]
         fig = plt.figure()
         midline_args = dict(color='red', linewidth=1.5, alpha=0.8)
-        # plot forecast
         self.eval()
-        for index in range(len(symbols)):
-            inputs = candelabrum[index, :, input_indices]
-            sigil = forward(inputs.view(n_batch, n_inputs)).exp()
-            probs = sigil[:, 0].tolist()
-            forecast.append(probs)
+        predictions = self.forward(final_data, targets=None)
+        for symbol, probs in enumerate(predictions.transpose(0, 1)):
+            forecast.append(probs.clone().detach())
             ax = fig.add_subplot()
             ax.set_ylabel('Confidence', fontweight='bold')
             ax.grid(True, color=(0.3, 0.3, 0.3))
@@ -389,7 +383,7 @@ class Cauldron(torch.nn.Module):
             x_labels[-1].set_text('')
             ax.set_xticklabels(x_labels)
             fig.suptitle('Daily Forecast', fontsize=18)
-            plt.savefig(forecast_path.format(symbols[index]))
+            plt.savefig(forecast_path.format(symbols[symbol]))
             fig.clf()
             plt.clf()
         plt.close()

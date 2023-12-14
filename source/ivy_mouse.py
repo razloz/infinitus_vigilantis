@@ -498,7 +498,7 @@ class ThreeBlindMice():
         chit_chat('\b: starting server')
         asyncio.run(__start_server__(self.address), debug=debug)
 
-    def build_https(self, skip_validation=True):
+    def build_https(self, skip_charts=True, skip_validation=True):
         from pandas import read_csv
         chit_chat('\b: building website')
         candles_path = abspath(path.join(ROOT_PATH, '..', 'candelabrum'))
@@ -512,7 +512,7 @@ class ThreeBlindMice():
         metrics, forecast = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
         candelabrum = cauldron.candelabrum
-        n_half = int(cauldron.n_batch / 2)
+        n_half = int(cauldron.constants['n_batch'] / 2)
         with open(PATHING[2], 'rb') as features_file:
             features = pickle.load(features_file)
         _labels = ('close', 'trend', 'price_zs', 'price_wema', 'volume_zs')
@@ -541,15 +541,22 @@ class ThreeBlindMice():
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
         picks = picks.index[:20].tolist()
-        chit_chat('\b: plotting charts')
-        for symbol in symbols:
-            chart_path = abspath(path.join(charts_path, f'{symbol}_market.png'))
-            candles = abspath(path.join(candles_path, f'{symbol}.ivy'))
-            candles = read_csv(candles)
-            candles.set_index('time', inplace=True)
-            cartography(symbol, candles, chart_path=chart_path, chart_size=365)
-            del(candles)
-            gc.collect()
+        if not skip_charts:
+            chit_chat('\b: plotting charts')
+            for symbol in symbols:
+                chart_path = path.join(charts_path, f'{symbol}_market.png')
+                chart_path = abspath(chart_path)
+                candles = abspath(path.join(candles_path, f'{symbol}.ivy'))
+                candles = read_csv(candles)
+                candles.set_index('time', inplace=True)
+                cartography(
+                    symbol,
+                    candles,
+                    chart_path=chart_path,
+                    chart_size=365,
+                    )
+                del(candles)
+                gc.collect()
         chit_chat('\b: building html documents')
         cabinet = ivy_https.build(
             symbols,
