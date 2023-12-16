@@ -283,7 +283,7 @@ def __push_state__(address, state_path, update_key):
         return new_key
 
 
-def __study__(address, update_key, last_push, n_depth=9, hours=3, checkpoint=5):
+def __study__(address, update_key, last_push, hours=3, checkpoint=5):
     """
     Cauldronic machine learning.
     """
@@ -296,7 +296,6 @@ def __study__(address, update_key, last_push, n_depth=9, hours=3, checkpoint=5):
         loops += 1
         chit_chat(f'\b: starting loop #{loops}')
         cauldron.train_network(
-            depth=n_depth,
             hours=hours,
             checkpoint=checkpoint,
         )
@@ -435,7 +434,6 @@ class ThreeBlindMice():
             self.settings = {
                 'host.addr': 'localhost',
                 'host.port': '33333',
-                'n_depth': '1',
                 'hours': '0.5',
                 'checkpoint': '1000',
             }
@@ -460,7 +458,6 @@ class ThreeBlindMice():
         Create study thread.
         """
         address = self.address
-        n_depth = int(self.settings['n_depth'])
         hours = float(self.settings['hours'])
         checkpoint = int(self.settings['checkpoint'])
         hash_path = HASH_PATH
@@ -486,7 +483,6 @@ class ThreeBlindMice():
             address,
             update_key,
             last_push,
-            n_depth=n_depth,
             hours=hours,
             checkpoint=checkpoint,
         )
@@ -498,18 +494,17 @@ class ThreeBlindMice():
         chit_chat('\b: starting server')
         asyncio.run(__start_server__(self.address), debug=debug)
 
-    def build_https(self, skip_charts=True, skip_validation=True):
+    def build_https(self, skip_charts=True):
         from pandas import read_csv
         chit_chat('\b: building website')
         candles_path = abspath(path.join(ROOT_PATH, '..', 'candelabrum'))
         https_path = HTTPS_PATH
         charts_path = abspath(path.join(https_path, 'charts'))
         cauldron = ivy_cauldron.Cauldron()
-        if not skip_validation:
-            chit_chat('\b: validating neural network')
-            cauldron.validate_network()
+        chit_chat('\b: validating neural network')
+        predictions = cauldron.validate_network()
         chit_chat('\b: inscribing sigils')
-        metrics, forecast = cauldron.inscribe_sigil(charts_path)
+        metrics, forecast = cauldron.inscribe_sigil(charts_path, predictions)
         symbols = cauldron.symbols
         candelabrum = cauldron.candelabrum
         n_half = int(cauldron.constants['n_batch'] / 2)

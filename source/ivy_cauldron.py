@@ -3,11 +3,14 @@ import torch
 import json
 import pickle
 import time
+from itertools import product
 from random import randint
 from os import path, mkdir, environ
 from os.path import dirname, realpath, abspath
-from torch.utils.data import DataLoader, TensorDataset
+from torch.nn import BCEWithLogitsLoss
+from torch.nn.functional import interpolate
 from torch.nn.init import uniform_
+from torch.utils.data import DataLoader, TensorDataset
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2023, Daniel Ward'
 __license__ = 'GPL v3'
@@ -20,7 +23,7 @@ class Cauldron(torch.nn.Module):
         root_folder=None,
         features=None,
         symbols=None,
-        input_labels=None,
+        input_labels=('pct_chg', 'trend', 'volume_zs', 'price_zs',),
         target_labels=('pct_chg',),
         verbosity=0,
         no_caching=True,
@@ -89,28 +92,41 @@ class Cauldron(torch.nn.Module):
                 candelabrum[:n_slice, :, target_indices][n_batch:],
                 ),
             batch_size=n_batch,
+            shuffle=True,
             drop_last=True,
             )
-
         self.validation_data = DataLoader(
             TensorDataset(
                 candelabrum[n_slice:, :, input_indices][:-n_batch],
                 candelabrum[n_slice:, :, target_indices][n_batch:],
                 ),
             batch_size=n_batch,
+            shuffle=False,
             drop_last=True,
             )
         self.final_data = candelabrum[-n_batch:, :, input_indices]
+        self.temp_state = torch.zeros(
+            n_batch,
+            n_symbols,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
         self.temp_target = torch.zeros(
             n_batch,
             n_symbols,
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_model = n_features
-        n_heads = n_features
-        n_layers = n_batch
-        n_hidden = n_batch * n_symbols
+        self.binary_table = torch.tensor(
+            [i for i in product(range(2), repeat=n_batch)],
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
+        n_table = self.binary_table.shape[0]
+        n_model = n_table
+        n_heads = n_batch
+        n_layers = 40
+        n_hidden = 512
         n_dropout = 1.618033988749894 - 1.5
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -127,15 +143,16 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.001
+        n_learning_rate = 0.99
         n_betas = (0.9, 0.999)
-        n_weight_decay = 0.01
+        n_weight_decay = n_dropout
         self.optimizer = torch.optim.AdamW(
             self.network.parameters(),
             lr=n_learning_rate,
             betas=n_betas,
             eps=n_eps,
             weight_decay=n_weight_decay,
+            maximize=False,
             )
         self.candelabrum = candelabrum
         self.set_weights = set_weights
@@ -148,6 +165,7 @@ class Cauldron(torch.nn.Module):
             'n_batch': n_batch,
             'n_inputs': n_inputs,
             'n_targets': n_targets,
+            'n_table': n_table,
             'n_model': n_model,
             'n_heads': n_heads,
             'n_layers': n_layers,
@@ -209,46 +227,50 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, batch, targets=None):
         """Takes batched inputs and returns the future sentiment."""
+        training = True if targets is not None else False
+        topk = torch.topk
+        binary_table = self.binary_table
+        n_table = binary_table.shape[0]
         n_batch, n_symbols, n_features = batch.shape
-        network = self.network
-        predictions = list()
-        if targets is not None:
-            bce = torch.nn.BCEWithLogitsLoss
-            optimizer = self.optimizer
-            optimizer.zero_grad()
-        for i, inputs in enumerate(batch):
-            state = network(inputs, inputs).var(dim=1, correction=0)
-            if targets is not None:
-                target = targets[i]
-                pos_targets = target.sum(0)
-                if pos_targets > 0:
-                    neg_targets = n_symbols - pos_targets
-                    target_ratio = (neg_targets / pos_targets)
-                    weights = (target * target_ratio) + 1
-                else:
-                    weights = (target + 1)
-                loss_fn = bce(pos_weight=weights)
-                loss = loss_fn(state, target)
-                loss.backward()
-            predictions.append(state.clone().detach())
-        if targets is not None:
-            optimizer.step()
-        predictions = torch.cat(predictions).view(n_batch, n_symbols)
-        predictions[predictions > 1] = 1
-        predictions[predictions < 0] = 0
-        return predictions.clone().detach()
+        inputs = interpolate(
+            batch.view(1, n_symbols, n_batch * n_features),
+            size=n_table,
+            mode='linear',
+            align_corners=True,
+            ).view(n_symbols, n_table)
+        sigil = list()
+        for probs in (1 + self.network(inputs, inputs).tanh()) / 2:
+            i = topk(probs, 1, largest=True, sorted=False).indices
+            sigil.append(binary_table[i])
+        sigil = torch.cat(sigil).transpose(0, 1)
+        if training:
+            sigil.requires_grad_(True)
+            pos_targets = sum(targets.sum(0))
+            if pos_targets > 0:
+                neg_targets = n_symbols - pos_targets
+                target_ratio = (neg_targets / pos_targets)
+                weights = (targets * target_ratio) + 1
+            else:
+                weights = (targets + 1)
+            loss_fn = BCEWithLogitsLoss(pos_weight=weights)
+            loss = loss_fn(sigil, targets)
+            loss.backward()
+            return (sigil.clone().detach(), loss.item())
+        return sigil.clone().detach()
 
-    def train_network(self, depth=1, hours=168, checkpoint=1, quicksave=True, validate=False):
+    def train_network(self, hours=168, checkpoint=1):
         """Batched training over hours."""
         constants = self.constants
         n_batch = constants['n_batch']
         n_symbols = constants['n_symbols']
+        n_output = n_batch * n_symbols
         verbosity = self.verbosity
         forward = self.forward
         save_state = self.save_state
         state_path = self.state_path
         dataset = self.training_data
         temp_target = self.temp_target
+        optimizer = self.optimizer
         epoch = 0
         elapsed = 0
         if verbosity > 0:
@@ -259,26 +281,42 @@ class Cauldron(torch.nn.Module):
             epoch += 1
             if verbosity > 1:
                 print('epoch:', epoch, '|| elapsed:', elapsed)
+            epoch_error = list()
             for batch, targets in dataset:
+                optimizer.zero_grad()
                 temp_target *= 0
                 temp_target[targets.view(n_batch, n_symbols) > 0] += 1
-                predictions = forward(batch, targets=temp_target)
-                if quicksave:
-                    save_state(state_path)
-                if verbosity > 0:
-                    print(repr(predictions))
-                    print('predictions', predictions.shape)
+                predictions, batch_error = forward(batch, targets=temp_target)
+                optimizer.step()
+                epoch_error.append(batch_error)
+                if verbosity > 1:
+                    state_down = predictions[predictions <= 0.5].shape[0]
+                    state_perc = (n_output - state_down) / n_output
+                    target_down = temp_target[temp_target <= 0.5].shape[0]
+                    target_perc = (n_output - target_down) / n_output
+                    print('')
+                    print(predictions)
+                    print('predictions:', predictions.shape)
+                    print('elapsed:', (time.time() - start_time) / 3600)
+                    print('positive prediction percentage:', state_perc)
+                    print('positive target percentage:', target_perc)
+                    print('batch_error:', batch_error)
+                    print('')
             elapsed = (time.time() - start_time) / 3600
-            if not quicksave:
-                if epoch % checkpoint == 0:
-                    if verbosity > 0:
-                        ts = time.localtime()
-                        ts = time.strftime('%Y-%m-%d %H:%M:%S', ts)
-                        print(f'{ts}: epoch = {epoch} || elapsed = {elapsed}')
+            if verbosity > 0:
+                epoch_error = sum(epoch_error) / len(epoch_error)
+                ts = time.localtime()
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', ts)
+                print('*********************************************')
+                print(f'timestamp: {ts}')
+                print(f'epoch: {epoch}')
+                print(f'elapsed: {elapsed}')
+                print(f'error: {epoch_error}')
+                print('*********************************************')
+            if epoch % checkpoint == 0:
                 save_state(state_path)
-        if not quicksave:
-            if epoch % checkpoint != 0:
-                save_state(state_path)
+        if epoch % checkpoint != 0:
+            save_state(state_path)
         if verbosity > 0:
             print(f'Training finished after {elapsed} hours.')
 
@@ -287,7 +325,7 @@ class Cauldron(torch.nn.Module):
         constants = self.constants
         n_batch = constants['n_batch']
         n_symbols = constants['n_symbols']
-        dataset = self.validation_data
+        validation_data = self.validation_data
         verbosity = self.verbosity
         network = self.network
         forward = self.forward
@@ -298,12 +336,12 @@ class Cauldron(torch.nn.Module):
         if verbosity > 0:
             print('Starting validation routine.')
         self.eval()
-        for batch, targets in dataset:
-            predictions = forward(batch, targets=None)
+        for batch, targets in validation_data:
             temp_target *= 0
             temp_target[targets.view(n_batch, n_symbols) > 0] += 1
             targets = temp_target.transpose(0, 1)
-            for symbol, forecast in enumerate(predictions.transpose(0, 1)):
+            predictions = forward(batch, targets=None).transpose(0, 1)
+            for symbol, forecast in enumerate(predictions):
                 correct = 0
                 for target_prob, prob in enumerate(forecast):
                     target = targets[symbol, target_prob]
@@ -331,11 +369,11 @@ class Cauldron(torch.nn.Module):
             results[key]['accuracy'] = round((correct / total) * 100, 4)
         with open(self.validation_path, 'wb+') as validation_file:
             pickle.dump(results, validation_file)
+        return forward(self.final_data, targets=None)
 
-    def inscribe_sigil(self, charts_path):
+    def inscribe_sigil(self, charts_path, predictions):
         """Plot final batch predictions from the candelabrum."""
         import matplotlib.pyplot as plt
-        final_data = self.final_data
         symbols = self.symbols
         forecast_path = path.join(charts_path, '{0}_forecast.png')
         forecast = list()
@@ -343,8 +381,6 @@ class Cauldron(torch.nn.Module):
         plt.rcParams['figure.figsize'] = [10, 2]
         fig = plt.figure()
         midline_args = dict(color='red', linewidth=1.5, alpha=0.8)
-        self.eval()
-        predictions = self.forward(final_data, targets=None)
         for symbol, probs in enumerate(predictions.transpose(0, 1)):
             forecast.append(probs.clone().detach())
             ax = fig.add_subplot()
