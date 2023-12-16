@@ -36,11 +36,6 @@ if __name__ == '__main__':
         help='Start learning.',
     )
     parser.add_argument(
-        '--skip_validation',
-        action='store_true',
-        help='Start learning.',
-    )
-    parser.add_argument(
         '--start_learning',
         action='store_true',
         help='Start learning.',
@@ -71,15 +66,7 @@ if __name__ == '__main__':
                 if args.merge_states:
                     mice.merge_states()
                 if args.create_website:
-                    https_args = dict(
-                        skip_charts=False,
-                        skip_validation=False,
-                        )
-                    if args.skip_charts:
-                        https_args['skip_charts'] = True
-                    if args.skip_validation:
-                        https_args['skip_validation'] = True
-                    mice.build_https(**https_args)
+                    mice.build_https(skip_charts=args.skip_charts)
                 if args.start_serving:
                     mice.start_serving()
             elif args.study:
