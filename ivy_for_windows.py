@@ -13,6 +13,7 @@ if __name__ == '__main__':
     with open('.\license\Disclaimer.txt', 'r') as f:
         DISCLAIMER = f.read()
     print(f'\n{LICENSE}\n{DISCLAIMER}\n')
+
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
