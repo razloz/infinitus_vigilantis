@@ -125,10 +125,17 @@ class Cauldron(torch.nn.Module):
         n_table = self.binary_table.shape[0]
         n_model = n_table
         n_heads = n_batch
-        n_layers = 40
-        n_hidden = 512
+        n_layers = 6
+        n_hidden = 8 ** 5
         n_dropout = 1.618033988749894 - 1.5
         n_eps = (1 / 137) ** 3
+        self.temp_table = torch.full(
+            [n_symbols, n_model],
+            1 - n_dropout,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
+        self.bernoulli = torch.bernoulli
         self.network = torch.nn.Transformer(
             d_model=n_model,
             nhead=n_heads,
@@ -225,7 +232,7 @@ class Cauldron(torch.nn.Module):
             bytes_obj = torch.save(bytes_obj, buffer_io)
             return bytes_obj
 
-    def forward(self, batch, targets=None):
+    def forward(self, batch, targets=None, eps=3.889e-07):
         """Takes batched inputs and returns the future sentiment."""
         training = True if targets is not None else False
         topk = torch.topk
@@ -238,6 +245,9 @@ class Cauldron(torch.nn.Module):
             mode='linear',
             align_corners=True,
             ).view(n_symbols, n_table)
+        if training:
+            inputs *= self.bernoulli(self.temp_table)
+            inputs[inputs == 0] += eps
         sigil = list()
         for probs in (1 + self.network(inputs, inputs).tanh()) / 2:
             i = topk(probs, 1, largest=True, sorted=False).indices
@@ -258,12 +268,13 @@ class Cauldron(torch.nn.Module):
             return (sigil.clone().detach(), loss.item())
         return sigil.clone().detach()
 
-    def train_network(self, hours=168, checkpoint=1):
+    def train_network(self, checkpoint=1, hours=168):
         """Batched training over hours."""
         constants = self.constants
         n_batch = constants['n_batch']
         n_symbols = constants['n_symbols']
         n_output = n_batch * n_symbols
+        inf = torch.inf
         verbosity = self.verbosity
         forward = self.forward
         save_state = self.save_state
@@ -279,34 +290,26 @@ class Cauldron(torch.nn.Module):
         start_time = time.time()
         while elapsed < hours:
             epoch += 1
-            if verbosity > 1:
-                print('epoch:', epoch, '|| elapsed:', elapsed)
             epoch_error = list()
             for batch, targets in dataset:
-                optimizer.zero_grad()
                 temp_target *= 0
                 temp_target[targets.view(n_batch, n_symbols) > 0] += 1
-                predictions, batch_error = forward(batch, targets=temp_target)
-                optimizer.step()
-                epoch_error.append(batch_error)
-                if verbosity > 1:
-                    state_down = predictions[predictions <= 0.5].shape[0]
-                    state_perc = (n_output - state_down) / n_output
-                    target_down = temp_target[temp_target <= 0.5].shape[0]
-                    target_perc = (n_output - target_down) / n_output
-                    print('')
-                    print(predictions)
-                    print('predictions:', predictions.shape)
-                    print('elapsed:', (time.time() - start_time) / 3600)
-                    print('positive prediction percentage:', state_perc)
-                    print('positive target percentage:', target_perc)
-                    print('batch_error:', batch_error)
-                    print('')
+                least_loss = inf
+                loss = 0
+                while loss <= least_loss:
+                    optimizer.zero_grad()
+                    predictions, loss = forward(batch, targets=temp_target)
+                    optimizer.step()
+                    if loss < least_loss:
+                        least_loss = loss
+                        if verbosity > 1:
+                            print(least_loss)
+                epoch_error.append(loss)
             elapsed = (time.time() - start_time) / 3600
             if verbosity > 0:
                 epoch_error = sum(epoch_error) / len(epoch_error)
-                ts = time.localtime()
-                ts = time.strftime('%Y-%m-%d %H:%M:%S', ts)
+                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+                print('')
                 print('*********************************************')
                 print(f'timestamp: {ts}')
                 print(f'epoch: {epoch}')
