@@ -457,6 +457,7 @@ class ThreeBlindMice():
         """
         Create study thread.
         """
+        self.merge_states()
         address = self.address
         hours = float(self.settings['hours'])
         checkpoint = int(self.settings['checkpoint'])

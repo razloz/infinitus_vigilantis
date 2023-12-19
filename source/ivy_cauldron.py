@@ -150,7 +150,7 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.99
+        n_learning_rate = 0.09
         n_betas = (0.9, 0.999)
         n_weight_decay = n_dropout
         self.optimizer = torch.optim.AdamW(
@@ -282,8 +282,10 @@ class Cauldron(torch.nn.Module):
         dataset = self.training_data
         temp_target = self.temp_target
         optimizer = self.optimizer
+        checkpoint_path = path.join(self.root_folder, 'cauldron', '{}.state')
         epoch = 0
         elapsed = 0
+        best_epoch = inf
         if verbosity > 0:
             print('Training started.')
         self.train()
@@ -306,9 +308,9 @@ class Cauldron(torch.nn.Module):
                             print(least_loss)
                 epoch_error.append(loss)
             elapsed = (time.time() - start_time) / 3600
+            ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+            epoch_error = sum(epoch_error) / len(epoch_error)
             if verbosity > 0:
-                epoch_error = sum(epoch_error) / len(epoch_error)
-                ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
                 print('')
                 print('*********************************************')
                 print(f'timestamp: {ts}')
@@ -316,9 +318,21 @@ class Cauldron(torch.nn.Module):
                 print(f'elapsed: {elapsed}')
                 print(f'error: {epoch_error}')
                 print('*********************************************')
+            if epoch_error < best_epoch:
+                best_epoch = epoch_error
+                file_name = ts.replace('-','').replace(':','').replace(' ','')
+                file_name += f'.{epoch_error}'
+                file_name = checkpoint_path.format(file_name)
+                if verbosity > 0:
+                    print(f'Saving checkpoint to {file_name}')
+                save_state(file_name)
             if epoch % checkpoint == 0:
+                if verbosity > 0:
+                    print(f'Saving state to {state_path}')
                 save_state(state_path)
         if epoch % checkpoint != 0:
+            if verbosity > 0:
+                print(f'Saving state to {state_path}')
             save_state(state_path)
         if verbosity > 0:
             print(f'Training finished after {elapsed} hours.')
