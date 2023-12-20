@@ -27,7 +27,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('pct_chg',),
         verbosity=0,
         no_caching=True,
-        set_weights=True,
+        set_weights=False,
         try_cuda=False,
         detect_anomaly=False,
         ):
@@ -125,8 +125,8 @@ class Cauldron(torch.nn.Module):
         n_table = self.binary_table.shape[0]
         n_model = n_table
         n_heads = n_batch
-        n_layers = 6
-        n_hidden = 8 ** 5
+        n_layers = n_heads
+        n_hidden = 3 * (64 ** 2)
         n_dropout = 1.618033988749894 - 1.5
         n_eps = (1 / 137) ** 3
         self.temp_table = torch.full(
@@ -146,7 +146,7 @@ class Cauldron(torch.nn.Module):
             activation=torch.nn.functional.leaky_relu,
             layer_norm_eps=n_eps,
             batch_first=True,
-            norm_first=True,
+            norm_first=False,
             device=self.DEVICE,
             dtype=torch.float,
             )
@@ -183,7 +183,7 @@ class Cauldron(torch.nn.Module):
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
             }
-        if verbosity > 0:
+        if verbosity > 1:
             for k, v in self.constants.items():
                 print(f'{k.upper()}: {v}')
         self.load_state()
@@ -282,7 +282,7 @@ class Cauldron(torch.nn.Module):
         dataset = self.training_data
         temp_target = self.temp_target
         optimizer = self.optimizer
-        checkpoint_path = path.join(self.root_folder, 'cauldron', '{}.state')
+        snapshot_path = path.join(self.root_folder, 'cauldron', '{}.state')
         epoch = 0
         elapsed = 0
         best_epoch = inf
@@ -322,16 +322,16 @@ class Cauldron(torch.nn.Module):
                 best_epoch = epoch_error
                 file_name = ts.replace('-','').replace(':','').replace(' ','')
                 file_name += f'.{epoch_error}'
-                file_name = checkpoint_path.format(file_name)
+                file_name = snapshot_path.format(file_name)
                 if verbosity > 0:
-                    print(f'Saving checkpoint to {file_name}')
+                    print(f'Saving snapshot to {file_name}')
                 save_state(file_name)
             if epoch % checkpoint == 0:
-                if verbosity > 0:
+                if verbosity > 1:
                     print(f'Saving state to {state_path}')
                 save_state(state_path)
         if epoch % checkpoint != 0:
-            if verbosity > 0:
+            if verbosity > 1:
                 print(f'Saving state to {state_path}')
             save_state(state_path)
         if verbosity > 0:

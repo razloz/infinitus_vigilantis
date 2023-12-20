@@ -287,18 +287,17 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=5):
     """
     Cauldronic machine learning.
     """
-    cauldron = ivy_cauldron.Cauldron()
+    merge_states = __merge_states__
     hash_path = HASH_PATH
     pushed_path = PUSHED_PATH
-    state_path = cauldron.state_path
     loops = 0
     while True:
         loops += 1
         chit_chat(f'\b: starting loop #{loops}')
-        cauldron.train_network(
-            hours=hours,
-            checkpoint=checkpoint,
-        )
+        merge_states()
+        cauldron = ivy_cauldron.Cauldron()
+        state_path = cauldron.state_path
+        cauldron.train_network(hours=hours, checkpoint=checkpoint)
         new_key = ''
         state_hash = __get_file_hash__(state_path)
         if state_hash != last_push:
@@ -312,7 +311,6 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=5):
                 __save_pickle__(update_key, hash_path)
             del(cauldron)
             gc.collect()
-            cauldron = ivy_cauldron.Cauldron()
 
 
 def __merge_states__(*args, **kwargs):
@@ -343,7 +341,6 @@ def __merge_states__(*args, **kwargs):
     state_path = str(PATHING[0])
     base_cauldron = ivy_cauldron.Cauldron()
     proxy_cauldron = ivy_cauldron.Cauldron()
-    chit_chat('\b: loading server state')
     proxy_cauldron.load_state(state_path=state_path)
     for file_name in cauldron_files:
         if file_name == 'cauldron.state':
@@ -352,12 +349,6 @@ def __merge_states__(*args, **kwargs):
             chit_chat(f'\b: merging {file_name}')
             file_path = __path_join__(cauldron_folder, file_name)
             base_cauldron.load_state(state_path=file_path)
-            proxy_cauldron.load_state_dict(
-                __merge_params__(
-                    proxy_cauldron.state_dict(),
-                    base_cauldron.state_dict(),
-                )
-            )
             proxy_cauldron.network.load_state_dict(
                 __merge_params__(
                     proxy_cauldron.network.state_dict(),
@@ -375,13 +366,6 @@ def __merge_states__(*args, **kwargs):
     gc.collect()
     base_cauldron = ivy_cauldron.Cauldron()
     base_cauldron.load_state(state_path=state_path)
-    base_cauldron.load_state_dict(
-        __merge_params__(
-            base_cauldron.state_dict(),
-            proxy_cauldron.state_dict(),
-            finalize=True,
-        )
-    )
     base_cauldron.network.load_state_dict(
         __merge_params__(
             base_cauldron.network.state_dict(),
@@ -434,8 +418,8 @@ class ThreeBlindMice():
             self.settings = {
                 'host.addr': 'localhost',
                 'host.port': '33333',
-                'hours': '0.5',
-                'checkpoint': '1000',
+                'hours': '3',
+                'checkpoint': '1',
             }
             javafy.save(data=self.settings, file_path=SETTINGS_PATH)
         self.host_addr = str(self.settings['host.addr'])
@@ -447,7 +431,6 @@ class ThreeBlindMice():
         """
         Take state files and merge values with server.
         """
-        chit_chat('\b: merging client states with server')
         try:
             __merge_states__()
         except Exception as details:
@@ -457,7 +440,6 @@ class ThreeBlindMice():
         """
         Create study thread.
         """
-        self.merge_states()
         address = self.address
         hours = float(self.settings['hours'])
         checkpoint = int(self.settings['checkpoint'])
