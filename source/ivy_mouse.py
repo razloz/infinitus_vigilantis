@@ -4,6 +4,7 @@ import gc
 import hashlib
 import json
 import logging
+import os
 import pandas
 import pickle
 import secrets
@@ -18,7 +19,7 @@ from os.path import abspath, dirname, getmtime, realpath
 from source.ivy_cartography import cartography
 ROOT_PATH = dirname(realpath(__file__))
 CAULDRON_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron'))
-LOG_PATH = abspath(path.join(ROOT_PATH, '..', 'logs', f'{time.time()}.log'))
+LOG_PATH = abspath(path.join(ROOT_PATH, '..', 'logs', 'ivy_mouse.log'))
 STATE_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron', '{}.{}.state'))
 SETTINGS_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.settings'))
 HASH_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.hash'))
@@ -401,6 +402,8 @@ class ThreeBlindMice():
         """
         Beckon the Norn.
         """
+        if path.exists(LOG_PATH):
+            os.remove(LOG_PATH)
         logging.getLogger('asyncio').setLevel(logging.DEBUG)
         logging.basicConfig(
             filename=LOG_PATH,

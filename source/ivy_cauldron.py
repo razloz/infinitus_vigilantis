@@ -1,6 +1,7 @@
 """Transformer-based Sentiment Rank generator."""
 import torch
 import json
+import logging
 import pickle
 import time
 from itertools import product
@@ -34,19 +35,6 @@ class Cauldron(torch.nn.Module):
         ):
         """Predicts the future sentiment from stock data."""
         super(Cauldron, self).__init__()
-        if detect_anomaly:
-            torch.autograd.set_detect_anomaly(True)
-        if try_cuda:
-            self.DEVICE_TYPE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-            if self.DEVICE_TYPE != 'cpu' and no_caching:
-                environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
-                if verbosity > 1:
-                    print('Disabled CUDA memory caching.')
-                torch.cuda.empty_cache()
-        else:
-            self.DEVICE_TYPE = 'cpu'
-        self.DEVICE = torch.device(self.DEVICE_TYPE)
-        self.to(self.DEVICE)
         if root_folder is None:
             root_folder = abspath(path.join(dirname(realpath(__file__)), '..'))
         self.root_folder = root_folder
@@ -60,6 +48,30 @@ class Cauldron(torch.nn.Module):
         self.state_path = path.join(network_path, 'cauldron.state')
         self.validation_path = path.join(network_path, 'cauldron.validation')
         self.session_path = path.join(network_path, f'{time.time()}.state')
+        self.logging_path = path.join(root_folder, 'logs', 'ivy_cauldron.log')
+        if path.exists(self.logging_path):
+            os.remove(self.logging_path)
+        logging.getLogger('asyncio').setLevel(logging.DEBUG)
+        logging.basicConfig(
+            filename=self.logging_path,
+            encoding='utf-8',
+            level=logging.DEBUG,
+        )
+        if detect_anomaly:
+            torch.autograd.set_detect_anomaly(True)
+            if verbosity > 1:
+                logging.info('Enabled autograd anomaly detection.')
+        if try_cuda:
+            self.DEVICE_TYPE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+            if self.DEVICE_TYPE != 'cpu' and no_caching:
+                environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
+                if verbosity > 1:
+                    logging.info('Disabled CUDA memory caching.')
+                torch.cuda.empty_cache()
+        else:
+            self.DEVICE_TYPE = 'cpu'
+        self.DEVICE = torch.device(self.DEVICE_TYPE)
+        self.to(self.DEVICE)
         if candelabrum is None:
             candelabrum = torch.load(
                 candles_path,
@@ -183,7 +195,7 @@ class Cauldron(torch.nn.Module):
             }
         if verbosity > 1:
             for k, v in self.constants.items():
-                print(f'{k.upper()}: {v}')
+                logging.info(f'{k.upper()}: {v}')
         self.load_state()
 
     def load_state(self, state_path=None, state=None):
@@ -201,18 +213,18 @@ class Cauldron(torch.nn.Module):
                 self.validation_results = dict(state['validation'])
         except FileNotFoundError:
             if self.verbosity > 0:
-                print('No state found, creating default.')
+                logging.info('No state found, creating default.')
             if self.set_weights:
                 i = self.constants['n_eps']
                 if self.verbosity > 0:
-                    print(f'Initializing weights with bounds of {-i} to {i}')
+                    logging.info(f'Initializing with bounds of {-i} to {i}')
                 for name, param in self.network.named_parameters():
                     if param.requires_grad:
                         uniform_(param, -i, i)
             self.save_state(state_path)
         except Exception as details:
             if self.verbosity > 0:
-                print('Exception', *details.args)
+                logging.info(f'Exception {repr(details.args)}')
 
     def get_state_dicts(self):
         """Returns module params in a dictionary."""
@@ -227,7 +239,7 @@ class Cauldron(torch.nn.Module):
         if not to_buffer:
             torch.save(self.get_state_dicts(), real_path)
             if self.verbosity > 1:
-                print(f'Saved state to {real_path}.')
+                logging.info(f'Saved state to {real_path}.')
         else:
             bytes_obj = self.get_state_dicts()
             bytes_obj = torch.save(bytes_obj, buffer_io)
@@ -278,7 +290,14 @@ class Cauldron(torch.nn.Module):
             state_targets[symbol][table_index] += 1
         return state_targets.clone().detach()
 
-    def train_network(self, checkpoint=1, hours=168, validate=True):
+    def train_network(
+        self,
+        checkpoint=1,
+        hours=168,
+        max_depth=9,
+        delve_timeout=60,
+        validate=True,
+        ):
         """Batched training over hours."""
         constants = self.constants
         n_batch = constants['n_batch']
@@ -308,10 +327,10 @@ class Cauldron(torch.nn.Module):
             drop_last=True,
             )
         if verbosity > 0:
-            print('Training started.')
-        self.train()
+            logging.info('Training started.')
         start_time = time.time()
         while elapsed < hours:
+            self.train()
             epoch += 1
             epoch_error = list()
             for batch, targets in training_data:
@@ -320,26 +339,37 @@ class Cauldron(torch.nn.Module):
                 targets = encode_targets(targets)
                 least_loss = inf
                 loss = 0
-                while True:
+                depth = 0
+                delve_start = time.time()
+                excavating = True
+                while excavating:
                     loss = forward(batch, targets=targets)
+                    if verbosity >= 2:
+                        logging.info(f'loss: {loss}')
                     if loss < least_loss:
                         least_loss = loss
-                        if verbosity > 1:
-                            print('loss', loss)
+                        if verbosity == 1:
+                            logging.info(f'least_loss: {least_loss}')
                     else:
                         break
+                    depth += 1
+                    delve_time = time.time() - delve_start
+                    if delve_time >= delve_timeout or depth == max_depth:
+                        excavating = False
                 epoch_error.append(loss)
+                if verbosity > 0:
+                    logging.info(f'batch number: {len(epoch_error)}')
             elapsed = (time.time() - start_time) / 3600
             ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
             epoch_error = sum(epoch_error) / len(epoch_error)
             if verbosity > 0:
-                print('')
-                print('*********************************************')
-                print(f'timestamp: {ts}')
-                print(f'epoch: {epoch}')
-                print(f'elapsed: {elapsed}')
-                print(f'error: {epoch_error}')
-                print('*********************************************')
+                logging.info('')
+                logging.info('*********************************************')
+                logging.info(f'timestamp: {ts}')
+                logging.info(f'epoch: {epoch}')
+                logging.info(f'elapsed: {elapsed}')
+                logging.info(f'error: {epoch_error}')
+                logging.info('*********************************************')
             if epoch_error < best_epoch:
                 if validate:
                     validate_network()
@@ -348,18 +378,18 @@ class Cauldron(torch.nn.Module):
                 file_name += f'.{epoch_error}'
                 file_name = snapshot_path.format(file_name)
                 if verbosity > 0:
-                    print(f'Saving snapshot to {file_name}')
+                    logging.info(f'Saving snapshot to {file_name}')
                 save_state(file_name)
             if epoch % checkpoint == 0:
                 if verbosity > 1:
-                    print(f'Saving state to {state_path}')
+                    logging.info(f'Saving state to {state_path}')
                 save_state(state_path)
         if epoch % checkpoint != 0:
             if verbosity > 1:
-                print(f'Saving state to {state_path}')
+                logging.info(f'Saving state to {state_path}')
             save_state(state_path)
         if verbosity > 0:
-            print(f'Training finished after {elapsed} hours.')
+            logging.info(f'Training finished after {elapsed} hours.')
 
     def validate_network(self):
         """Tests the network on new data."""
@@ -387,7 +417,7 @@ class Cauldron(torch.nn.Module):
             )
         final_data = candelabrum[-n_batch:, :, self.input_indices]
         if verbosity > 0:
-            print('Starting validation routine.')
+            logging.info('Starting validation routine.')
         self.eval()
         for batch, targets in validation_data:
             temp_target *= 0
@@ -434,7 +464,7 @@ class Cauldron(torch.nn.Module):
                 f'{epoch_accuracy}.{time.time()}.state',
                 ))
             if verbosity > 0:
-                print(f'New best accuracy of {epoch_accuracy}% saved.')
+                logging.info(f'New best accuracy of {epoch_accuracy}% saved.')
         return forecast
 
     def inscribe_sigil(self, charts_path, predictions):
