@@ -283,7 +283,7 @@ def __push_state__(address, state_path, update_key):
         return new_key
 
 
-def __study__(address, update_key, last_push, hours=3, checkpoint=5):
+def __study__(address, update_key, last_push, hours=3, checkpoint=1):
     """
     Cauldronic machine learning.
     """
@@ -295,8 +295,9 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=5):
         loops += 1
         chit_chat(f'\b: starting loop #{loops}')
         merge_states()
-        cauldron = ivy_cauldron.Cauldron()
+        cauldron = ivy_cauldron.Cauldron(verbosity=1)
         state_path = cauldron.state_path
+        chit_chat(f'\b: training network for {hours} hours')
         cauldron.train_network(hours=hours, checkpoint=checkpoint)
         new_key = ''
         state_hash = __get_file_hash__(state_path)
@@ -322,10 +323,9 @@ def __merge_states__(*args, **kwargs):
     cauldron_folder = CAULDRON_PATH
     cauldron_files = listdir(cauldron_folder)
     state_offset = sum([1 if p[-6:] == '.state' else 0 for p in cauldron_files])
-    chit_chat(f'\b: found {state_offset} state files.')
+    chit_chat(f'\b: merging {state_offset - 1} state files.')
     if state_offset > 1:
         state_offset = 1 / (state_offset - 1)
-        chit_chat(f'\b: state_offset set to {state_offset}')
     else:
         return False
     def __merge_params__(old_state, new_state, finalize=False):
@@ -346,7 +346,6 @@ def __merge_states__(*args, **kwargs):
         if file_name == 'cauldron.state':
             continue
         if '.state' in file_name and file_name[-6:] == '.state':
-            chit_chat(f'\b: merging {file_name}')
             file_path = __path_join__(cauldron_folder, file_name)
             base_cauldron.load_state(state_path=file_path)
             proxy_cauldron.network.load_state_dict(
@@ -361,7 +360,6 @@ def __merge_states__(*args, **kwargs):
                     base_cauldron.optimizer.state_dict(),
                 )
             )
-    chit_chat('\b: finalizing merge')
     del(base_cauldron)
     gc.collect()
     base_cauldron = ivy_cauldron.Cauldron()
@@ -381,19 +379,17 @@ def __merge_states__(*args, **kwargs):
         )
     )
     base_cauldron.save_state(state_path)
-    chit_chat('\b: removing client state files')
     for file_name in cauldron_files:
         if file_name == 'cauldron.state':
             continue
         if '.state' in file_name and file_name[-6:] == '.state':
-            chit_chat(f'\b: removing {file_name}')
             file_path = __path_join__(cauldron_folder, file_name)
             if __path_exists__(file_path):
                 __remove_file__(file_path)
-    chit_chat('\b: merge complete')
     del(base_cauldron)
     del(proxy_cauldron)
     gc.collect()
+    chit_chat('\b: merge complete')
     return True
 
 
