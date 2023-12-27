@@ -319,7 +319,7 @@ def __merge_states__(*args, **kwargs):
     """
     Load client cauldron states and merge with server state.
     """
-    from os import remove as __remove_file__
+    __remove_file__ = os.remove
     TENSOR = torch.Tensor
     cauldron_folder = CAULDRON_PATH
     cauldron_files = listdir(cauldron_folder)

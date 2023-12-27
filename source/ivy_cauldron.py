@@ -2,6 +2,7 @@
 import torch
 import json
 import logging
+import os
 import pickle
 import time
 from itertools import product
@@ -27,7 +28,7 @@ class Cauldron(torch.nn.Module):
         symbols=None,
         input_labels=('pct_chg', 'trend', 'volume_zs', 'price_zs',),
         target_labels=('pct_chg',),
-        verbosity=1,
+        verbosity=2,
         no_caching=True,
         set_weights=True,
         try_cuda=False,
@@ -152,7 +153,7 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.001
+        n_learning_rate = φ * 1e-5
         n_betas = (0.9, 0.999)
         n_weight_decay = 0.01
         self.optimizer = torch.optim.AdamW(
@@ -294,8 +295,6 @@ class Cauldron(torch.nn.Module):
         self,
         checkpoint=1,
         hours=168,
-        max_depth=9,
-        delve_timeout=60,
         validate=True,
         ):
         """Batched training over hours."""
@@ -309,7 +308,6 @@ class Cauldron(torch.nn.Module):
         forward = self.forward
         save_state = self.save_state
         state_path = self.state_path
-        temp_target = self.temp_target
         validate_network = self.validate_network
         encode_targets = self.encode_targets
         snapshot_path = path.join(self.root_folder, 'cauldron', '{}.state')
@@ -334,31 +332,10 @@ class Cauldron(torch.nn.Module):
             epoch += 1
             epoch_error = list()
             for batch, targets in training_data:
-                temp_target *= 0
-                temp_target[targets.view(n_batch, n_symbols) > 0] += 1
-                targets = encode_targets(targets)
-                least_loss = inf
-                loss = 0
-                depth = 0
-                delve_start = time.time()
-                excavating = True
-                while excavating:
-                    loss = forward(batch, targets=targets)
-                    if verbosity >= 2:
-                        logging.info(f'loss: {loss}')
-                    if loss < least_loss:
-                        least_loss = loss
-                        if verbosity == 1:
-                            logging.info(f'least_loss: {least_loss}')
-                    else:
-                        break
-                    depth += 1
-                    delve_time = time.time() - delve_start
-                    if delve_time >= delve_timeout or depth == max_depth:
-                        excavating = False
+                loss = forward(batch, targets=encode_targets(targets))
                 epoch_error.append(loss)
-                if verbosity > 0:
-                    logging.info(f'batch number: {len(epoch_error)}')
+                if verbosity > 1:
+                    logging.info(f' batch: {len(epoch_error)} loss: {loss}')
             elapsed = (time.time() - start_time) / 3600
             ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
             epoch_error = sum(epoch_error) / len(epoch_error)
