@@ -167,7 +167,6 @@ class Cauldron(torch.nn.Module):
             }
         self.validation_results = {
             'accuracy': 0,
-            'forecast': list(),
             }
         if verbosity > 1:
             for k, v in self.constants.items():
@@ -353,7 +352,6 @@ class Cauldron(torch.nn.Module):
             shuffle=False,
             drop_last=True,
             )
-        final_data = candelabrum[-n_batch:, :, self.input_indices]
         symbol_indices = [i for i in range(n_symbols)]
         temp_targets = self.temp_targets
         if verbosity > 0:
@@ -391,11 +389,9 @@ class Cauldron(torch.nn.Module):
             results[key]['accuracy'] = round((correct / total) * 100, 4)
         with open(self.validation_path, 'wb+') as validation_file:
             pickle.dump(results, validation_file)
-        #forecast = forward(final_data)
         epoch_accuracy = results['validation.metrics']['accuracy']
         if epoch_accuracy > best_results:
             self.validation_results['accuracy'] = epoch_accuracy
-            self.validation_results['forecast'] = forecast
             self.save_state(path.join(
                 self.root_folder,
                 'cauldron',
@@ -404,20 +400,24 @@ class Cauldron(torch.nn.Module):
                 ))
             if verbosity > 0:
                 logging.info(f'New best accuracy of {epoch_accuracy}% saved.')
-        return None
+        return results
 
-    def inscribe_sigil(self, charts_path, predictions):
+    def inscribe_sigil(self, charts_path):
         """Plot final batch predictions from the candelabrum."""
         import matplotlib.pyplot as plt
         symbols = self.symbols
+        forward = self.forward
+        n_batch = self.constants['n_batch']
+        final_data = self.candelabrum[-n_batch:, :, self.input_indices]
         forecast_path = path.join(charts_path, '{0}_forecast.png')
         forecast = list()
+        for batch in final_data.transpose(0, 1):
+            forecast.append(forward(batch).clone().detach().cpu().tolist())
         plt.style.use('dark_background')
         plt.rcParams['figure.figsize'] = [10, 2]
         fig = plt.figure()
         midline_args = dict(color='red', linewidth=1.5, alpha=0.8)
-        for symbol, probs in enumerate(predictions.transpose(0, 1)):
-            forecast.append(probs.clone().detach())
+        for symbol, probs in enumerate(forecast):
             ax = fig.add_subplot()
             ax.set_ylabel('Confidence', fontweight='bold')
             ax.grid(True, color=(0.3, 0.3, 0.3))

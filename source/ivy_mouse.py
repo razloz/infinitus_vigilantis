@@ -484,9 +484,9 @@ class ThreeBlindMice():
         charts_path = abspath(path.join(https_path, 'charts'))
         cauldron = ivy_cauldron.Cauldron()
         chit_chat('\b: validating neural network')
-        predictions = cauldron.validate_network()
+        cauldron.validate_network()
         chit_chat('\b: inscribing sigils')
-        metrics, forecast = cauldron.inscribe_sigil(charts_path, predictions)
+        metrics, forecast = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
         candelabrum = cauldron.candelabrum
         n_half = int(cauldron.constants['n_batch'] / 2)
