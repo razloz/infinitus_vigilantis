@@ -10,7 +10,7 @@ from math import sqrt
 from random import randint, shuffle
 from os import path, mkdir, environ
 from os.path import dirname, realpath, abspath
-from torch.nn import BCEWithLogitsLoss
+from torch.nn import BatchNorm1d, BCEWithLogitsLoss
 from torch.nn.functional import interpolate
 from torch.nn.init import uniform_
 from torch.utils.data import DataLoader, TensorDataset
@@ -34,8 +34,8 @@ class Cauldron(torch.nn.Module):
         verbosity=2,
         no_caching=True,
         set_weights=True,
-        try_cuda=False,
-        detect_anomaly=False,
+        try_cuda=True,
+        detect_anomaly=True,
         ):
         """Predicts the future sentiment from stock data."""
         super(Cauldron, self).__init__()
@@ -109,10 +109,10 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_model = n_inputs
-        n_heads = n_inputs
-        n_layers = n_heads ** 2
-        n_hidden = (2 ** n_batch) * (n_inputs ** 2)
+        n_model = 512
+        n_heads = 8
+        n_layers = n_batch
+        n_hidden = int(n_batch * n_model * φ)
         n_dropout = φ - 1.37
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -142,6 +142,15 @@ class Cauldron(torch.nn.Module):
             foreach=True,
             )
         self.loss_fn = BCEWithLogitsLoss()
+        self.normalizer = BatchNorm1d(
+            n_inputs,
+            eps=n_eps,
+            momentum=0.1,
+            affine=False,
+            track_running_stats=False,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
         self.candelabrum = candelabrum
         self.set_weights = set_weights
         self.verbosity = verbosity
@@ -222,13 +231,16 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, inputs):
         """Returns predictions from inputs."""
+        n = (self.constants['n_model'] * 2) - 1
+        inputs = rfft(self.normalizer(inputs), n=n, dim=-1)
+        inputs = inputs.real * inputs.imag
         return self.network(inputs, inputs).sigmoid().mean(-1)
 
     def train_network(
         self,
         checkpoint=1,
         hours=168,
-        validate=True,
+        validate=False,
         quicksave=True,
         ):
         """Batched training over hours."""
@@ -237,7 +249,6 @@ class Cauldron(torch.nn.Module):
         n_slice = constants['n_slice']
         n_symbols = constants['n_symbols']
         n_targets = constants['n_targets']
-        n_output = n_batch * n_symbols
         inf = torch.inf
         verbosity = self.verbosity
         forward = self.forward
@@ -260,7 +271,6 @@ class Cauldron(torch.nn.Module):
             )
         temp_targets = self.temp_targets
         symbol_indices = [i for i in range(n_symbols)]
-        batch_range = range(1, n_batch + 1)
         optimizer = self.optimizer
         loss_fn = self.loss_fn
         if verbosity > 0:
@@ -280,21 +290,20 @@ class Cauldron(torch.nn.Module):
                     symbol_targets = targets[symbol].view(n_batch, n_targets)
                     temp_targets[symbol_targets > 0] += 1
                     symbol_targets = temp_targets.flatten()
-                    inputs = batch[symbol]
-                    for i in batch_range:
-                        optimizer.zero_grad()
-                        predictions = forward(inputs[:i])
-                        loss = loss_fn(predictions, symbol_targets[:i])
-                        loss.backward()
-                        optimizer.step()
+                    optimizer.zero_grad()
+                    predictions = forward(batch[symbol])
+                    loss = loss_fn(predictions, symbol_targets)
+                    loss.backward()
+                    optimizer.step()
+                    if verbosity > 1:
+                        print('temp_target', symbol_targets)
+                        print('predictions', predictions)
                     n_error += 1
                     epoch_error += loss.item()
-                    if verbosity > 1:
-                        print('temp_target', symbol_targets[:i])
-                        print('predictions', predictions)
                 if quicksave:
                     save_state(state_path)
                 if verbosity > 1:
+                    print(f'batch: {n_error / n_symbols}')
                     print(f'loss: {epoch_error / n_error}')
                     logging.info(f'loss: {epoch_error / n_error}')
             elapsed = (time.time() - start_time) / 3600
@@ -318,11 +327,11 @@ class Cauldron(torch.nn.Module):
                 if verbosity > 0:
                     logging.info(f'Saving snapshot to {file_name}')
                 save_state(file_name)
-            if epoch % checkpoint == 0:
+            if quicksave is False and epoch % checkpoint == 0:
                 if verbosity > 1:
                     logging.info(f'Saving state to {state_path}')
                 save_state(state_path)
-        if epoch % checkpoint != 0:
+        if quicksave is False and epoch % checkpoint != 0:
             if verbosity > 1:
                 logging.info(f'Saving state to {state_path}')
             save_state(state_path)
