@@ -109,9 +109,14 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
+        self.temp_weights = torch.zeros(
+            n_batch * n_targets,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
         n_model = 512
-        n_heads = 8
-        n_layers = n_batch
+        n_heads = 4
+        n_layers = 3
         n_hidden = int(n_batch * n_model * φ)
         n_dropout = φ - 1.37
         n_eps = (1 / 137) ** 3
@@ -141,7 +146,6 @@ class Cauldron(torch.nn.Module):
             amsgrad=True,
             foreach=True,
             )
-        self.loss_fn = BCEWithLogitsLoss()
         self.normalizer = BatchNorm1d(
             n_inputs,
             eps=n_eps,
@@ -246,6 +250,7 @@ class Cauldron(torch.nn.Module):
         """Batched training over hours."""
         constants = self.constants
         n_batch = constants['n_batch']
+        n_eps = constants['n_eps']
         n_slice = constants['n_slice']
         n_symbols = constants['n_symbols']
         n_targets = constants['n_targets']
@@ -270,9 +275,9 @@ class Cauldron(torch.nn.Module):
             drop_last=True,
             )
         temp_targets = self.temp_targets
+        temp_weights = self.temp_weights
         symbol_indices = [i for i in range(n_symbols)]
         optimizer = self.optimizer
-        loss_fn = self.loss_fn
         if verbosity > 0:
             logging.info('Training started.')
         start_time = time.time()
@@ -290,6 +295,19 @@ class Cauldron(torch.nn.Module):
                     symbol_targets = targets[symbol].view(n_batch, n_targets)
                     temp_targets[symbol_targets > 0] += 1
                     symbol_targets = temp_targets.flatten()
+                    neg_targets = symbol_targets[symbol_targets==0].shape[0]
+                    pos_targets = symbol_targets[symbol_targets==1].shape[0]
+                    temp_weights *= 0
+                    if neg_targets == 0:
+                        temp_weights += n_eps
+                    elif pos_targets == 0:
+                        temp_weights += (n_batch - n_eps)
+                    else:
+                        temp_weights += neg_targets / pos_targets
+                    loss_fn = BCEWithLogitsLoss(
+                        pos_weight=temp_weights,
+                        reduction='sum',
+                        )
                     optimizer.zero_grad()
                     predictions = forward(batch[symbol])
                     loss = loss_fn(predictions, symbol_targets)
