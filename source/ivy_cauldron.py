@@ -110,7 +110,7 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         self.temp_weights = torch.zeros(
-            n_batch * n_targets,
+            n_batch,
             device=self.DEVICE,
             dtype=torch.float,
             )
@@ -275,7 +275,7 @@ class Cauldron(torch.nn.Module):
             drop_last=True,
             )
         temp_targets = self.temp_targets
-        temp_weights = self.temp_weights
+        pos_weight = self.temp_weights
         symbol_indices = [i for i in range(n_symbols)]
         optimizer = self.optimizer
         if verbosity > 0:
@@ -295,22 +295,22 @@ class Cauldron(torch.nn.Module):
                     symbol_targets = targets[symbol].view(n_batch, n_targets)
                     temp_targets[symbol_targets > 0] += 1
                     symbol_targets = temp_targets.flatten()
+                    pos_weight *= 0
                     neg_targets = symbol_targets[symbol_targets==0].shape[0]
                     pos_targets = symbol_targets[symbol_targets==1].shape[0]
-                    temp_weights *= 0
                     if neg_targets == 0:
-                        temp_weights += n_eps
+                        pos_weight += n_eps
                     elif pos_targets == 0:
-                        temp_weights += (n_batch - n_eps)
+                        pos_weight += n_batch - n_eps
                     else:
-                        temp_weights += neg_targets / pos_targets
+                        pos_weight += neg_targets / pos_targets
                     loss_fn = BCEWithLogitsLoss(
-                        pos_weight=temp_weights,
+                        pos_weight=pos_weight,
                         reduction='sum',
                         )
                     optimizer.zero_grad()
                     predictions = forward(batch[symbol])
-                    loss = loss_fn(predictions, symbol_targets)
+                    loss = loss_fn(predictions.log(), symbol_targets)
                     loss.backward()
                     optimizer.step()
                     if verbosity > 1:
