@@ -239,13 +239,12 @@ class Cauldron(torch.nn.Module):
         n = (self.constants['n_model'] * 2) - 1
         inputs = rfft(self.normalizer(inputs), n=n, dim=-1)
         inputs = inputs.real * inputs.imag
-        outputs = self.network(inputs, inputs).softmax(-1).transpose(0, 1)
-        n_outputs = outputs.shape[1]
-        activations = topk(outputs.mean(-1), n_outputs, sorted=False).indices
-        predictions = outputs[activations].flatten()
-        activations = topk(predictions, n_outputs, sorted=False).indices
-        predictions = predictions[activations]
-        predictions = (-predictions.log() - torch.pi).sigmoid()
+        n_outputs = inputs.shape[0]
+        n_activations = 3 * n_outputs
+        outputs = self.network(inputs, inputs).flatten().softmax(0)
+        activations = topk(outputs, n_activations, sorted=False).indices
+        predictions = outputs[activations].view(n_outputs, 3).mean(-1)
+        predictions = 1 - (-predictions.log() - torch.pi).sigmoid()
         return predictions
 
     def train_network(
@@ -312,13 +311,10 @@ class Cauldron(torch.nn.Module):
                         pos_weight += n_batch - n_eps
                     else:
                         pos_weight += neg_targets / pos_targets
-                    loss_fn = BCEWithLogitsLoss(
-                        pos_weight=pos_weight,
-                        reduction='mean',
-                        )
+                    loss_fn = BCEWithLogitsLoss(pos_weight=pos_weight)
                     optimizer.zero_grad()
                     predictions = forward(batch[symbol])
-                    loss = loss_fn(predictions.log(), symbol_targets)
+                    loss = loss_fn(predictions, symbol_targets)
                     loss.backward()
                     optimizer.step()
                     if verbosity > 1:
