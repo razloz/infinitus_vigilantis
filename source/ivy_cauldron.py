@@ -115,9 +115,9 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         n_model = 512
-        n_heads = 4
-        n_layers = 3
-        n_hidden = int(n_batch * n_model * φ)
+        n_heads = 8
+        n_layers = 4
+        n_hidden = int(n_model * φ)
         n_dropout = φ - 1.37
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -134,7 +134,7 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = φ * 0.1
+        n_learning_rate = φ * 0.001
         n_betas = (0.9, 0.999)
         n_weight_decay = 0.01
         self.optimizer = torch.optim.AdamW(
@@ -145,6 +145,7 @@ class Cauldron(torch.nn.Module):
             weight_decay=n_weight_decay,
             amsgrad=True,
             foreach=True,
+            maximize=True,
             )
         self.normalizer = BatchNorm1d(
             n_inputs,
@@ -238,7 +239,14 @@ class Cauldron(torch.nn.Module):
         n = (self.constants['n_model'] * 2) - 1
         inputs = rfft(self.normalizer(inputs), n=n, dim=-1)
         inputs = inputs.real * inputs.imag
-        return self.network(inputs, inputs).sigmoid().mean(-1)
+        outputs = self.network(inputs, inputs).softmax(-1).transpose(0, 1)
+        n_outputs = outputs.shape[1]
+        activations = topk(outputs.mean(-1), n_outputs, sorted=False).indices
+        predictions = outputs[activations].flatten()
+        activations = topk(predictions, n_outputs, sorted=False).indices
+        predictions = predictions[activations]
+        predictions = (-predictions.log() - torch.pi).sigmoid()
+        return predictions
 
     def train_network(
         self,
@@ -306,7 +314,7 @@ class Cauldron(torch.nn.Module):
                         pos_weight += neg_targets / pos_targets
                     loss_fn = BCEWithLogitsLoss(
                         pos_weight=pos_weight,
-                        reduction='sum',
+                        reduction='mean',
                         )
                     optimizer.zero_grad()
                     predictions = forward(batch[symbol])
