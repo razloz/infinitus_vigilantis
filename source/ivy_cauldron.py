@@ -242,8 +242,9 @@ class Cauldron(torch.nn.Module):
         n_outputs = inputs.shape[0]
         n_activations = 3 * n_outputs
         outputs = self.network(inputs, inputs).flatten().softmax(0)
-        activations = topk(outputs, n_activations, sorted=False).indices
-        predictions = outputs[activations].view(n_outputs, 3).mean(-1)
+        outputs = outputs.view(*inputs.shape).transpose(0, 1)
+        activations = topk(outputs.mean(-1), 1).indices
+        predictions = outputs[activations].flatten()
         predictions = 1 - (-predictions.log() - torch.pi).sigmoid()
         return predictions
 
