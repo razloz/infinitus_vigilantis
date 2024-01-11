@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.fft import rfft
 from torch import topk
 φ = (1 + sqrt(5)) / 2
+euler = 2.718281828459
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2023, Daniel Ward'
 __license__ = 'GPL v3'
@@ -145,7 +146,7 @@ class Cauldron(torch.nn.Module):
             weight_decay=n_weight_decay,
             amsgrad=True,
             foreach=True,
-            maximize=True,
+            maximize=False,
             )
         self.normalizer = BatchNorm1d(
             n_inputs,
@@ -178,6 +179,8 @@ class Cauldron(torch.nn.Module):
             'n_learning_rate': n_learning_rate,
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
+            'freq_out': int((n_model * 2) - 1),
+            'freq_half': int(n_model / 2),
             }
         self.validation_results = {
             'accuracy': 0,
@@ -236,16 +239,12 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, inputs):
         """Returns predictions from inputs."""
-        n = (self.constants['n_model'] * 2) - 1
-        inputs = rfft(self.normalizer(inputs), n=n, dim=-1)
+        freq_out = self.constants['freq_out']
+        freq_half = self.constants['freq_half']
+        inputs = rfft(self.normalizer(inputs), n=freq_out, dim=-1)
         inputs = inputs.real * inputs.imag
-        n_outputs = inputs.shape[0]
-        n_activations = 3 * n_outputs
-        outputs = self.network(inputs, inputs).flatten().softmax(0)
-        outputs = outputs.view(*inputs.shape).transpose(0, 1)
-        activations = topk(outputs.mean(-1), 1).indices
-        predictions = outputs[activations].flatten()
-        predictions = 1 - (-predictions.log() - torch.pi).sigmoid()
+        outputs = self.network(inputs, inputs).softmax(-1)
+        predictions = outputs[:, -freq_half:].sum(-1)
         return predictions
 
     def train_network(
@@ -315,12 +314,14 @@ class Cauldron(torch.nn.Module):
                     loss_fn = BCEWithLogitsLoss(pos_weight=pos_weight)
                     optimizer.zero_grad()
                     predictions = forward(batch[symbol])
-                    loss = loss_fn(predictions, symbol_targets)
+                    logits = 1 - (predictions.log() * -1)
+                    loss = loss_fn(logits, symbol_targets)
                     loss.backward()
                     optimizer.step()
                     if verbosity > 1:
-                        print('temp_target', symbol_targets)
-                        print('predictions', predictions)
+                        print('\ntemp_target', symbol_targets)
+                        print('logits', logits)
+                        print('predictions', predictions, '\n')
                     n_error += 1
                     epoch_error += loss.item()
                 if quicksave:
