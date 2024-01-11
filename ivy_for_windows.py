@@ -74,6 +74,6 @@ if __name__ == '__main__':
                 import source.ivy_cauldron as ivy_cauldron
                 cauldron = ivy_cauldron.Cauldron(verbosity=2)
                 while True:
-                    cauldron.train_network()
+                    cauldron.train_network(validate=False)
     else:
         raise(Exception('Missing argument.'))
