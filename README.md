@@ -7,16 +7,15 @@ Requirements:
 Dependencies:
     numpy matplotlib pandas pillow requests torch
 
-Usage:
-    For Server:
-        infinitus_vigilantis.py --build
-        infinitus_vigilantis.py --study
-        infinitus_vigilantis.py --merge_states
-        infinitus_vigilantis.py --start_serving
-        infinitus_vigilantis.py --create_website
+For Server:
+    infinitus_vigilantis.py --build
+    infinitus_vigilantis.py --study
+    infinitus_vigilantis.py --merge_states
+    infinitus_vigilantis.py --start_serving
+    infinitus_vigilantis.py --create_website
 
-    For Client:
-        infinitus_vigilantis.py --start_learning
+For Client:
+    infinitus_vigilantis.py --start_learning
 
 Disclaimer:
     The information provided by Infinitus Vigilantis for Python (the
