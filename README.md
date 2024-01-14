@@ -5,18 +5,18 @@ Requirements:
   - Alpaca Markets API keys
 
 Dependencies:
-  - pytorch
-  - matplotlib
-  - numpy
-  - pandas
-  - pillow
-  - requests
-  - PyGObject (venv instructions @ https://pygobject.readthedocs.io/en/latest/devguide/dev_environ.html)
+    numpy matplotlib pandas pillow requests torch
 
 Usage:
-  - with IVY as an absolute path to infinitus vigilantis folder
-  - cd $IVY && ./infinitus_vigilantis.py --build && ./infinitus_vigilantis.py --start_learning
-  - (or in linux use .desktop files in resources folder / in windows use .bat file in windows_stuff)
+    For Server:
+        infinitus_vigilantis.py --build
+        infinitus_vigilantis.py --study
+        infinitus_vigilantis.py --merge_states
+        infinitus_vigilantis.py --start_serving
+        infinitus_vigilantis.py --create_website
+
+    For Client:
+        infinitus_vigilantis.py --start_learning
 
 Disclaimer:
     The information provided by Infinitus Vigilantis for Python (the

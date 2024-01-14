@@ -1,19 +1,18 @@
 #!./.env/bin/python3
 """Launcher for the Infinitus Vigilantis application."""
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2022, Daniel Ward'
+__copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = 'muenster'
+__version__ = 'gardneri'
 
 
 if __name__ == '__main__':
     print(f'\n{__doc__}\nVersion: {__version__}')
-    with open('./license/GPLv3.txt', 'r') as f:
+    with open('./license_docs/GPLv3.txt', 'r') as f:
         LICENSE = f.read()
-    with open('./license/Disclaimer.txt', 'r') as f:
+    with open('./license_docs/Disclaimer.txt', 'r') as f:
         DISCLAIMER = f.read()
     print(f'\n{LICENSE}\n{DISCLAIMER}\n')
-
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument(
