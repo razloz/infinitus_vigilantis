@@ -21,25 +21,27 @@ __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
 __version__ = 'gardneri'
-ROOT_PATH = dirname(realpath(__file__))
-CAULDRON_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron'))
-LOG_PATH = abspath(path.join(ROOT_PATH, '..', 'logs', 'ivy_mouse.log'))
-STATE_PATH = abspath(path.join(ROOT_PATH, '..', 'cauldron', '{}.{}.state'))
-SETTINGS_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.settings'))
-HASH_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.hash'))
-PUSHED_PATH = abspath(path.join(ROOT_PATH, '..', 'resources', 'ivy.pushed'))
-HTTPS_PATH = abspath(path.join(ROOT_PATH, '..', 'https'))
+ROOT_PATH = abspath(path.join(dirname(realpath(__file__)), '..'))
+CAULDRON_PATH = path.join(ROOT_PATH, 'cauldron'))
+LOG_PATH = path.join(ROOT_PATH, 'logs', 'ivy_mouse.log'))
+STATE_PATH = path.join(ROOT_PATH, 'cauldron', '{}.{}.state'))
+SETTINGS_PATH = path.join(ROOT_PATH, 'resources', 'ivy.settings'))
+HASH_PATH = path.join(ROOT_PATH, 'resources', 'ivy.hash'))
+PUSHED_PATH = path.join(ROOT_PATH, 'resources', 'ivy.pushed'))
+HTTPS_PATH = path.join(ROOT_PATH, 'https'))
 PATHING = (
-    abspath(path.join(ROOT_PATH, '..', 'cauldron', 'cauldron.state')),
-    abspath(path.join(ROOT_PATH, '..', 'candelabrum', 'candelabrum.candles')),
-    abspath(path.join(ROOT_PATH, '..', 'candelabrum', 'candelabrum.features')),
-    abspath(path.join(ROOT_PATH, '..', 'candelabrum', 'candelabrum.symbols')),
+    path.join(ROOT_PATH, 'cauldron', 'cauldron.state')),
+    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.benchmarks')),
+    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.candles')),
+    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.features')),
+    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.symbols')),
 )
 REQUEST_HEADERS = (
     b'10001000',
     b'10000100',
     b'10000010',
     b'10000001',
+    b'10000000',
 )
 
 
@@ -480,8 +482,7 @@ class ThreeBlindMice():
     def build_https(self, skip_charts=True, skip_validation=True):
         from pandas import read_csv
         chit_chat('\b: building website')
-        root_path = abspath(path.join(ROOT_PATH, '..'))
-        candles_path = path.join(root_path, 'candelabrum', '{}.ivy')
+        candles_path = path.join(ROOT_PATH, 'candelabrum', '{}.ivy')
         https_path = HTTPS_PATH
         charts_path = abspath(path.join(https_path, 'charts'))
         cauldron = ivy_cauldron.Cauldron()
