@@ -22,19 +22,19 @@ __copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
 __version__ = 'gardneri'
 ROOT_PATH = abspath(path.join(dirname(realpath(__file__)), '..'))
-CAULDRON_PATH = path.join(ROOT_PATH, 'cauldron'))
-LOG_PATH = path.join(ROOT_PATH, 'logs', 'ivy_mouse.log'))
-STATE_PATH = path.join(ROOT_PATH, 'cauldron', '{}.{}.state'))
-SETTINGS_PATH = path.join(ROOT_PATH, 'resources', 'ivy.settings'))
-HASH_PATH = path.join(ROOT_PATH, 'resources', 'ivy.hash'))
-PUSHED_PATH = path.join(ROOT_PATH, 'resources', 'ivy.pushed'))
-HTTPS_PATH = path.join(ROOT_PATH, 'https'))
+CAULDRON_PATH = path.join(ROOT_PATH, 'cauldron')
+LOG_PATH = path.join(ROOT_PATH, 'logs', 'ivy_mouse.log')
+STATE_PATH = path.join(ROOT_PATH, 'cauldron', '{}.{}.state')
+SETTINGS_PATH = path.join(ROOT_PATH, 'resources', 'ivy.settings')
+HASH_PATH = path.join(ROOT_PATH, 'resources', 'ivy.hash')
+PUSHED_PATH = path.join(ROOT_PATH, 'resources', 'ivy.pushed')
+HTTPS_PATH = path.join(ROOT_PATH, 'https')
 PATHING = (
-    path.join(ROOT_PATH, 'cauldron', 'cauldron.state')),
-    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.benchmarks')),
-    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.candles')),
-    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.features')),
-    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.symbols')),
+    path.join(ROOT_PATH, 'cauldron', 'cauldron.state'),
+    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.benchmarks'),
+    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.candles'),
+    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.features'),
+    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.symbols'),
 )
 REQUEST_HEADERS = (
     b'10001000',
