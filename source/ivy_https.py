@@ -123,7 +123,7 @@ def build_features(features, data):
     value_string = """<div style="padding:5px;grid-column:2/10;"><h3>"""
     for index, label in enumerate(features):
         label_string += f'{str(label).upper()}:<br>'
-        value_string += f'{round(data[index], 4)}<br>'
+        value_string += f'{round(float(data[-1, index]), 4)}<br>'
     label_string += """</h3></div>"""
     value_string += """</h3></div>"""
     return HTML_TEMPLATE.format(label_string + value_string)
@@ -133,6 +133,8 @@ def build_metrics(metrics):
     label_string = """<div style="padding:5px;grid-column:1/1;"><h3>"""
     value_string = """<div style="padding:5px;grid-column:2/10;"><h3>"""
     for key, value in metrics.items():
+        if key == 'forecast':
+            continue
         label_string += f'{key}:<br>'.upper()
         if key == 'accuracy':
             value_string += f'{value}%<br>'
@@ -145,9 +147,11 @@ def build_metrics(metrics):
 
 def generate_compass(symbols, features, candelabrum, metrics):
     files = dict()
-    for index, symbol in enumerate(symbols):
-        data = candelabrum[-1][index].tolist()
-        files[f'{symbol}_features.html'] = build_features(features, data)
+    for index, candles in enumerate(candelabrum):
+        symbol = symbols[index]
+        if symbol in ('QQQ', 'SPY'):
+            continue
+        files[f'{symbol}_features.html'] = build_features(features, candles)
         files[f'{symbol}_metrics.html'] = build_metrics(metrics[index])
     files['validation_results.html'] = build_metrics(metrics['validation.metrics'])
     return files

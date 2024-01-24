@@ -1,79 +1,72 @@
 """Updater for Infinitus Vigilantis"""
-import json
-import numpy
+import logging
+import os
 import pandas as pd
-import pickle
-import random
-import time
-import traceback
 import source.ivy_commons as icy
-import source.ivy_alpaca as api
-from os import path, listdir, cpu_count, remove, mkdir
+from alpaca.data.enums import Adjustment
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 from datetime import datetime
 from queue import Queue
 from multiprocessing import Queue as mpQueue
+from os import path, listdir, cpu_count, remove, mkdir
+from os.path import abspath, dirname, exists, join, realpath
 from source.ivy_cartography import cartography
-#from source.ivy_mouse import ThreeBlindMice
 from source.ivy_watchlist import ivy_watchlist
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
 __version__ = 'gardneri'
-SHEPHERD = api.AlpacaShepherd()
-COLUMN_NAMES = {
-    't': 'utc_ts',
-    'o': 'open',
-    'h': 'high',
-    'l': 'low',
-    'c': 'close',
-    'v': 'volume',
-    'n': 'num_trades',
-    'vw': 'vol_wma_price'
-    }
 
 
 class Candelabrum:
     """Handler for historical price data."""
-    def __init__(self, index=None, ftype='process'):
-        """Set symbol index from composite index."""
-        self._FTYPE = str(ftype)
-        self._WORKERS = list()
-        self._CPU_COUNT = cpu_count()
-        self._MAX_THREADS = 3
-        self._DATA_PATH = './candelabrum'
-        self._ERROR_PATH = './errors'
-        self._CHART_PATH = './charts'
-        sym_path = [
-            self._DATA_PATH,
-            self._ERROR_PATH,
-            self._CHART_PATH
-            ]
-        for _path in sym_path:
-            if not path.exists(path.abspath(_path)):
+    def __init__(self, spawn_workers=False, ftype='thread'):
+        """Start worker threads/processes and create folders if needed."""
+        self.spawn_workers = spawn_workers
+        ROOT_PATH = abspath(join(dirname(realpath(__file__)), '..'))
+        self.CAULDRON_PATH = join(ROOT_PATH, 'cauldron')
+        self.LOG_PATH = LOG_PATH = abspath(join(ROOT_PATH, 'logs'))
+        self.LOG_FILE = LOG_FILE = join(LOG_PATH, 'ivy_candelabrum.log')
+        self.DATA_PATH = DATA_PATH = abspath(join(ROOT_PATH, 'candelabrum'))
+        self.DATA_FILE = join(DATA_PATH, '{}.ivy')
+        self.DATA_BENCHMARKS = join(DATA_PATH, 'candelabrum.benchmarks')
+        self.DATA_CANDLES = join(DATA_PATH, 'candelabrum.candles')
+        self.DATA_FEATURES = join(DATA_PATH, 'candelabrum.features')
+        self.DATA_SYMBOLS = join(DATA_PATH, 'candelabrum.symbols')
+        for _path in (self.CAULDRON_PATH, self.LOG_PATH, self.DATA_PATH):
+            if not exists(_path):
                 mkdir(_path)
-        self._PREFIX = 'Candelabrum:'
-        self._tz = 'America/New_York'
-        p = lambda c: pd.to_datetime(c, utc=True).tz_convert(self._tz)
-        if self._FTYPE == 'process':
-            self._QUEUE = mpQueue()
-            print(self._PREFIX, f'creating {self._CPU_COUNT - 1} processes...')
-            r = range(self._CPU_COUNT - 1)
-        else:
-            self._QUEUE = Queue()
-            print(self._PREFIX, f'creating {self._MAX_THREADS} threads...')
-            r = range(self._MAX_THREADS)
-        for _ in r:
-            self._WORKERS.append(
-                icy.ivy_dispatcher(
-                    self.__worker__,
-                    ftype=ftype
-                    )
-                )
-        print('Candelabrum: initialized.')
+        if exists(LOG_FILE):
+            remove(LOG_FILE)
+        logging.getLogger('asyncio').setLevel(logging.ERROR)
+        logging.basicConfig(
+            filename=LOG_FILE,
+            encoding='utf-8',
+            level=logging.ERROR,
+        )
+        if spawn_workers:
+            dispatcher = icy.ivy_dispatcher
+            self._FTYPE = str(ftype)
+            self._WORKERS = list()
+            self._CPU_COUNT = cpu_count()
+            self._MAX_THREADS = 3
+            if self._FTYPE == 'process':
+                self._QUEUE = mpQueue()
+                logging.info(f'creating {self._CPU_COUNT - 1} processes...')
+                r = range(self._CPU_COUNT - 1)
+            else:
+                self._QUEUE = Queue()
+                logging.info(f'creating {self._MAX_THREADS} threads...')
+                r = range(self._MAX_THREADS)
+            for _ in r:
+                self._WORKERS.append(dispatcher(self.__worker__, ftype=ftype))
+        logging.info('Candelabrum: initialized.')
 
     def __worker__(self):
         """Get jobs and do work."""
-        chart_path = path.abspath(self._CHART_PATH)
+        #chart_path = path.abspath(self._CHART_PATH)
         while True:
             job = self._QUEUE.get()
             if job == 'exit':
@@ -94,18 +87,13 @@ class Candelabrum:
                         chart_path=c_path,
                         chart_size=365,
                         )
-            except Exception as err:
-                err_path = f'./errors/{time.time()}-worker.exception'
-                err_msg = f'{type(err)}:{err.args}\n\n{job}'
-                with open(path.abspath(err_path), 'w+') as err_file:
-                    err_file.write(err_msg)
-                print(self._PREFIX, f'Worker Thread: {err_msg}')
-                traceback.print_exc()
+            except Exception as details:
+                logging.error('\n'.join(*details))
                 continue
 
     def join_workers(self):
         """Block until all jobs are finished."""
-        print(self._PREFIX, 'waiting for all jobs to finish...')
+        logging.info('waiting for all jobs to finish...')
         for _ in self._WORKERS:
             self._QUEUE.put('exit')
         if self._FTYPE == 'process':
@@ -114,101 +102,98 @@ class Candelabrum:
         else:
             self._QUEUE.join()
 
-def candle_maker(candles):
-    """Makes a candle."""
-    if len(candles) > 0 and type(candles) == pd.Series:
-        name = str(candles.name)
-        value = None
-        if name == 'open':
-            value = float(candles[0])
-        elif name == 'high':
-            value = float(candles.max())
-        elif name == 'low':
-            value = float(candles.min())
-        elif name == 'close':
-            value = float(candles[-1])
-        elif name == 'volume':
-            value = float(candles.sum())
-        elif name == 'vol_wma_price':
-            value = float(candles.mean())
-        return value
+    def build_candles(self):
+        ALPACA_ID = os.environ["APCA_API_KEY_ID"]
+        if not len(ALPACA_ID) > 0:
+            logging.error('Error: ALPACA_ID required.')
+            return None
+        ALPACA_SECRET = os.environ["APCA_API_SECRET_KEY"]
+        if not len(ALPACA_SECRET) > 0:
+            logging.error('Error: ALPACA_SECRET required.')
+            return None
+        file_path = self.DATA_FILE
+        params_extras = dict(
+            start=datetime(2016, 1, 1),
+            end=datetime(*datetime.today().timetuple()[:3]),
+            limit=10000,
+            timeframe=TimeFrame.Day,
+            adjustment=Adjustment.ALL,
+            )
+        watchlist = list(ivy_watchlist)
+        n_glob = 3
+        shepherd = StockHistoricalDataClient(ALPACA_ID, ALPACA_SECRET)
+        while len(watchlist) > 0:
+            symbols = watchlist[:n_glob]
+            request_params = StockBarsRequest(
+                symbol_or_symbols=symbols,
+                **params_extras,
+                )
+            wax_glob = shepherd.get_stock_bars(request_params).df
+            print(symbols, wax_glob.shape)
+            for symbol in symbols:
+                candle_path = file_path.format(symbol)
+                wax_glob.xs(symbol, level=0).to_csv(candle_path, mode='w+')
+            del(watchlist[:n_glob])
 
+    def omenize(self, symbol, reverse_dataset=False, n_trim=34):
+        get_indicators = icy.get_indicators
+        dataset = pd.read_csv(self.DATA_FILE.format(symbol))
+        if len(dataset) <= n_trim * 2:
+            return list()
+        if reverse_dataset:
+            dataset = dataset.reindex(index=dataset.index[::-1])
+        omens = get_indicators(dataset)
+        candles = dataset.merge(omens, left_index=True, right_index=True)
+        candles.set_index('timestamp', inplace=True)
+        return candles.iloc[n_trim:].copy()
 
-def build_historical_database(start_date='2018-01-01'):
-    """Create and light daily candles from historical data."""
-    from time import strftime, strptime
-    from torch import cuda, device, save, stack, tensor
-    from torch import float as tfloat
-    msg = 'Build Historical Database: {}'
-    candelabrum_path = path.abspath('./candelabrum')
-    if not path.exists(candelabrum_path):
-        mkdir(candelabrum_path)
-    dev = device('cuda:0' if cuda.is_available() else 'cpu')
-    today = strftime('%Y-%m-%d', time.localtime())
-    shepherd_args = dict(
-        adjustment='all',
-        timeframe='1Day',
-        start=start_date,
-        limit='10000',
-        )
-    tz = 'America/New_York'
-    ts = pd.Timestamp
-    date_args = dict(name='time')
-    date_args['start'] = start_date
-    date_args['end'] = today
-    date_args['tz'] = tz
-    date_args['freq'] = '1D'
-    date_range = pd.date_range(**date_args)
-    print(msg.format('Requesting calendar...'))
-    calendar = list()
-    market_days = list()
-    for market_session in SHEPHERD.calendar():
-        calendar.append(market_session['date'])
-    for index, date in enumerate(date_range):
-        date = str(date)[:10]
-        if date in calendar:
-            market_days.append(index)
-    candles = dict()
-    print(msg.format('Fetching data...'))
-    for symbol in ivy_watchlist:
-        try:
-            data = SHEPHERD.candles(symbol, **shepherd_args)
-            bars = pd.DataFrame(data['bars'])
-            bars['time'] = [ts(t, unit='s', tz=tz) for t in bars['t']]
-            bars.set_index('time', inplace=True)
-            bars.rename(columns=COLUMN_NAMES, inplace=True)
-            candles[symbol] = bars.copy()
-        except Exception as details:
-            print(f'{symbol}:', type(details), details.args)
-        finally:
-            continue
-    p = candelabrum_path + '/{}'
-    candelabrum = list()
-    omenize = icy.get_indicators
-    print(msg.format(f'Applying indicators to {len(candles.keys())} symbols.'))
-    for symbol in candles.keys():
-        del(candles[symbol]['utc_ts'])
-        del(candles[symbol]['num_trades'])
-        cdls = pd.DataFrame(index=date_range, columns=candles[symbol].keys())
-        cdls.update(candles[symbol])
-        cdls.fillna(method='ffill', inplace=True)
-        cdls.fillna(method='bfill', inplace=True)
-        cdls.dropna(inplace=True)
-        cdls = cdls.transpose()
-        cdls.replace(to_replace=0, method='ffill', inplace=True)
-        cdls = cdls.transpose()
-        cdls.dropna(inplace=True)
-        cdls = cdls.resample('1D').apply(candle_maker)
-        cdls.dropna(inplace=True)
-        cdls = cdls.merge(omenize(cdls), left_index=True, right_index=True)
-        cdls.to_csv(p.format(f'{symbol}.ivy'), mode='w+')
-        candelabrum.append(tensor(cdls.to_numpy(), device=dev, dtype=tfloat))
-    candelabrum = stack(candelabrum).transpose(0, 1)
-    candelabrum = candelabrum[market_days]
-    save(candelabrum, p.format('candelabrum.candles'))
-    with open(path.abspath('./candelabrum/candelabrum.symbols'), 'wb+') as f:
-        pickle.dump(list(candles.keys()), f)
-    with open(path.abspath('./candelabrum/candelabrum.features'), 'wb+') as f:
-        pickle.dump(list(cdls.keys()), f)
-    m = 'Candelabrum created with {} candles for {} symbols with {} features.'
-    print(msg.format(m.format(*candelabrum.shape)))
+    def light_candles(self):
+        from torch import cat, cuda, device, save, stack, tensor
+        from torch import float as tfloat
+        omenize = self.omenize
+        dev = device('cuda:0' if cuda.is_available() else 'cpu')
+        cdl_args = dict(device=dev, dtype=tfloat)
+        tensorize = lambda df: tensor(df.to_numpy(), **cdl_args)
+        lit_candles = list()
+        symbols = list()
+        for symbol in ivy_watchlist:
+            if symbol not in ('QQQ', 'SPY'):
+                candles = omenize(symbol, reverse_dataset=False)
+                if len(candles) == 0:
+                    continue
+                lit_candles.append(tensorize(candles))
+                symbols.append(symbol)
+        return (symbols, lit_candles)
+
+    def get_benchmarks(self):
+        from torch import cat, cuda, device, save, tensor
+        from torch import float as tfloat
+        omenize = self.omenize
+        dev = device('cuda:0' if cuda.is_available() else 'cpu')
+        cdl_args = dict(device=dev, dtype=tfloat)
+        tensorize = lambda df: tensor(df.to_numpy(), **cdl_args)
+        candles = (
+            omenize('QQQ', reverse_dataset=True),
+            omenize('QQQ', reverse_dataset=False),
+            omenize('SPY', reverse_dataset=True),
+            omenize('SPY', reverse_dataset=False),
+            )
+        features = list(candles[0].iloc[-1].index)
+        benchmarks = cat([
+            cat([tensorize(candles[i]) for i in range(2)]),
+            cat([tensorize(candles[i]) for i in range(2, 4)]),
+            ])
+        return (features, benchmarks)
+
+    def rotate(self):
+        from pickle import dump
+        from torch import save
+        features, benchmarks = self.get_benchmarks()
+        with open(self.DATA_FEATURES, 'wb+') as file_obj:
+            dump(features, file_obj)
+        save(benchmarks, self.DATA_BENCHMARKS)
+        symbols, lit_candles = self.light_candles()
+        with open(self.DATA_SYMBOLS, 'wb+') as file_obj:
+            dump(symbols, file_obj)
+        save(lit_candles, self.DATA_CANDLES)
+

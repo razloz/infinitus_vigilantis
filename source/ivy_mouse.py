@@ -477,17 +477,19 @@ class ThreeBlindMice():
         chit_chat('\b: starting server')
         asyncio.run(__start_server__(self.address), debug=debug)
 
-    def build_https(self, skip_charts=True):
+    def build_https(self, skip_charts=True, skip_validation=True):
         from pandas import read_csv
         chit_chat('\b: building website')
-        candles_path = abspath(path.join(ROOT_PATH, '..', 'candelabrum'))
+        root_path = abspath(path.join(ROOT_PATH, '..'))
+        candles_path = path.join(root_path, 'candelabrum', '{}.ivy')
         https_path = HTTPS_PATH
         charts_path = abspath(path.join(https_path, 'charts'))
         cauldron = ivy_cauldron.Cauldron()
-        chit_chat('\b: validating neural network')
-        cauldron.validate_network()
+        if not skip_validation:
+            chit_chat('\b: validating neural network')
+            cauldron.validate_network()
         chit_chat('\b: inscribing sigils')
-        metrics, forecast = cauldron.inscribe_sigil(charts_path)
+        metrics = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
         candelabrum = cauldron.candelabrum
         n_half = int(cauldron.constants['n_batch'] / 2)
@@ -501,13 +503,13 @@ class ThreeBlindMice():
             key = int(key)
             picks[symbols[key]] = value
             accuracy = float(value['accuracy'] * 0.01)
-            predictions = forecast[key]
+            predictions = value['forecast']
             symbol_forecast = [1 if p > 0.5 else 0 for p in predictions]
-            symbol_close = candelabrum[-1, key, feature_indices['close']]
-            symbol_trend = candelabrum[-1, key, feature_indices['trend']]
-            symbol_zs = candelabrum[-1, key, feature_indices['price_zs']]
-            volume_zs = candelabrum[-1, key, feature_indices['volume_zs']]
-            symbol_wema = candelabrum[-1, key, feature_indices['price_wema']]
+            symbol_close = candelabrum[key][-1, feature_indices['close']]
+            symbol_trend = candelabrum[key][-1, feature_indices['trend']]
+            symbol_zs = candelabrum[key][-1, feature_indices['price_zs']]
+            volume_zs = candelabrum[key][-1, feature_indices['volume_zs']]
+            symbol_wema = candelabrum[key][-1, feature_indices['price_wema']]
             rating = sum(symbol_forecast)
             if rating >= n_half:
                 rating += sum([float(p) for p in predictions])
@@ -521,20 +523,20 @@ class ThreeBlindMice():
         picks = picks.index[:20].tolist()
         if not skip_charts:
             chit_chat('\b: plotting charts')
-            for symbol in symbols:
-                chart_path = path.join(charts_path, f'{symbol}_market.png')
-                chart_path = abspath(chart_path)
-                candles = abspath(path.join(candles_path, f'{symbol}.ivy'))
-                candles = read_csv(candles)
-                candles.set_index('time', inplace=True)
+            read_csv = pandas.read_csv
+            chart_path = abspath(path.join(charts_path, '{}_market.png'))
+            for symbol, candles in enumerate(candelabrum):
+                symbol = symbols[symbol]
+                if symbol in ('QQQ', 'SPY'):
+                    continue
                 cartography(
                     symbol,
+                    features,
                     candles,
-                    chart_path=chart_path,
+                    read_csv(candles_path.format(symbol)).timestamp.tolist(),
+                    chart_path=chart_path.format(symbol),
                     chart_size=365,
                     )
-                del(candles)
-                gc.collect()
         chit_chat('\b: building html documents')
         cabinet = ivy_https.build(
             symbols,

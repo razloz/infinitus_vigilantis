@@ -2,7 +2,7 @@ __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
 __version__ = 'gardneri'
-ivy_watchlist = (
+ivy_watchlist = ('SPY', 'QQQ',
     'A', 'AAL', 'AAP', 'AAPL', 'ABBV', 'ABC', 'ABNB', 'ABT', 'ACGL', 'ACN',
     'ADBE', 'ADI', 'ADM', 'ADP', 'ADSK', 'AEE', 'AEP', 'AES', 'AFL', 'AIG',
     'AIZ', 'AJG', 'AKAM', 'ALB', 'ALGN', 'ALK', 'ALL', 'ALLE', 'AMAT', 'AMCR',
