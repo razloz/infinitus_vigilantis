@@ -5,14 +5,14 @@ Requirements:
   - Alpaca Markets API keys
 
 Dependencies:
-  - numpy matplotlib pandas pillow requests torch
+  - numpy matplotlib pandas pillow requests torch alpaca-py
 
 For Server:
   - infinitus_vigilantis.py --build
   - infinitus_vigilantis.py --study
   - infinitus_vigilantis.py --merge_states
   - infinitus_vigilantis.py --start_serving
-  - infinitus_vigilantis.py --create_website
+  - infinitus_vigilantis.py --create_website (--skip_charts --skip_validation)
 
 For Client:
   - infinitus_vigilantis.py --start_learning

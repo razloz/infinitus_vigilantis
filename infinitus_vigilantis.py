@@ -33,7 +33,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--skip_charts',
         action='store_true',
-        help='Start learning.',
+        help='For use with --create_website.',
+    )
+    parser.add_argument(
+        '--skip_validation',
+        action='store_true',
+        help='For use with --create_website.',
     )
     parser.add_argument(
         '--start_learning',
@@ -59,14 +64,19 @@ if __name__ == '__main__':
         else:
             if args.build:
                 import source.ivy_candles as ivy_candles
-                ivy_candles.build_historical_database()
+                candelabrum = ivy_candles.Candelabrum()
+                candelabrum.build_candles()
+                candelabrum.rotate()
             if args.merge_states or args.start_serving or args.create_website:
                 import source.ivy_mouse as ivy
                 mice = ivy.ThreeBlindMice()
                 if args.merge_states:
                     mice.merge_states()
                 if args.create_website:
-                    mice.build_https(skip_charts=args.skip_charts)
+                    mice.build_https(
+                        skip_charts=args.skip_charts,
+                        skip_validation=args.skip_validation,
+                        )
                 if args.start_serving:
                     mice.start_serving()
             elif args.study:
