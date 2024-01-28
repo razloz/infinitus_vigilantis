@@ -27,8 +27,6 @@ def cartography(symbol, features, candles, timestamps,
                      'price_wema', 'volume_wema', 'price_mid', 'volume_mid',
                      'price_dh', 'volume_dh', 'price_dl', 'volume_dl',]
     feature_indices = {f: features.index(f) for f in plot_features}
-    ohlc = ['open', 'high', 'low', 'close']
-    ohlc = candles[:, [feature_indices[k] for k in ohlc]].flatten()
     data_len = len(candles)
     if chart_size == 0:
         chart_size = data_len
@@ -37,6 +35,8 @@ def cartography(symbol, features, candles, timestamps,
         data_len = len(candles)
     data_range = range(data_len)
     timestamps = timestamps[-data_len:]
+    ohlc = ['open', 'high', 'low', 'close']
+    ohlc = candles[:, [feature_indices[k] for k in ohlc]].flatten()
     fig = plt.figure(figsize=(19.20, 10.80), dpi=100, constrained_layout=False)
     sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
     spec = gridspec.GridSpec(**sargs)

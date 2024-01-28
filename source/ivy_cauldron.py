@@ -1,20 +1,17 @@
 """Transformer-based Sentiment Rank generator."""
 import torch
-import json
 import logging
 import os
 import pickle
 import time
-from itertools import product
 from math import sqrt
-from random import randint, shuffle
+from random import randint
 from os import path, mkdir, environ
 from os.path import dirname, realpath, abspath
-from torch.nn import BatchNorm1d, HuberLoss
+from torch.nn import HuberLoss
 from torch.nn.functional import interpolate
 from torch.nn.init import uniform_
 from torch.utils.data import DataLoader, TensorDataset
-from torch.fft import rfft
 from torch import topk
 φ = (1 + sqrt(5)) / 2
 __author__ = 'Daniel Ward'
@@ -101,7 +98,7 @@ class Cauldron(torch.nn.Module):
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
         n_time, n_features = benchmarks.shape
-        n_batch = 8
+        n_batch = 5
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
         self.temp_targets = torch.zeros(
@@ -110,19 +107,17 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        self.temp_weights = torch.zeros(
-            n_batch,
+        n_heads = 2
+        n_layers = 128
+        n_hidden = 2 ** n_batch
+        n_model = n_heads * n_hidden
+        n_dropout = φ - 1.5
+        n_eps = (1 / 137) ** 3
+        self.batch_prefix = torch.tensor(
+            [float(n_eps)],
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_model = 512
-        freq_out = int((n_model * 2) - 1)
-        freq_half = int(n_model / 2)
-        n_heads = freq_half
-        n_layers = 4
-        n_hidden = int(n_model * φ)
-        n_dropout = φ - 1.5
-        n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
             d_model=n_model,
             nhead=n_heads,
@@ -133,11 +128,11 @@ class Cauldron(torch.nn.Module):
             activation='gelu',
             layer_norm_eps=n_eps,
             batch_first=True,
-            norm_first=True,
+            norm_first=False,
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.000999
+        n_learning_rate = 0.0999
         n_betas = (0.9, 0.999)
         n_weight_decay = 0.0099
         self.optimizer = torch.optim.AdamW(
@@ -150,18 +145,9 @@ class Cauldron(torch.nn.Module):
             foreach=True,
             maximize=False,
             )
-        self.normalizer = BatchNorm1d(
-            n_inputs,
-            eps=n_eps,
-            momentum=0.1,
-            affine=False,
-            track_running_stats=False,
-            device=self.DEVICE,
-            dtype=torch.float,
-            )
         self.loss_fn = HuberLoss(
-            reduction='mean',
-            delta=1.0,
+            reduction='sum',
+            delta=φ,
             )
         self.benchmarks = benchmarks
         self.candelabrum = candelabrum
@@ -185,8 +171,6 @@ class Cauldron(torch.nn.Module):
             'n_learning_rate': n_learning_rate,
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
-            'freq_out': freq_out,
-            'freq_half': freq_half,
             }
         self.validation_results = {
             'accuracy': 0,
@@ -223,7 +207,7 @@ class Cauldron(torch.nn.Module):
             self.save_state(state_path)
         except Exception as details:
             if self.verbosity > 0:
-                logging.info(f'Exception {repr(details.args)}')
+                logging.error(f'Exception {repr(details.args)}')
 
     def get_state_dicts(self):
         """Returns module params in a dictionary."""
@@ -246,17 +230,20 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, inputs):
         """Returns predictions from inputs."""
-        freq_out = self.constants['freq_out']
-        freq_half = self.constants['freq_half']
-        inputs = rfft(self.normalizer(inputs), n=freq_out, dim=-1)
-        inputs = inputs.real * inputs.imag
-        outputs = self.network(inputs, inputs).softmax(-1)
-        predictions = outputs[:, -freq_half:].sum(-1)
-        return predictions
+        n_model = self.constants['n_model']
+        inputs_shape = inputs.shape
+        inputs = interpolate(
+            inputs.view(1, *inputs_shape),
+            size=n_model,
+            mode='area',
+            ).view(inputs_shape[0], n_model)
+        predictions = self.network(inputs, inputs).sigmoid().mean(-1)
+        return predictions.unsqueeze(1)
 
     def train_network(
         self,
         checkpoint=1,
+        epoch_samples=100,
         hours=168,
         validate=False,
         quicksave=False,
@@ -274,25 +261,28 @@ class Cauldron(torch.nn.Module):
         state_path = self.state_path
         validate_network = self.validate_network
         snapshot_path = path.join(self.root_folder, 'cauldron', '{}.state')
+        stack = torch.stack
         epoch = 0
         elapsed = 0
         best_epoch = torch.inf
         benchmarks = self.benchmarks
-        training_data = DataLoader(
-            TensorDataset(
-                benchmarks[:-n_batch, self.input_indices],
-                benchmarks[n_batch:, self.target_indices],
-                ),
-            batch_size=n_batch,
-            shuffle=True,
-            drop_last=True,
-            )
+        input_dataset = benchmarks[:-n_batch, self.input_indices]
+        target_dataset = benchmarks[n_batch:, self.target_indices]
+        batch_max = input_dataset.shape[0] - n_batch - 1
+        batch_prefix = self.batch_prefix
+        def random_batch():
+            batch_start = randint(0, batch_max)
+            batch_end = batch_start + n_batch
+            return (
+                input_dataset[batch_start:batch_end],
+                target_dataset[batch_start:batch_end],
+                )
         temp_targets = self.temp_targets
         optimizer = self.optimizer
         loss_fn = self.loss_fn
         debug_mode = self.debug_mode
         debug_anomalies = self.debug_anomalies
-        batch_range = range(1, n_batch + 1)
+        batch_range = range(2, n_batch + 1)
         if verbosity > 0:
             logging.info('Training started.')
         start_time = time.time()
@@ -303,17 +293,15 @@ class Cauldron(torch.nn.Module):
             epoch_error = 0
             if not reinforce:
                 optimizer.zero_grad()
-            for batch, targets in training_data:
+            while n_error < epoch_samples:
+                batch, targets = random_batch()
                 temp_targets *= 0
                 temp_targets[targets > 0] += 1
-                targets = temp_targets.flatten()
                 if reinforce:
                     for i in batch_range:
-                        if i == 1:
-                            continue
                         optimizer.zero_grad()
                         batch_step = batch[:i]
-                        target_step = targets[:i]
+                        target_step = temp_targets[:i]
                         predictions = forward(batch_step)
                         loss = loss_fn(predictions, target_step)
                         loss.backward()
@@ -328,8 +316,8 @@ class Cauldron(torch.nn.Module):
                     save_state(state_path)
                 if verbosity > 1:
                     print(f'\nbatch: {n_error}')
-                    print(f'targets: {targets}')
-                    print(f'predictions: {predictions}')
+                    print(f'targets: \n{temp_targets}')
+                    print(f'predictions: \n{predictions}')
                     print(f'loss: {epoch_error / n_error}', '\n')
             if not reinforce:
                 optimizer.step()
@@ -508,7 +496,9 @@ class Cauldron(torch.nn.Module):
         self.eval()
         _param_types_ = ('bias', 'weight', 'in_proj_bias', 'in_proj_weight')
         _params_ = dict()
+        _params_count_ = 0
         for name, param in self.network.named_parameters():
+            _params_count_ += int(param.flatten().shape[0])
             if param.requires_grad:
                 param_keys = name.split('.')
                 if len(param_keys) != 5:
@@ -605,6 +595,7 @@ class Cauldron(torch.nn.Module):
             )
         fig_title = "Network Parameter's Bias Modified Weights ("
         fig_title += time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()) + ')'
+        fig_title += f'\n({_params_count_} Total Network Parameters)'
         fig.suptitle(fig_title, fontsize=18)
         plt.savefig(img_path.format('.network.parameters'))
         fig.clf()
