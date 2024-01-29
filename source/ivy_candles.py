@@ -179,10 +179,11 @@ class Candelabrum:
             omenize('SPY', reverse_dataset=False),
             )
         features = list(candles[0].iloc[-1].index)
-        benchmarks = cat([
+        benchmarks = (
             cat([tensorize(candles[i]) for i in range(2)]),
             cat([tensorize(candles[i]) for i in range(2, 4)]),
-            ])
+            )
+        benchmarks = 0.5 * (benchmarks[0] + benchmarks[1])
         return (features, benchmarks)
 
     def rotate(self):

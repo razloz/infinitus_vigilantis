@@ -23,11 +23,11 @@ __version__ = 'gardneri'
 class Cauldron(torch.nn.Module):
     def __init__(
         self,
-        input_labels=('pct_chg', 'trend', 'volume_zs', 'price_zs',),
+        input_labels=('price_zs',),
         target_labels=('pct_chg',),
         verbosity=2,
         no_caching=True,
-        set_weights=True,
+        set_weights=False,
         try_cuda=True,
         debug_mode=True,
         ):
@@ -98,7 +98,7 @@ class Cauldron(torch.nn.Module):
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
         n_time, n_features = benchmarks.shape
-        n_batch = 5
+        n_batch = 20
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
         self.temp_targets = torch.zeros(
@@ -108,13 +108,13 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         n_heads = 2
-        n_layers = 128
-        n_hidden = 2 ** n_batch
-        n_model = n_heads * n_hidden
+        n_layers = 9
+        n_hidden = 1024
+        n_model = 512
         n_dropout = φ - 1.5
         n_eps = (1 / 137) ** 3
         self.batch_prefix = torch.tensor(
-            [float(n_eps)],
+            [[float(n_eps ** 2)]],
             device=self.DEVICE,
             dtype=torch.float,
             )
@@ -261,7 +261,7 @@ class Cauldron(torch.nn.Module):
         state_path = self.state_path
         validate_network = self.validate_network
         snapshot_path = path.join(self.root_folder, 'cauldron', '{}.state')
-        stack = torch.stack
+        cat = torch.cat
         epoch = 0
         elapsed = 0
         best_epoch = torch.inf
@@ -295,6 +295,7 @@ class Cauldron(torch.nn.Module):
                 optimizer.zero_grad()
             while n_error < epoch_samples:
                 batch, targets = random_batch()
+                batch = cat([batch_prefix, batch[:-1]])
                 temp_targets *= 0
                 temp_targets[targets > 0] += 1
                 if reinforce:
@@ -371,6 +372,8 @@ class Cauldron(torch.nn.Module):
         input_indices = self.input_indices
         target_indices = self.target_indices
         temp_targets = self.temp_targets
+        cat = torch.cat
+        batch_prefix = self.batch_prefix
         if verbosity > 0:
             ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
             print(f'{ts}: validation routine start.')
@@ -393,6 +396,7 @@ class Cauldron(torch.nn.Module):
                 drop_last=True,
                 )
             for batch, targets in validation_data:
+                batch = cat([batch_prefix, batch[:-1]])
                 temp_targets *= 0
                 temp_targets[targets > 0] += 1
                 targets = temp_targets.flatten()
@@ -406,7 +410,8 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['total'] += n_batch
                 n_correct += correct
                 n_total += n_batch
-            predictions = forward(candles[-n_batch:, input_indices])
+            last_batch = cat([batch_prefix, candles[-n_batch:, input_indices]])
+            predictions = forward(last_batch[:-1])
             results[symbol]['forecast'] = predictions.flatten().tolist()
         results['validation.metrics'] = {
             'correct': n_correct,
