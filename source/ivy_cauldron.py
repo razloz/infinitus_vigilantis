@@ -27,7 +27,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('pct_chg',),
         verbosity=2,
         no_caching=True,
-        set_weights=False,
+        set_weights=True,
         try_cuda=True,
         debug_mode=True,
         ):
@@ -99,18 +99,25 @@ class Cauldron(torch.nn.Module):
         target_indices = [features.index(l) for l in target_labels]
         n_time, n_features = benchmarks.shape
         n_batch = 20
+        n_forecast = 5
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
-        self.temp_targets = torch.zeros(
+        self.training_targets = torch.zeros(
             n_batch,
             n_targets,
             device=self.DEVICE,
             dtype=torch.float,
             )
+        self.validation_targets = torch.zeros(
+            n_forecast,
+            n_targets,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
         n_heads = 2
-        n_layers = 9
-        n_hidden = 1024
-        n_model = 512
+        n_layers = 20
+        n_model = 256
+        n_hidden = 512
         n_dropout = φ - 1.5
         n_eps = (1 / 137) ** 3
         self.batch_prefix = torch.tensor(
@@ -132,7 +139,7 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.0999
+        n_learning_rate = 0.999
         n_betas = (0.9, 0.999)
         n_weight_decay = 0.0099
         self.optimizer = torch.optim.AdamW(
@@ -228,22 +235,44 @@ class Cauldron(torch.nn.Module):
             bytes_obj = torch.save(bytes_obj, buffer_io)
             return bytes_obj
 
-    def forward(self, inputs):
+    def forward(self, batch, targets=None, batch_range=None):
         """Returns predictions from inputs."""
         n_model = self.constants['n_model']
-        inputs_shape = inputs.shape
-        inputs = interpolate(
-            inputs.view(1, *inputs_shape),
+        network = self.network
+        batch = interpolate(
+            batch.unsqueeze(0),
             size=n_model,
             mode='area',
-            ).view(inputs_shape[0], n_model)
-        predictions = self.network(inputs, inputs).sigmoid().mean(-1)
-        return predictions.unsqueeze(1)
+            )
+        batch_prefix = float(self.batch_prefix)
+        batch[:, :, 0] = batch_prefix
+        if targets is not None:
+            optimizer = self.optimizer
+            loss_fn = self.loss_fn
+            targets = interpolate(
+                targets.unsqueeze(0),
+                size=n_model,
+                mode='area',
+                )
+            state = batch[:, :batch_range[0], :].clone()
+            for step in batch_range:
+                optimizer.zero_grad()
+                target_step = targets[:, :step, :]
+                state = network(state, target_step)
+                loss = loss_fn(state, target_step)
+                loss.backward()
+                optimizer.step()
+                state = state.clone().detach().squeeze(0)
+                state = torch.cat([state[-1].unsqueeze(0), state]).unsqueeze(0)
+                state[:, :, 0] = batch_prefix
+            optimizer.zero_grad()
+        predictions = network(batch, batch).sigmoid().mean(-1)
+        return predictions.transpose(0, 1)
 
     def train_network(
         self,
         checkpoint=1,
-        epoch_samples=100,
+        epoch_samples=25,
         hours=168,
         validate=False,
         quicksave=False,
@@ -277,7 +306,7 @@ class Cauldron(torch.nn.Module):
                 input_dataset[batch_start:batch_end],
                 target_dataset[batch_start:batch_end],
                 )
-        temp_targets = self.temp_targets
+        training_targets = self.training_targets
         optimizer = self.optimizer
         loss_fn = self.loss_fn
         debug_mode = self.debug_mode
@@ -295,21 +324,21 @@ class Cauldron(torch.nn.Module):
                 optimizer.zero_grad()
             while n_error < epoch_samples:
                 batch, targets = random_batch()
-                batch = cat([batch_prefix, batch[:-1]])
-                temp_targets *= 0
-                temp_targets[targets > 0] += 1
+                training_targets *= 0
+                training_targets[targets > 0] += 1
                 if reinforce:
-                    for i in batch_range:
-                        optimizer.zero_grad()
-                        batch_step = batch[:i]
-                        target_step = temp_targets[:i]
-                        predictions = forward(batch_step)
-                        loss = loss_fn(predictions, target_step)
-                        loss.backward()
-                        optimizer.step()
+                    predictions = forward(
+                        batch,
+                        targets=targets,
+                        batch_range=batch_range,
+                        )
+                    loss = loss_fn(predictions, training_targets)
+                    loss.backward()
+                    optimizer.step()
+                    print(f'predictions: \n{predictions}')
                 else:
                     predictions = forward(batch)
-                    loss = loss_fn(predictions, targets)
+                    loss = loss_fn(predictions, training_targets)
                     loss.backward()
                 n_error += 1
                 epoch_error += loss.item()
@@ -317,7 +346,7 @@ class Cauldron(torch.nn.Module):
                     save_state(state_path)
                 if verbosity > 1:
                     print(f'\nbatch: {n_error}')
-                    print(f'targets: \n{temp_targets}')
+                    print(f'targets: \n{training_targets}')
                     print(f'predictions: \n{predictions}')
                     print(f'loss: {epoch_error / n_error}', '\n')
             if not reinforce:
@@ -359,7 +388,7 @@ class Cauldron(torch.nn.Module):
     def validate_network(self):
         """Tests the network on new data."""
         constants = self.constants
-        n_batch = constants['n_batch']
+        n_forecast = constants['n_forecast']
         n_symbols = constants['n_symbols']
         n_targets = constants['n_targets']
         verbosity = self.verbosity
@@ -371,7 +400,7 @@ class Cauldron(torch.nn.Module):
         candelabrum = self.candelabrum
         input_indices = self.input_indices
         target_indices = self.target_indices
-        temp_targets = self.temp_targets
+        validation_targets = self.validation_targets
         cat = torch.cat
         batch_prefix = self.batch_prefix
         if verbosity > 0:
@@ -388,30 +417,33 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['forecast'] = list()
             validation_data = DataLoader(
                 TensorDataset(
-                    candles[:-n_batch, input_indices],
-                    candles[n_batch:, target_indices],
+                    candles[:-n_forecast, input_indices],
+                    candles[n_forecast:, target_indices],
                     ),
-                batch_size=n_batch,
+                batch_size=n_forecast,
                 shuffle=False,
                 drop_last=True,
                 )
             for batch, targets in validation_data:
                 batch = cat([batch_prefix, batch[:-1]])
-                temp_targets *= 0
-                temp_targets[targets > 0] += 1
-                targets = temp_targets.flatten()
-                predictions = forward(batch)
+                validation_targets *= 0
+                validation_targets[targets > 0] += 1
+                targets = validation_targets.flatten()
+                predictions = forward(batch).flatten()
                 correct = 0
                 for i, p in enumerate(predictions):
                     t = targets[i]
                     if any([p > 0.5 and t == 1, p <= 0.5 and t == 0]):
                         correct += 1
                 results[symbol]['correct'] += correct
-                results[symbol]['total'] += n_batch
+                results[symbol]['total'] += n_forecast
                 n_correct += correct
-                n_total += n_batch
-            last_batch = cat([batch_prefix, candles[-n_batch:, input_indices]])
-            predictions = forward(last_batch[:-1])
+                n_total += n_forecast
+            last_batch = cat([
+                batch_prefix,
+                candles[-n_forecast:, input_indices],
+                ])[:-1]
+            predictions = forward(last_batch)
             results[symbol]['forecast'] = predictions.flatten().tolist()
         results['validation.metrics'] = {
             'correct': n_correct,
@@ -439,7 +471,6 @@ class Cauldron(torch.nn.Module):
         import matplotlib.pyplot as plt
         symbols = self.symbols
         forward = self.forward
-        n_batch = self.constants['n_batch']
         forecast_path = path.join(charts_path, '{0}_forecast.png')
         plt.style.use('dark_background')
         plt.rcParams['figure.figsize'] = [10, 2]
