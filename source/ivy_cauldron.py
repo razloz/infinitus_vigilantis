@@ -120,11 +120,6 @@ class Cauldron(torch.nn.Module):
         n_hidden = 512
         n_dropout = φ - 1.5
         n_eps = (1 / 137) ** 3
-        self.batch_prefix = torch.tensor(
-            [[float(n_eps ** 2)]],
-            device=self.DEVICE,
-            dtype=torch.float,
-            )
         self.network = torch.nn.Transformer(
             d_model=n_model,
             nhead=n_heads,
@@ -178,6 +173,7 @@ class Cauldron(torch.nn.Module):
             'n_learning_rate': n_learning_rate,
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
+            'batch_affix': n_eps ** 2,
             }
         self.validation_results = {
             'accuracy': 0,
@@ -238,14 +234,15 @@ class Cauldron(torch.nn.Module):
     def forward(self, batch, targets=None, batch_range=None):
         """Returns predictions from inputs."""
         n_model = self.constants['n_model']
+        batch_affix = self.constants['batch_affix']
         network = self.network
         batch = interpolate(
             batch.unsqueeze(0),
             size=n_model,
             mode='area',
             )
-        batch_prefix = float(self.batch_prefix)
-        batch[:, :, 0] = batch_prefix
+        batch[:, :, 0] = -batch_affix
+        batch[:, :, -1] = batch_affix
         if targets is not None:
             optimizer = self.optimizer
             loss_fn = self.loss_fn
@@ -263,8 +260,9 @@ class Cauldron(torch.nn.Module):
                 loss.backward()
                 optimizer.step()
                 state = state.clone().detach().squeeze(0)
-                state = torch.cat([state[-1].unsqueeze(0), state]).unsqueeze(0)
-                state[:, :, 0] = batch_prefix
+                state = torch.cat([state, state[-1].unsqueeze(0)]).unsqueeze(0)
+                state[:, :, 0] = -batch_affix
+                state[:, :, -1] = batch_affix
             optimizer.zero_grad()
         predictions = network(batch, batch).sigmoid().mean(-1)
         return predictions.transpose(0, 1)
@@ -298,7 +296,6 @@ class Cauldron(torch.nn.Module):
         input_dataset = benchmarks[:-n_batch, self.input_indices]
         target_dataset = benchmarks[n_batch:, self.target_indices]
         batch_max = input_dataset.shape[0] - n_batch - 1
-        batch_prefix = self.batch_prefix
         def random_batch():
             batch_start = randint(0, batch_max)
             batch_end = batch_start + n_batch
@@ -402,7 +399,6 @@ class Cauldron(torch.nn.Module):
         target_indices = self.target_indices
         validation_targets = self.validation_targets
         cat = torch.cat
-        batch_prefix = self.batch_prefix
         if verbosity > 0:
             ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
             print(f'{ts}: validation routine start.')
@@ -439,11 +435,7 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['total'] += n_forecast
                 n_correct += correct
                 n_total += n_forecast
-            last_batch = cat([
-                batch_prefix,
-                candles[-n_forecast:, input_indices],
-                ])[:-1]
-            predictions = forward(last_batch)
+            predictions = forward(candles[-n_forecast:, input_indices])
             results[symbol]['forecast'] = predictions.flatten().tolist()
         results['validation.metrics'] = {
             'correct': n_correct,
