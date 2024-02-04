@@ -81,7 +81,7 @@ if __name__ == '__main__':
                     mice.start_serving()
             elif args.study:
                 import source.ivy_cauldron as ivy_cauldron
-                cauldron = ivy_cauldron.Cauldron(verbosity=2)
+                cauldron = ivy_cauldron.Cauldron(debug_mode=True)
                 while True:
                     cauldron.train_network(validate=False)
     else:
