@@ -26,7 +26,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('trend',),
         verbosity=0,
         no_caching=True,
-        set_weights=False,
+        set_weights=True,
         try_cuda=True,
         debug_mode=False,
         ):
@@ -99,8 +99,8 @@ class Cauldron(torch.nn.Module):
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
         n_benchmarks, n_time, n_features = benchmarks.shape
-        n_batch = 5
-        n_forecast = 5
+        n_batch = 20
+        n_forecast = 20
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
         self.training_targets = torch.zeros(
@@ -116,7 +116,7 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         n_heads = 2
-        n_layers = 32
+        n_layers = 16
         n_hidden = n_batch * 2
         n_model = int(n_heads * n_inputs * n_hidden)
         n_dropout = φ - 1.5
@@ -250,7 +250,7 @@ class Cauldron(torch.nn.Module):
     def train_network(
         self,
         checkpoint=50,
-        epoch_samples=10,
+        epoch_samples=12,
         hours=168,
         validate=False,
         quicksave=False,
