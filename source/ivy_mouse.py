@@ -299,7 +299,7 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=1):
         loops += 1
         chit_chat(f'\b: starting loop #{loops}')
         merge_states()
-        cauldron = ivy_cauldron.Cauldron(verbosity=2)
+        cauldron = ivy_cauldron.Cauldron()
         state_path = cauldron.state_path
         chit_chat(f'\b: training network for {hours} hours')
         cauldron.train_network(hours=hours, checkpoint=checkpoint)
