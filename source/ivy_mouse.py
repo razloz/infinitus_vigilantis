@@ -492,10 +492,9 @@ class ThreeBlindMice():
         chit_chat('\b: inscribing sigils')
         metrics = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
+        features = cauldron.features
         candelabrum = cauldron.candelabrum
         n_half = int(cauldron.constants['n_batch'] / 2)
-        with open(PATHING[2], 'rb') as features_file:
-            features = pickle.load(features_file)
         _labels = ('close', 'trend', 'price_zs', 'price_wema', 'volume_zs')
         feature_indices = {k: features.index(k) for k in _labels}
         picks = dict()
