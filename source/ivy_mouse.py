@@ -327,11 +327,11 @@ def __merge_states__(*args, **kwargs):
     cauldron_folder = CAULDRON_PATH
     cauldron_files = listdir(cauldron_folder)
     state_offset = sum([1 if p[-6:] == '.state' else 0 for p in cauldron_files])
-    chit_chat(f'\b: merging {state_offset - 1} state files.')
     if state_offset > 1:
         state_offset = 1 / (state_offset - 1)
     else:
         return False
+    chit_chat(f'\b: merging {state_offset - 1} state files.')
     def __merge_params__(old_state, new_state, finalize=False):
         for key, value in new_state.items():
             if type(value) == TENSOR and key in old_state:
@@ -382,6 +382,7 @@ def __merge_states__(*args, **kwargs):
             finalize=True,
         )
     )
+    base_cauldron.reset_metrics()
     base_cauldron.save_state(state_path)
     for file_name in cauldron_files:
         if file_name == 'cauldron.state':
@@ -421,7 +422,7 @@ class ThreeBlindMice():
                 'host.addr': 'localhost',
                 'host.port': '33333',
                 'hours': '3',
-                'checkpoint': '1',
+                'checkpoint': '100',
             }
             javafy.save(data=self.settings, file_path=SETTINGS_PATH)
         self.host_addr = str(self.settings['host.addr'])
@@ -472,6 +473,18 @@ class ThreeBlindMice():
             checkpoint=checkpoint,
         )
 
+    def study_cauldron(self, *args, **kwargs):
+        """
+        Train neural network forever.
+        """
+        chit_chat('\b: studying the cauldron.')
+        while True:
+            self.merge_states()
+            cauldron = ivy_cauldron.Cauldron(debug_mode=True)
+            cauldron.train_network()
+            cauldron = None
+            gc.collect()
+
     def start_serving(self, *args, debug=False, **kwargs):
         """
         Create server thread.
@@ -481,14 +494,13 @@ class ThreeBlindMice():
 
     def build_https(self, skip_charts=True, skip_validation=True):
         from pandas import read_csv
-        chit_chat('\b: building website')
         candles_path = path.join(ROOT_PATH, 'candelabrum', '{}.ivy')
         https_path = HTTPS_PATH
         charts_path = abspath(path.join(https_path, 'charts'))
         cauldron = ivy_cauldron.Cauldron()
         if not skip_validation:
-            chit_chat('\b: validating neural network')
-            cauldron.validate_network()
+            chit_chat('\b: back-testing neural network')
+            cauldron.backtest_network()
         chit_chat('\b: inscribing sigils')
         metrics = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols

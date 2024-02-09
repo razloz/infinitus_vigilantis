@@ -26,7 +26,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('trend',),
         verbosity=0,
         no_caching=True,
-        set_weights=True,
+        set_weights=False,
         try_cuda=True,
         debug_mode=False,
         ):
@@ -47,8 +47,10 @@ class Cauldron(torch.nn.Module):
         best_results_path = path.join(network_path, 'best_results')
         if not path.exists(best_results_path):
             mkdir(best_results_path)
-        self.best_state_path = path.join(best_results_path, '{0}.{1}.state')
+        self.best_state_path = path.join(best_results_path, '{0}.{1}.{2}.state')
+        self.new_state_path = path.join(network_path, '{0}.{1}.{2}.state')
         self.state_path = path.join(network_path, 'cauldron.state')
+        self.backtest_path = path.join(network_path, 'cauldron.backtest')
         self.validation_path = path.join(network_path, 'cauldron.validation')
         self.session_path = path.join(network_path, f'{time.time()}.state')
         self.logging_path = path.join(root_folder, 'logs', 'ivy_cauldron.log')
@@ -176,7 +178,9 @@ class Cauldron(torch.nn.Module):
             'batch_affix': n_eps ** 2,
             }
         self.validation_results = {
-            'accuracy': 0,
+            'best_backtest': 0.0,
+            'best_epoch': torch.inf,
+            'best_validation': 0.0,
             }
         if verbosity > 1:
             for k, v in self.constants.items():
@@ -227,7 +231,9 @@ class Cauldron(torch.nn.Module):
         if not to_buffer:
             torch.save(self.get_state_dicts(), real_path)
             if self.verbosity > 1:
-                logging.info(f'Saved state to {real_path}.')
+                ts = self.get_timestamp()
+                msg = f'{ts}: Saved state to {real_path}.'
+                logging.info(msg)
         else:
             bytes_obj = self.get_state_dicts()
             bytes_obj = torch.save(bytes_obj, buffer_io)
@@ -239,12 +245,49 @@ class Cauldron(torch.nn.Module):
         activations = [topk(t, 1, largest=True).values for t in state]
         return torch.cat(activations)
 
+    def get_datasets(self, tensor_data, training=False):
+        """Prepare tensor data for network input."""
+        constants = self.constants
+        batch_affix = constants['batch_affix']
+        n_model = constants['n_model']
+        inputs = tensor_data[:, :, self.input_indices]
+        inputs[inputs > 0] = 1
+        inputs[inputs <= 0] = -1
+        inputs = interpolate(inputs, size=n_model, mode='area')
+        inputs[:, :, 0] = -batch_affix
+        inputs[:, :, -1] = batch_affix
+        targets = tensor_data[:, :, self.target_indices]
+        targets[targets > 0] = 0.7 if training else 1
+        targets[targets <= 0] = 0.3 if training else 0
+        return (inputs.clone().detach(), targets.clone().detach())
+
+    def save_best_result(self, metric, result_key='best_epoch', file_name=None):
+        """Set aside good results to avoid merging."""
+        if self.debug_mode:
+            self.debug_anomalies(file_name=f'{time.time()}')
+        self.validation_results[result_key] = float(metric)
+        if file_name is None:
+            ts = self.get_timestamp()
+            file_name = self.best_state_path.format(
+                result_key,
+                ts.replace('-', '').replace(':', '').replace(' ', ''),
+                metric,
+                )
+        self.save_state(file_name)
+
+    def reset_metrics(self):
+        """Reset network metrics."""
+        self.validation_results['best_backtest'] = 0.0
+        self.validation_results['best_epoch'] = torch.inf
+        self.validation_results['best_validation'] = 0.0
+
     def train_network(
         self,
         checkpoint=100,
         epoch_samples=40,
-        hours=168,
-        validate=False,
+        hours=3,
+        warmup=34,
+        validate=True,
         quicksave=False,
         reinforce=False,
         ):
@@ -265,18 +308,12 @@ class Cauldron(torch.nn.Module):
         cat = torch.cat
         epoch = 0
         elapsed = 0
-        best_epoch = torch.inf
+        best_epoch = self.validation_results['best_epoch']
         benchmarks = self.benchmarks
         n_benchmarks = benchmarks.shape[0] - 1
-        input_dataset = benchmarks[:, :-n_batch, self.input_indices]
-        input_dataset[input_dataset > 0] = 1
-        input_dataset[input_dataset <= 0] = -1
-        input_dataset = interpolate(input_dataset, size=n_model, mode='area')
-        input_dataset[:, :, 0] = -batch_affix
-        input_dataset[:, :, -1] = batch_affix
-        target_dataset = benchmarks[:, n_batch:, self.target_indices]
-        target_dataset[target_dataset > 0] = 0.7
-        target_dataset[target_dataset <= 0] = 0.3
+        datasets = self.get_datasets(benchmarks, training=True)
+        input_dataset = datasets[0][:, :-n_batch, :]
+        target_dataset = datasets[1][:, n_batch:, :]
         batch_max = input_dataset.shape[1] - n_batch - 1
         def random_batch():
             benchmark = randint(0, n_benchmarks)
@@ -286,11 +323,11 @@ class Cauldron(torch.nn.Module):
                 input_dataset[benchmark, batch_start:batch_end],
                 target_dataset[benchmark, batch_start:batch_end],
                 )
-        training_targets = self.training_targets
         optimizer = self.optimizer
-        loss_fn = torch.nn.HuberLoss()
+        loss_fn = torch.nn.HuberLoss(reduction='sum')
         debug_mode = self.debug_mode
         debug_anomalies = self.debug_anomalies
+        save_best_result = self.save_best_result
         get_timestamp = self.get_timestamp
         batch_range = range(2, n_batch + 1)
         epoch_checkpoint = False
@@ -328,22 +365,20 @@ class Cauldron(torch.nn.Module):
             epoch_error = loss.item()
             ts = get_timestamp()
             epoch_checkpoint = epoch % checkpoint == 0
-            if debug_mode and epoch_checkpoint:
-                debug_anomalies(file_name=f'{time.time()}')
-            if quicksave or epoch_checkpoint:
-                if verbosity > 1:
-                    logging.info(f'Saving state to {state_path}')
-                save_state(state_path)
-            if epoch_checkpoint and epoch_error < best_epoch:
+            if warmup > 0:
+                warmup -= 1
+            elif epoch_error < best_epoch:
                 best_epoch = epoch_error
-                file_name = ts.replace('-','').replace(':','').replace(' ','')
-                file_name += f'.{epoch_error}'
-                file_name = snapshot_path.format(file_name)
-                if verbosity > 0:
-                    logging.info(f'Saving snapshot to {file_name}')
-                save_state(file_name)
-            if validate and epoch_checkpoint:
-                validate_network()
+                ts = self.get_timestamp()
+                f = ts.replace('-', '').replace(':', '').replace(' ', '')
+                f = f'best_epoch.{f}.{best_epoch}'
+                save_best_result(
+                    best_epoch,
+                    result_key='best_epoch',
+                    file_name=snapshot_path.format(f),
+                    )
+            if quicksave or epoch_checkpoint:
+                save_state(state_path)
             if verbosity > 0:
                 if verbosity > 1:
                     print(f'predictions: \n{predictions}')
@@ -356,36 +391,107 @@ class Cauldron(torch.nn.Module):
                 epoch_msg += '\n*********************************************\n'
                 print(epoch_msg)
                 logging.info(epoch_msg)
+        if validate:
+            r = validate_network()
+            if verbosity > 0:
+                ts = get_timestamp()
+                for k, v in r.items():
+                    print(f'{ts}: {k}: {v}')
         if quicksave is False and not epoch_checkpoint:
-            if verbosity > 1:
-                logging.info(f'Saving state to {state_path}')
             save_state(state_path)
         if verbosity > 0:
             logging.info(f'Training finished after {elapsed} hours.')
 
     def validate_network(self):
-        """Tests the network on new data."""
+        """Benchmarks back-testing."""
         constants = self.constants
         batch_affix = constants['batch_affix']
         n_forecast = constants['n_forecast']
-        n_model = constants['n_model']
+        n_targets = constants['n_targets']
+        forward = self.forward
+        verbosity = self.verbosity
+        n_correct = 0
+        n_total = 0
+        results = dict()
+        ts = self.get_timestamp
+        if verbosity > 0:
+            print(f'{ts()}: validation routine start.')
+            logging.info('Starting validation routine.')
+        self.eval()
+        benchmarks = self.benchmarks
+        datasets = self.get_datasets(benchmarks, training=False)
+        input_dataset = datasets[0][:, :-n_forecast, :].squeeze(0)
+        target_dataset = datasets[1][:, n_forecast:, :].squeeze(0)
+        final_batch = datasets[0][:, -n_forecast:, :].squeeze(0)
+        for benchmark, candles in enumerate(input_dataset):
+            if benchmark not in results:
+                results[benchmark] = dict()
+                results[benchmark]['accuracy'] = 0
+                results[benchmark]['correct'] = 0
+                results[benchmark]['forecast'] = list()
+                results[benchmark]['symbol'] = 'QQQ' if benchmark < 2 else 'SPY'
+                results[benchmark]['total'] = 0
+            validation_data = DataLoader(
+                TensorDataset(candles, target_dataset[benchmark]),
+                batch_size=n_forecast,
+                shuffle=False,
+                drop_last=True,
+                )
+            for batch, targets in validation_data:
+                predictions = forward(batch)
+                correct = 0
+                for i, p in enumerate(predictions):
+                    t = targets[i]
+                    if any([p > 0.5 and t == 1, p <= 0.5 and t == 0]):
+                        correct += 1
+                results[benchmark]['correct'] += correct
+                results[benchmark]['total'] += n_forecast
+                n_correct += correct
+                n_total += n_forecast
+            predictions = forward(final_batch[benchmark])
+            results[benchmark]['forecast'] = predictions.flatten().tolist()
+        results['validation.metrics'] = {
+            'accuracy': 0.0,
+            'correct': n_correct,
+            'total': n_total,
+            }
+        for key in results:
+            correct = results[key]['correct']
+            total = results[key]['total']
+            if total > 0:
+                results[key]['accuracy'] = round((correct / total) * 100, 4)
+        with open(self.validation_path, 'wb+') as validation_file:
+            pickle.dump(results, validation_file)
+        accuracy = results['validation.metrics']['accuracy']
+        if accuracy > self.validation_results['best_validation']:
+            self.save_best_result(accuracy, result_key='best_validation')
+        self.save_state(
+            self.new_state_path.format(
+                'validate',
+                time.time(),
+                accuracy,
+                ),
+            )
+        print(f'{ts()}: validation routine end.')
+        return results
+
+    def backtest_network(self):
+        """Candelabrum back-testing."""
+        constants = self.constants
+        batch_affix = constants['batch_affix']
+        n_forecast = constants['n_forecast']
         n_symbols = constants['n_symbols']
         n_targets = constants['n_targets']
         forward = self.forward
         symbols = self.symbols
         verbosity = self.verbosity
-        best_results = self.validation_results['accuracy']
         n_correct = 0
         n_total = 0
         results = dict()
         candelabrum = self.candelabrum
-        input_indices = self.input_indices
-        target_indices = self.target_indices
-        validation_targets = self.validation_targets
         ts = self.get_timestamp
         if verbosity > 0:
-            print(f'{ts()}: validation routine start.')
-            logging.info('Starting validation routine.')
+            print(f'{ts()}: back-test routine start.')
         self.eval()
         for symbol, candles in enumerate(candelabrum):
             sym_ticker = str(symbols[symbol]).upper()
@@ -397,21 +503,12 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['forecast'] = list()
                 results[symbol]['symbol'] = sym_ticker
                 results[symbol]['total'] = 0
-            _inputs_ = candles[:, input_indices].clone().detach().unsqueeze(0)
-            _inputs_[_inputs_ > 0] = 1
-            _inputs_[_inputs_ <= 0] = -1
-            _inputs_ = interpolate(
-                _inputs_,
-                size=n_model,
-                mode='area',
-                ).squeeze(0)
-            _inputs_[:, 0] = -batch_affix
-            _inputs_[:, -1] = batch_affix
-            _targets_ = candles[n_forecast:, target_indices].clone().detach()
-            _targets_[_targets_ > 0] = 1
-            _targets_[_targets_ <= 0] = 0
+            datasets = self.get_datasets(candles.unsqueeze(0), training=False)
+            input_dataset = datasets[0][:, :-n_batch, :].squeeze(0)
+            target_dataset = datasets[1][:, n_batch:, :].squeeze(0)
+            final_batch = datasets[0][:, -n_forecast:, :].squeeze(0)
             validation_data = DataLoader(
-                TensorDataset(_inputs_[:-n_forecast], _targets_),
+                TensorDataset(input_dataset, target_dataset),
                 batch_size=n_forecast,
                 shuffle=False,
                 drop_last=True,
@@ -427,7 +524,7 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['total'] += n_forecast
                 n_correct += correct
                 n_total += n_forecast
-            predictions = forward(_inputs_[-n_forecast:])
+            predictions = forward(final_batch)
             results[symbol]['forecast'] = predictions.flatten().tolist()
         results['validation.metrics'] = {
             'correct': n_correct,
@@ -437,32 +534,34 @@ class Cauldron(torch.nn.Module):
             correct = results[key]['correct']
             total = results[key]['total']
             results[key]['accuracy'] = round((correct / total) * 100, 4)
-        with open(self.validation_path, 'wb+') as validation_file:
-            pickle.dump(results, validation_file)
-        epoch_accuracy = results['validation.metrics']['accuracy']
-        if epoch_accuracy > best_results:
-            self.validation_results['accuracy'] = epoch_accuracy
-            _path = self.best_state_path.format(time.time(), epoch_accuracy)
-            self.save_state(_path)
-            if verbosity > 0:
-                msg = f'New best accuracy of {epoch_accuracy}% saved.'
-                print(msg)
-                logging.info(msg)
-        print(f'{ts()}: validation routine end.')
-        return results
+        with open(self.backtest_path, 'wb+') as backtest_file:
+            pickle.dump(results, backtest_file)
+        accuracy = results['validation.metrics']['accuracy']
+        if accuracy > self.validation_results['best_backtest']:
+            self.save_best_result(accuracy, result_key='best_backtest')
+        self.save_state(
+            self.new_state_path.format(
+                'backtest',
+                time.time(),
+                accuracy,
+                ),
+            )
+        print(f'{ts()}: back-test routine end.')
 
     def inscribe_sigil(self, charts_path):
         """Plot final batch predictions from the candelabrum."""
         import matplotlib.pyplot as plt
         symbols = self.symbols
         forward = self.forward
+        n_forecast = self.constants['n_forecast']
         forecast_path = path.join(charts_path, '{0}_forecast.png')
         plt.style.use('dark_background')
         plt.rcParams['figure.figsize'] = [10, 2]
         fig = plt.figure()
         midline_args = dict(color='red', linewidth=1.5, alpha=0.8)
-        with open(self.validation_path, 'rb') as validation_file:
-            metrics = pickle.load(validation_file)
+        xlim_max = n_forecast + 1
+        with open(self.backtest_path, 'rb') as backtest_file:
+            metrics = pickle.load(backtest_file)
         for symbol, results in metrics.items():
             if symbol == 'validation.metrics':
                 continue
@@ -470,10 +569,10 @@ class Cauldron(torch.nn.Module):
             ax = fig.add_subplot()
             ax.set_ylabel('Confidence', fontweight='bold')
             ax.grid(True, color=(0.3, 0.3, 0.3))
-            ax.set_xlim(0, 6)
+            ax.set_xlim(0, xlim_max)
             ax.set_ylim(0, 1)
             bar_width = ax.get_tightbbox(fig.canvas.get_renderer()).get_points()
-            bar_width = ((bar_width[1][0] - bar_width[0][0]) / 7) * 0.5
+            bar_width = ((bar_width[1][0] - bar_width[0][0]) / n_forecast) * 0.5
             for i, p in enumerate(forecast):
                 i = i + 1
                 ax.plot(
@@ -491,7 +590,7 @@ class Cauldron(torch.nn.Module):
                     alpha=1.0,
                     )
             ax.plot(
-                [0, 6],
+                [0, xlim_max],
                 [0.5, 0.5],
                 color=(0.5, 0.5, 0.5),
                 linewidth=1.5,
