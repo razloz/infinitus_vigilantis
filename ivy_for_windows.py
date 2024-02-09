@@ -67,7 +67,7 @@ if __name__ == '__main__':
                 candelabrum = ivy_candles.Candelabrum()
                 candelabrum.build_candles()
                 candelabrum.rotate()
-            if args.merge_states or args.start_serving or args.create_website:
+            else:
                 import source.ivy_mouse as ivy
                 mice = ivy.ThreeBlindMice()
                 if args.merge_states:
@@ -79,10 +79,7 @@ if __name__ == '__main__':
                         )
                 if args.start_serving:
                     mice.start_serving()
-            elif args.study:
-                import source.ivy_cauldron as ivy_cauldron
-                cauldron = ivy_cauldron.Cauldron(debug_mode=True)
-                while True:
-                    cauldron.train_network(validate=False)
+                elif args.study:
+                    mice.study_cauldron()
     else:
         raise(Exception('Missing argument.'))
