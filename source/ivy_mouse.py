@@ -303,6 +303,9 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=1):
         state_path = cauldron.state_path
         chit_chat(f'\b: training network for {hours} hours')
         cauldron.train_network(hours=hours, checkpoint=checkpoint)
+        cauldron = None
+        del(cauldron)
+        gc.collect()
         new_key = ''
         state_hash = __get_file_hash__(state_path)
         if state_hash != last_push:
@@ -314,8 +317,6 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=1):
             update_key = __update_network__(address, update_key)
             if update_key != '':
                 __save_pickle__(update_key, hash_path)
-            del(cauldron)
-            gc.collect()
 
 
 def __merge_states__(*args, **kwargs):
@@ -327,11 +328,12 @@ def __merge_states__(*args, **kwargs):
     cauldron_folder = CAULDRON_PATH
     cauldron_files = listdir(cauldron_folder)
     state_offset = sum([1 if p[-6:] == '.state' else 0 for p in cauldron_files])
-    if state_offset > 1:
-        state_offset = 1 / (state_offset - 1)
-    else:
+    state_offset -= 1
+    if state_offset < 1:
+        chit_chat('\b: no state files found, skipping merge.')
         return False
-    chit_chat(f'\b: merging {state_offset - 1} state files.')
+    chit_chat(f'\b: merging {state_offset} state files.')
+    state_offset = 1 / (state_offset)
     def __merge_params__(old_state, new_state, finalize=False):
         for key, value in new_state.items():
             if type(value) == TENSOR and key in old_state:
@@ -349,7 +351,7 @@ def __merge_states__(*args, **kwargs):
     for file_name in cauldron_files:
         if file_name == 'cauldron.state':
             continue
-        if '.state' in file_name and file_name[-6:] == '.state':
+        elif '.state' in file_name and file_name[-6:] == '.state':
             file_path = __path_join__(cauldron_folder, file_name)
             base_cauldron.load_state(state_path=file_path)
             proxy_cauldron.network.load_state_dict(
@@ -483,6 +485,7 @@ class ThreeBlindMice():
             cauldron = ivy_cauldron.Cauldron(debug_mode=True)
             cauldron.train_network()
             cauldron = None
+            del(cauldron)
             gc.collect()
 
     def start_serving(self, *args, debug=False, **kwargs):

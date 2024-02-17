@@ -13,6 +13,7 @@ from torch.nn.functional import interpolate
 from torch.nn.init import uniform_
 from torch.utils.data import DataLoader, TensorDataset
 from torch import topk
+from torch.fft import rfft
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
@@ -26,7 +27,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('trend',),
         verbosity=0,
         no_caching=True,
-        set_weights=False,
+        set_weights=True,
         try_cuda=True,
         debug_mode=False,
         ):
@@ -119,9 +120,9 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         n_heads = 2
-        n_layers = 3
-        n_hidden = int(n_heads * (64 ** 2) * φ)
-        n_model = n_heads * 32
+        n_layers = 9
+        n_model = n_heads * 128
+        n_hidden = n_batch * n_model
         n_dropout = φ - 1.5
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -175,6 +176,7 @@ class Cauldron(torch.nn.Module):
             'n_learning_rate': n_learning_rate,
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
+            'n_rfft': (n_model * 2) - 1,
             'batch_affix': n_eps ** 2,
             }
         self.validation_results = {
@@ -241,21 +243,20 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, batch):
         """Returns predictions from inputs."""
-        state = self.network(batch, batch).unsqueeze(1).softmax(-1)
-        activations = [topk(t, 1, largest=True).values for t in state]
-        return torch.cat(activations)
+        state = self.network(batch, batch)
+        activations = [topk(t, 3, largest=True).values for t in state]
+        state = torch.stack(activations)
+        return state.mean(-1).unsqueeze(-1).sigmoid()
 
     def get_datasets(self, tensor_data, training=False):
         """Prepare tensor data for network input."""
         constants = self.constants
-        batch_affix = constants['batch_affix']
         n_model = constants['n_model']
         inputs = tensor_data[:, :, self.input_indices]
         inputs[inputs > 0] = 1
         inputs[inputs <= 0] = -1
-        inputs = interpolate(inputs, size=n_model, mode='area')
-        inputs[:, :, 0] = -batch_affix
-        inputs[:, :, -1] = batch_affix
+        inputs = rfft(inputs, dim=-1, n=constants['n_rfft'])
+        inputs = (inputs.real * inputs.imag).log_softmax(-1)
         targets = tensor_data[:, :, self.target_indices]
         targets[targets > 0] = 0.7 if training else 1
         targets[targets <= 0] = 0.3 if training else 0
@@ -284,12 +285,12 @@ class Cauldron(torch.nn.Module):
     def train_network(
         self,
         checkpoint=100,
-        epoch_samples=40,
+        epoch_samples=3,
         hours=3,
-        warmup=34,
+        warmup=5,
         validate=True,
         quicksave=False,
-        reinforce=False,
+        reinforce=True,
         ):
         """Batched training over hours."""
         constants = self.constants
@@ -340,7 +341,8 @@ class Cauldron(torch.nn.Module):
             n_sample = 0
             epoch_error = 0
             loss = None
-            optimizer.zero_grad()
+            if not reinforce:
+                optimizer.zero_grad()
             while n_sample < epoch_samples:
                 batch, targets = random_batch()
                 if not reinforce:
@@ -351,16 +353,17 @@ class Cauldron(torch.nn.Module):
                         loss += loss_fn(predictions, targets)
                 else:
                     for step in batch_range:
+                        optimizer.zero_grad()
                         batch_step = batch[:step]
                         target_step = targets[:step]
                         predictions = forward(batch_step)
-                        if loss is None:
-                            loss = loss_fn(predictions, target_step)
-                        else:
-                            loss += loss_fn(predictions, target_step)
+                        loss = loss_fn(predictions, target_step)
+                        loss.backward()
+                        optimizer.step()
                 n_sample += 1
-            loss.backward()
-            optimizer.step()
+            if not reinforce:
+                loss.backward()
+                optimizer.step()
             elapsed = (time.time() - start_time) / 3600
             epoch_error = loss.item()
             ts = get_timestamp()
@@ -380,8 +383,7 @@ class Cauldron(torch.nn.Module):
             if quicksave or epoch_checkpoint:
                 save_state(state_path)
             if verbosity > 0:
-                if verbosity > 1:
-                    print(f'predictions: \n{predictions}')
+                print(f'predictions: \n{predictions}')
                 epoch_msg = ''
                 epoch_msg += '\n*********************************************'
                 epoch_msg += f'\ntimestamp: {ts}'
