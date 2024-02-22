@@ -23,7 +23,7 @@ __version__ = 'gardneri'
 class Cauldron(torch.nn.Module):
     def __init__(
         self,
-        input_labels=('trend', 'price_zs', 'volume_zs',),
+        input_labels=('trend', 'pct_chg', 'price_zs', 'volume_zs',),
         target_labels=('trend',),
         verbosity=0,
         no_caching=True,
@@ -48,7 +48,7 @@ class Cauldron(torch.nn.Module):
         best_results_path = path.join(network_path, 'best_results')
         if not path.exists(best_results_path):
             mkdir(best_results_path)
-        self.best_state_path = path.join(best_results_path, '{0}.{1}.{2}.state')
+        self.best_state_path = path.join(best_results_path, '{0}.state')
         self.new_state_path = path.join(network_path, '{0}.{1}.{2}.state')
         self.state_path = path.join(network_path, 'cauldron.state')
         self.backtest_path = path.join(network_path, 'cauldron.backtest')
@@ -123,7 +123,7 @@ class Cauldron(torch.nn.Module):
         n_layers = 9
         n_model = n_heads * 128
         n_hidden = n_batch * n_model
-        n_dropout = φ - 1.5
+        n_dropout = 1 - (φ - 1)
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
             d_model=n_model,
@@ -143,7 +143,7 @@ class Cauldron(torch.nn.Module):
         n_betas = (0.9, 0.999)
         n_weight_decay = 0.0099
         self.optimizer = torch.optim.AdamW(
-            self.network.parameters(),
+            self.parameters(),
             lr=n_learning_rate,
             betas=n_betas,
             eps=n_eps,
@@ -176,7 +176,6 @@ class Cauldron(torch.nn.Module):
             'n_learning_rate': n_learning_rate,
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
-            'n_rfft': (n_model * 2) - 1,
             'batch_affix': n_eps ** 2,
             }
         self.validation_results = {
@@ -243,23 +242,39 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, batch):
         """Returns predictions from inputs."""
-        state = self.network(batch, batch)
-        activations = [topk(t, 3, largest=True).values for t in state]
-        state = torch.stack(activations)
-        return state.mean(-1).unsqueeze(-1).sigmoid()
+        #state = self.network(batch, batch)
+        #activations = [topk(t, 3, largest=True).values for t in state]
+        #state = torch.stack(activations)
+        #return state.mean(-1).unsqueeze(-1).sigmoid()
+        return self.network(batch, batch).mean(-1).sigmoid().unsqueeze(-1)
 
-    def get_datasets(self, tensor_data, training=False):
+    def get_datasets(self, tensor_data, benchmark_data=False, training=False):
         """Prepare tensor data for network input."""
         constants = self.constants
+        batch_affix = constants['batch_affix']
         n_model = constants['n_model']
-        inputs = tensor_data[:, :, self.input_indices]
-        inputs[inputs > 0] = 1
-        inputs[inputs <= 0] = -1
-        inputs = rfft(inputs, dim=-1, n=constants['n_rfft'])
-        inputs = (inputs.real * inputs.imag).log_softmax(-1)
-        targets = tensor_data[:, :, self.target_indices]
-        targets[targets > 0] = 0.7 if training else 1
-        targets[targets <= 0] = 0.3 if training else 0
+        if not benchmark_data:
+            tensor_data = tensor_data.unsqueeze(0)
+        inputs = tensor_data[:, :, self.input_indices].clone().detach()
+        targets = tensor_data[:, :, self.target_indices].clone().detach()
+        #print(inputs)
+        #print('inputs', inputs.shape)
+        #print(targets)
+        #print('targets', targets.shape)
+        inputs[inputs > 0] = 9.9
+        inputs[inputs <= 0] = -9.9
+        inputs = interpolate(inputs, size=n_model, mode='area')
+        inputs[:, :, 0] = -batch_affix
+        inputs[:, :, -1] = batch_affix
+        if not benchmark_data:
+            inputs = inputs.squeeze(0)
+            targets = targets.squeeze(0)
+        targets[targets > 0] = 0.75 if training else 1
+        targets[targets <= 0] = 0.25 if training else 0
+        #print(inputs)
+        #print('inputs', inputs.shape)
+        #print(targets)
+        #print('targets', targets.shape)
         return (inputs.clone().detach(), targets.clone().detach())
 
     def save_best_result(self, metric, result_key='best_epoch', file_name=None):
@@ -268,12 +283,7 @@ class Cauldron(torch.nn.Module):
             self.debug_anomalies(file_name=f'{time.time()}')
         self.validation_results[result_key] = float(metric)
         if file_name is None:
-            ts = self.get_timestamp()
-            file_name = self.best_state_path.format(
-                result_key,
-                ts.replace('-', '').replace(':', '').replace(' ', ''),
-                metric,
-                )
+            file_name = self.best_state_path.format(metric)
         self.save_state(file_name)
 
     def reset_metrics(self):
@@ -294,25 +304,29 @@ class Cauldron(torch.nn.Module):
         ):
         """Batched training over hours."""
         constants = self.constants
-        batch_affix = constants['batch_affix']
+        #batch_affix = constants['batch_affix']
         n_batch = constants['n_batch']
-        n_eps = constants['n_eps']
-        n_model = constants['n_model']
-        n_symbols = constants['n_symbols']
-        n_targets = constants['n_targets']
+        #n_eps = constants['n_eps']
+        #n_model = constants['n_model']
+        #n_symbols = constants['n_symbols']
+        #n_targets = constants['n_targets']
         verbosity = self.verbosity
         forward = self.forward
         save_state = self.save_state
         state_path = self.state_path
         validate_network = self.validate_network
         snapshot_path = path.join(self.root_folder, 'cauldron', '{}.state')
-        cat = torch.cat
+        #cat = torch.cat
         epoch = 0
         elapsed = 0
         best_epoch = self.validation_results['best_epoch']
         benchmarks = self.benchmarks
         n_benchmarks = benchmarks.shape[0] - 1
-        datasets = self.get_datasets(benchmarks, training=True)
+        datasets = self.get_datasets(
+            benchmarks,
+            benchmark_data=True,
+            training=True,
+            )
         input_dataset = datasets[0][:, :-n_batch, :]
         target_dataset = datasets[1][:, n_batch:, :]
         batch_max = input_dataset.shape[1] - n_batch - 1
@@ -332,6 +346,7 @@ class Cauldron(torch.nn.Module):
         get_timestamp = self.get_timestamp
         batch_range = range(2, n_batch + 1)
         epoch_checkpoint = False
+        inf = torch.inf
         if verbosity > 0:
             logging.info('Training started.')
         start_time = time.time()
@@ -352,14 +367,21 @@ class Cauldron(torch.nn.Module):
                     else:
                         loss += loss_fn(predictions, targets)
                 else:
-                    for step in batch_range:
-                        optimizer.zero_grad()
-                        batch_step = batch[:step]
-                        target_step = targets[:step]
-                        predictions = forward(batch_step)
-                        loss = loss_fn(predictions, target_step)
-                        loss.backward()
-                        optimizer.step()
+                    least_loss = inf
+                    while True:
+                        for step in batch_range:
+                            optimizer.zero_grad()
+                            batch_step = batch[:step]
+                            target_step = targets[:step]
+                            predictions = forward(batch_step)
+                            loss = loss_fn(predictions, target_step)
+                            loss.backward()
+                            optimizer.step()
+                        batch_loss = loss.item()
+                        if batch_loss < least_loss:
+                            least_loss = batch_loss
+                        else:
+                            break
                 n_sample += 1
             if not reinforce:
                 loss.backward()
@@ -374,7 +396,7 @@ class Cauldron(torch.nn.Module):
                 best_epoch = epoch_error
                 ts = self.get_timestamp()
                 f = ts.replace('-', '').replace(':', '').replace(' ', '')
-                f = f'best_epoch.{f}.{best_epoch}'
+                f = f'snapshot.{f}.{best_epoch}'
                 save_best_result(
                     best_epoch,
                     result_key='best_epoch',
@@ -407,9 +429,9 @@ class Cauldron(torch.nn.Module):
     def validate_network(self):
         """Benchmarks back-testing."""
         constants = self.constants
-        batch_affix = constants['batch_affix']
+        #batch_affix = constants['batch_affix']
         n_forecast = constants['n_forecast']
-        n_targets = constants['n_targets']
+        #n_targets = constants['n_targets']
         forward = self.forward
         verbosity = self.verbosity
         n_correct = 0
@@ -421,10 +443,14 @@ class Cauldron(torch.nn.Module):
             logging.info('Starting validation routine.')
         self.eval()
         benchmarks = self.benchmarks
-        datasets = self.get_datasets(benchmarks, training=False)
-        input_dataset = datasets[0][:, :-n_forecast, :].squeeze(0)
-        target_dataset = datasets[1][:, n_forecast:, :].squeeze(0)
-        final_batch = datasets[0][:, -n_forecast:, :].squeeze(0)
+        datasets = self.get_datasets(
+            benchmarks,
+            benchmark_data=True,
+            training=False,
+            )
+        input_dataset = datasets[0][:, :-n_forecast, :]
+        target_dataset = datasets[1][:, n_forecast:, :]
+        final_batch = datasets[0][:, -n_forecast:, :]
         for benchmark, candles in enumerate(input_dataset):
             if benchmark not in results:
                 results[benchmark] = dict()
@@ -480,10 +506,10 @@ class Cauldron(torch.nn.Module):
     def backtest_network(self):
         """Candelabrum back-testing."""
         constants = self.constants
-        batch_affix = constants['batch_affix']
+        #batch_affix = constants['batch_affix']
         n_forecast = constants['n_forecast']
         n_symbols = constants['n_symbols']
-        n_targets = constants['n_targets']
+        #n_targets = constants['n_targets']
         forward = self.forward
         symbols = self.symbols
         verbosity = self.verbosity
@@ -505,10 +531,14 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['forecast'] = list()
                 results[symbol]['symbol'] = sym_ticker
                 results[symbol]['total'] = 0
-            datasets = self.get_datasets(candles.unsqueeze(0), training=False)
-            input_dataset = datasets[0][:, :-n_batch, :].squeeze(0)
-            target_dataset = datasets[1][:, n_batch:, :].squeeze(0)
-            final_batch = datasets[0][:, -n_forecast:, :].squeeze(0)
+            datasets = self.get_datasets(
+                candles,
+                benchmark_data=False,
+                training=False,
+                )
+            input_dataset = datasets[0][:-n_forecast, :]
+            target_dataset = datasets[1][n_forecast:, :]
+            final_batch = datasets[0][-n_forecast:, :]
             validation_data = DataLoader(
                 TensorDataset(input_dataset, target_dataset),
                 batch_size=n_forecast,
