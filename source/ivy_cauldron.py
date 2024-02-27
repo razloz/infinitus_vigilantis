@@ -1,11 +1,11 @@
 """Transformer-based Sentiment Rank generator."""
 import torch
 import logging
+import math
 import os
 import pickle
 import time
 from time import localtime, strftime
-from math import sqrt
 from random import randint
 from os import path, mkdir, environ
 from os.path import dirname, realpath, abspath
@@ -18,12 +18,15 @@ __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
 __version__ = 'gardneri'
+ᶓ = math.e
+π = math.pi
+φ = (1 + math.sqrt(5)) / 2
 
 
 class Cauldron(torch.nn.Module):
     def __init__(
         self,
-        input_labels=('trend', 'pct_chg', 'price_zs', 'volume_zs',),
+        input_labels=('price_zs',),
         target_labels=('trend',),
         verbosity=0,
         no_caching=True,
@@ -33,7 +36,6 @@ class Cauldron(torch.nn.Module):
         ):
         """Predicts the future sentiment from stock data."""
         super(Cauldron, self).__init__()
-        φ = (1 + sqrt(5)) / 2
         self.get_timestamp = lambda: strftime('%Y-%m-%d %H:%M:%S', localtime())
         root_folder = abspath(path.join(dirname(realpath(__file__)), '..'))
         self.root_folder = root_folder
@@ -119,10 +121,10 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_heads = 2
-        n_layers = 9
-        n_model = n_heads * 128
-        n_hidden = n_batch * n_model
+        n_heads = 3
+        n_layers = 16
+        n_model = n_batch * 9
+        n_hidden = n_model
         n_dropout = 1 - (φ - 1)
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -152,6 +154,11 @@ class Cauldron(torch.nn.Module):
             foreach=True,
             maximize=False,
             )
+        self.piphi = torch.tensor(
+            [[-1,  π,  1], [-φ,  0,  φ], [-1, -π, 1]],
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
         self.benchmarks = benchmarks
         self.candelabrum = candelabrum
         self.set_weights = set_weights
@@ -177,6 +184,7 @@ class Cauldron(torch.nn.Module):
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
             'batch_affix': n_eps ** 2,
+            'output_dims': [n_batch, 9],
             }
         self.validation_results = {
             'best_backtest': 0.0,
@@ -240,13 +248,20 @@ class Cauldron(torch.nn.Module):
             bytes_obj = torch.save(bytes_obj, buffer_io)
             return bytes_obj
 
-    def forward(self, batch):
+    def piphify(self, scalar):
+        """Construct PIPHI tensor."""
+        t = (ᶓ * (scalar.sigmoid() ** self.piphi)).log_softmax(-1)
+        return t.clone().detach()
+
+    def forward(self, inputs):
         """Returns predictions from inputs."""
-        #state = self.network(batch, batch)
-        #activations = [topk(t, 3, largest=True).values for t in state]
-        #state = torch.stack(activations)
-        #return state.mean(-1).unsqueeze(-1).sigmoid()
-        return self.network(batch, batch).mean(-1).sigmoid().unsqueeze(-1)
+        piphify = self.piphify
+        dims = self.constants['output_dims']
+        inputs = [piphify(t) for t in inputs]
+        inputs = torch.stack(inputs).flatten().unsqueeze(0)
+        state = self.network(inputs, inputs).view(*dims)
+        foci = state[:, 4].sigmoid()
+        return foci.unsqueeze(-1)
 
     def get_datasets(self, tensor_data, benchmark_data=False, training=False):
         """Prepare tensor data for network input."""
@@ -257,24 +272,11 @@ class Cauldron(torch.nn.Module):
             tensor_data = tensor_data.unsqueeze(0)
         inputs = tensor_data[:, :, self.input_indices].clone().detach()
         targets = tensor_data[:, :, self.target_indices].clone().detach()
-        #print(inputs)
-        #print('inputs', inputs.shape)
-        #print(targets)
-        #print('targets', targets.shape)
-        inputs[inputs > 0] = 9.9
-        inputs[inputs <= 0] = -9.9
-        inputs = interpolate(inputs, size=n_model, mode='area')
-        inputs[:, :, 0] = -batch_affix
-        inputs[:, :, -1] = batch_affix
         if not benchmark_data:
             inputs = inputs.squeeze(0)
             targets = targets.squeeze(0)
         targets[targets > 0] = 0.75 if training else 1
         targets[targets <= 0] = 0.25 if training else 0
-        #print(inputs)
-        #print('inputs', inputs.shape)
-        #print(targets)
-        #print('targets', targets.shape)
         return (inputs.clone().detach(), targets.clone().detach())
 
     def save_best_result(self, metric, result_key='best_epoch', file_name=None):
@@ -294,29 +296,23 @@ class Cauldron(torch.nn.Module):
 
     def train_network(
         self,
-        checkpoint=100,
-        epoch_samples=3,
+        checkpoint=10,
+        epoch_samples=100,
         hours=3,
-        warmup=5,
+        warmup=3,
         validate=True,
         quicksave=False,
-        reinforce=True,
+        reinforce=False,
         ):
         """Batched training over hours."""
         constants = self.constants
-        #batch_affix = constants['batch_affix']
         n_batch = constants['n_batch']
-        #n_eps = constants['n_eps']
-        #n_model = constants['n_model']
-        #n_symbols = constants['n_symbols']
-        #n_targets = constants['n_targets']
         verbosity = self.verbosity
         forward = self.forward
         save_state = self.save_state
         state_path = self.state_path
         validate_network = self.validate_network
         snapshot_path = path.join(self.root_folder, 'cauldron', '{}.state')
-        #cat = torch.cat
         epoch = 0
         elapsed = 0
         best_epoch = self.validation_results['best_epoch']
@@ -387,7 +383,7 @@ class Cauldron(torch.nn.Module):
                 loss.backward()
                 optimizer.step()
             elapsed = (time.time() - start_time) / 3600
-            epoch_error = loss.item()
+            epoch_error = loss.item() / epoch_samples
             ts = get_timestamp()
             epoch_checkpoint = epoch % checkpoint == 0
             if warmup > 0:
@@ -429,9 +425,7 @@ class Cauldron(torch.nn.Module):
     def validate_network(self):
         """Benchmarks back-testing."""
         constants = self.constants
-        #batch_affix = constants['batch_affix']
         n_forecast = constants['n_forecast']
-        #n_targets = constants['n_targets']
         forward = self.forward
         verbosity = self.verbosity
         n_correct = 0
@@ -506,10 +500,8 @@ class Cauldron(torch.nn.Module):
     def backtest_network(self):
         """Candelabrum back-testing."""
         constants = self.constants
-        #batch_affix = constants['batch_affix']
         n_forecast = constants['n_forecast']
         n_symbols = constants['n_symbols']
-        #n_targets = constants['n_targets']
         forward = self.forward
         symbols = self.symbols
         verbosity = self.verbosity
