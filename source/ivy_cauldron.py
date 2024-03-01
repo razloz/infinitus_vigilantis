@@ -121,10 +121,10 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_heads = 3
-        n_layers = 16
+        n_heads = n_batch
+        n_layers = 8
         n_model = n_batch * 9
-        n_hidden = n_model
+        n_hidden = n_model ** 2
         n_dropout = 1 - (φ - 1)
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -296,10 +296,10 @@ class Cauldron(torch.nn.Module):
 
     def train_network(
         self,
-        checkpoint=10,
-        epoch_samples=100,
+        checkpoint=100,
+        epoch_samples=8,
         hours=3,
-        warmup=3,
+        warmup=5,
         validate=True,
         quicksave=False,
         reinforce=False,
