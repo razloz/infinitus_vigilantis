@@ -400,7 +400,7 @@ class Cauldron(torch.nn.Module):
                     )
             if quicksave or epoch_checkpoint:
                 save_state(state_path)
-            if verbosity > 0:
+            if epoch_checkpoint and verbosity > 0:
                 print(f'predictions: \n{predictions}')
                 epoch_msg = ''
                 epoch_msg += '\n*********************************************'
