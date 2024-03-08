@@ -44,8 +44,8 @@ def cartography(symbol, features, candles, timestamps,
     ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
     plt.xticks(ticks=data_range, labels=timestamps,
                rotation=13, fontweight='bold')
-    plt.subplots_adjust(left=0.08, bottom=0.08, right=0.92,
-                        top=0.92, wspace=0, hspace=0.01)
+    plt.subplots_adjust(left=0.09, bottom=0.09, right=0.91,
+                        top=0.91, wspace=0.01, hspace=0.01)
     ax1.grid(True, color=(0.3, 0.3, 0.3))
     ax1.set_ylabel('Price', fontweight='bold')
     ax1.set_xlim(((data_range[0] - 2), (data_range[-1] + 2)))
@@ -72,6 +72,43 @@ def cartography(symbol, features, candles, timestamps,
     wid_wick = wid_base * 0.21
     wid_cdls = wid_base * 0.89
     wid_line = wid_base * 0.34
+    # Fibonacci retracements
+    pkws = {
+        'alpha': 1.0,
+        'color': '#FFA600',
+        'label': None,
+        'linestyle': 'dotted',
+        'linewidth': wid_cdls * 0.75,
+        }
+    fib_x = [data_range[0], data_range[-1]]
+    fib_range = ylim_high - ylim_low
+    fib_lines = [
+        round(float(ylim_high), 2),
+        round(float(ylim_high - (fib_range * 0.118)), 2),
+        round(float(ylim_high - (fib_range * 0.250)), 2),
+        round(float(ylim_high - (fib_range * 0.382)), 2),
+        round(float(ylim_high - (fib_range * 0.500)), 2),
+        round(float(ylim_high - (fib_range * 0.618)), 2),
+        round(float(ylim_high - (fib_range * 0.750)), 2),
+        round(float(ylim_high - (fib_range * 0.882)), 2),
+        round(float(ylim_low), 2),
+        ]
+    fib_axes = ax1.twinx()
+    fib_axes.grid(False)
+    fib_axes.set_ylabel('Retracements', fontweight='bold')
+    fib_axes.set_yticks(yticks_range)
+    fib_labels = [str(n) if n in fib_lines else '' for n in yticks_range]
+    fib_axes.set_yticklabels(fib_labels)
+    fib_axes.yaxis.set_major_locator(mticker.FixedLocator(fib_lines))
+    fib_axes.yaxis.set_major_formatter(mticker.EngFormatter())
+    thick_lines = False
+    for y in fib_lines:
+        if thick_lines:
+            pkws['linewidth'] = wid_cdls * 0.75
+        else:
+            pkws['linewidth'] = wid_cdls * 0.50
+        fib_axes.plot(fib_x, [y, y], **pkws)
+        thick_lines = not thick_lines
     # Candle stuff
     cdl_open = candles[:, feature_indices['open']].flatten()
     cdl_high = candles[:, feature_indices['high']].flatten()

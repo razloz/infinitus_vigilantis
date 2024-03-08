@@ -424,7 +424,7 @@ class ThreeBlindMice():
                 'host.addr': 'localhost',
                 'host.port': '33333',
                 'hours': '3',
-                'checkpoint': '10',
+                'checkpoint': '100',
             }
             javafy.save(data=self.settings, file_path=SETTINGS_PATH)
         self.host_addr = str(self.settings['host.addr'])
@@ -525,14 +525,12 @@ class ThreeBlindMice():
             symbol_zs = candelabrum[key][-1, feature_indices['price_zs']]
             volume_zs = candelabrum[key][-1, feature_indices['volume_zs']]
             symbol_wema = candelabrum[key][-1, feature_indices['price_wema']]
-            rating = 0 #sum(symbol_forecast)
-            if rating >= n_half:
-                #rating += sum([float(p) for p in predictions])
-                rating += 1 if -0.5 <= symbol_zs <= 0.5 else 0
-                rating += 1 if -0.5 <= volume_zs <= 0.5 else 0
-                rating += 1 if symbol_close > symbol_wema else 0
-                rating *= 1 if symbol_trend > 0 else 0
-            picks[symbols[key]]['rating'] = accuracy * float(rating)
+            rating = 0
+            rating += 1 if -0.5 <= symbol_zs <= 0.5 else 0
+            rating += 1 if -0.5 <= volume_zs <= 0.5 else 0
+            rating += 1 if symbol_close > symbol_wema else 0
+            rating *= 1 if symbol_trend > 0 else 0
+            picks[symbols[key]]['rating'] = float(rating) # accuracy * float(rating)
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
         picks = picks.index[:20].tolist()
