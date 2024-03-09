@@ -482,7 +482,7 @@ class ThreeBlindMice():
         chit_chat('\b: studying the cauldron.')
         while True:
             self.merge_states()
-            cauldron = ivy_cauldron.Cauldron(debug_mode=True)
+            cauldron = ivy_cauldron.Cauldron(debug_mode=False)
             cauldron.train_network()
             cauldron = None
             del(cauldron)
@@ -520,17 +520,24 @@ class ThreeBlindMice():
             accuracy = float(value['accuracy'] * 0.01)
             predictions = value['forecast']
             symbol_forecast = [1 if p > 0.5 else 0 for p in predictions]
+            symbol_open = candelabrum[key][0, feature_indices['close']]
             symbol_close = candelabrum[key][-1, feature_indices['close']]
             symbol_trend = candelabrum[key][-1, feature_indices['trend']]
             symbol_zs = candelabrum[key][-1, feature_indices['price_zs']]
             volume_zs = candelabrum[key][-1, feature_indices['volume_zs']]
             symbol_wema = candelabrum[key][-1, feature_indices['price_wema']]
+            signals = [
+                -0.5 <= symbol_zs <= 0.5,
+                -0.5 <= volume_zs <= 0.5,
+                symbol_close > symbol_wema,
+                symbol_trend > 0,
+                symbol_close > symbol_open,
+                ]
             rating = 0
-            rating += 1 if -0.5 <= symbol_zs <= 0.5 else 0
-            rating += 1 if -0.5 <= volume_zs <= 0.5 else 0
-            rating += 1 if symbol_close > symbol_wema else 0
-            rating *= 1 if symbol_trend > 0 else 0
-            picks[symbols[key]]['rating'] = float(rating) # accuracy * float(rating)
+            for signal in signals:
+                if signal:
+                    rating += 1
+            picks[symbols[key]]['rating'] = float(rating)
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
         picks = picks.index[:20].tolist()

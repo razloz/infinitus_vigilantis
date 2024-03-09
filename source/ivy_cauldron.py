@@ -51,7 +51,7 @@ class Cauldron(torch.nn.Module):
         if not path.exists(best_results_path):
             mkdir(best_results_path)
         self.best_state_path = path.join(best_results_path, '{0}.state')
-        self.new_state_path = path.join(network_path, '{0}.{1}.{2}.state')
+        self.new_state_path = path.join(best_results_path, '{0}.{1}.{2}.state')
         self.state_path = path.join(network_path, 'cauldron.state')
         self.backtest_path = path.join(network_path, 'cauldron.backtest')
         self.validation_path = path.join(network_path, 'cauldron.validation')
