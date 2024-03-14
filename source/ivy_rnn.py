@@ -58,6 +58,7 @@ class RNN(torch.nn.Module):
             n_slice = n_time if n_time % 2 == 0 else n_time - 1
             n_slice = int(n_slice / 2)
             inputs = data[:n_slice, input_indices][:-n_batch]
+            inputs.requires_grad_(True)
             targets = data[:n_slice, target_indices][n_batch:]
             self.training_data.append(
                 DataLoader(
@@ -82,8 +83,8 @@ class RNN(torch.nn.Module):
             self.final_data.append(data[-n_batch:, input_indices])
         self.network = torch.nn.LSTM(
             input_size=len(input_indices),
-            hidden_size=512,
-            num_layers=20,
+            hidden_size=128,
+            num_layers=40,
             bias=True,
             batch_first=True,
             dropout=0.5,
@@ -95,12 +96,9 @@ class RNN(torch.nn.Module):
             lr=0.01,
             alpha=0.99,
             eps=1e-08,
-            weight_decay=0,
-            momentum=0,
-            centered=False,
+            weight_decay=0.01,
+            momentum=0.99,
             foreach=True,
-            maximize=False,
-            differentiable=False,
             )
         self.load_state()
 
@@ -140,10 +138,13 @@ class RNN(torch.nn.Module):
             'optimizer': self.optimizer.state_dict(),
             }
 
-    def forward(self, inputs, real_price):
+    def forward(self, inputs):
         """."""
-        state = self.network(inputs)[0].mean(0)
-        return state.mean(0) * real_price
+        state = self.network(inputs)[1][0].transpose(0, 1)
+        state = state[torch.topk(state, 1, dim=0).indices].flatten()
+        state[state.argmax(0)] *= 0
+        state = state.mean(0).squeeze(0)
+        return state
 
     def deep_learn(self):
         """."""
@@ -153,21 +154,29 @@ class RNN(torch.nn.Module):
         optimizer = self.optimizer
         self.train()
         while True:
+            epoch = 0
             for n_sets, dataset in enumerate(training_data):
+                n_total = 0
                 mse = 0
-                passes = 0
                 for inputs, targets in dataset:
                     optimizer.zero_grad()
-                    target = targets.max()
-                    target = target - ((target - targets.min()) / 2)
-                    output = forward(inputs, inputs[-1, 0])
-                    loss = loss_fn(output, target)
+                    tail_price = inputs[-1, 0]
+                    target_med = targets.max()
+                    target_med = target_med - ((target_med - targets.min()) / 2)
+                    target = (target_med - tail_price) / tail_price
+                    output = forward(inputs)
+                    prediction = tail_price * (1 + output)
+                    loss = loss_fn(output.sigmoid(), target.sigmoid())
                     loss.backward()
                     optimizer.step()
                     mse += loss.item()
-                    passes += 1
-                    print(f'({passes}) output: {output} target: {target}')
-                mse /= passes
-                print(f'({n_sets + 1}) MSE: {mse}')
-            self.save_state()
+                    n_total += 1
+                mse /= n_total
+                print(f'({n_total}) output: {output} target: {target}')
+                print(f'tail_price: {tail_price}')
+                print(f'target_med: {target_med}')
+                print(f'prediction: {prediction}')
+                print(f'({n_sets + 1}) MSE: {mse}\n')
+                self.save_state()
+            epoch += 1
         return True

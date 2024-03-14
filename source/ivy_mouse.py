@@ -302,7 +302,11 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=1):
         cauldron = ivy_cauldron.Cauldron()
         state_path = cauldron.state_path
         chit_chat(f'\b: training network for {hours} hours')
-        cauldron.train_network(hours=hours, checkpoint=checkpoint)
+        cauldron.train_network(
+            hours=hours,
+            checkpoint=checkpoint,
+            validate=False,
+            )
         cauldron = None
         del(cauldron)
         gc.collect()
@@ -480,10 +484,16 @@ class ThreeBlindMice():
         Train neural network forever.
         """
         chit_chat('\b: studying the cauldron.')
+        hours = float(self.settings['hours'])
+        checkpoint = int(self.settings['checkpoint'])
         while True:
             self.merge_states()
             cauldron = ivy_cauldron.Cauldron(debug_mode=False)
-            cauldron.train_network()
+            cauldron.train_network(
+                hours=hours,
+                checkpoint=checkpoint,
+                validate=True,
+                )
             cauldron = None
             del(cauldron)
             gc.collect()

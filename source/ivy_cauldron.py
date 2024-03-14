@@ -5,6 +5,7 @@ import math
 import os
 import pickle
 import time
+from itertools import combinations
 from time import localtime, strftime
 from random import randint
 from os import path, mkdir, environ
@@ -12,7 +13,7 @@ from os.path import dirname, realpath, abspath
 from torch.nn.functional import interpolate
 from torch.nn.init import uniform_
 from torch.utils.data import DataLoader, TensorDataset
-from torch import topk
+from torch import topk, stack
 from torch.fft import rfft
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2024, Daniel Ward'
@@ -28,7 +29,7 @@ class Cauldron(torch.nn.Module):
         self,
         input_labels=('price_zs',),
         target_labels=('trend',),
-        verbosity=0,
+        verbosity=1,
         no_caching=True,
         set_weights=True,
         try_cuda=True,
@@ -122,9 +123,9 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         n_heads = n_batch
-        n_layers = 8
+        n_layers = 3
         n_model = n_batch * 9
-        n_hidden = n_model ** 2
+        n_hidden = n_model ** 3
         n_dropout = 1 - (φ - 1)
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -159,6 +160,9 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
+        piphi_indices = [i for i in range(9) if i != 4]
+        self.piphi_indices = list(combinations(piphi_indices, 2))
+        self.piphi_indices = [[*i] for i in self.piphi_indices]
         self.benchmarks = benchmarks
         self.candelabrum = candelabrum
         self.set_weights = set_weights
@@ -255,13 +259,17 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, inputs):
         """Returns predictions from inputs."""
-        piphify = self.piphify
         dims = self.constants['output_dims']
+        n_batch = self.constants['n_batch']
+        indices = self.piphi_indices
+        piphify = self.piphify
         inputs = [piphify(t) for t in inputs]
         inputs = torch.stack(inputs).flatten().unsqueeze(0)
         state = self.network(inputs, inputs).view(*dims)
-        foci = state[:, 4].sigmoid()
-        return foci.unsqueeze(-1)
+        state = state[topk(state[:, 4].flatten(), 1).indices].flatten()
+        outputs = stack([state[i].mean(0) for i in indices])
+        outputs = topk(outputs, n_batch, sorted=False, largest=True)
+        return outputs.values.sigmoid().unsqueeze(1)
 
     def get_datasets(self, tensor_data, benchmark_data=False, training=False):
         """Prepare tensor data for network input."""
@@ -297,7 +305,7 @@ class Cauldron(torch.nn.Module):
     def train_network(
         self,
         checkpoint=100,
-        epoch_samples=8,
+        epoch_samples=4,
         hours=3,
         warmup=5,
         validate=True,
@@ -388,16 +396,17 @@ class Cauldron(torch.nn.Module):
             epoch_checkpoint = epoch % checkpoint == 0
             if warmup > 0:
                 warmup -= 1
-            elif epoch_error < best_epoch:
+            if epoch_error < best_epoch:
                 best_epoch = epoch_error
-                ts = self.get_timestamp()
-                f = ts.replace('-', '').replace(':', '').replace(' ', '')
-                f = f'snapshot.{f}.{best_epoch}'
-                save_best_result(
-                    best_epoch,
-                    result_key='best_epoch',
-                    file_name=snapshot_path.format(f),
-                    )
+                if warmup == 0:
+                    ts = self.get_timestamp()
+                    f = ts.replace('-', '').replace(':', '').replace(' ', '')
+                    f = f'snapshot.{f}.{best_epoch}'
+                    save_best_result(
+                        best_epoch,
+                        result_key='best_epoch',
+                        file_name=snapshot_path.format(f),
+                        )
             if quicksave or epoch_checkpoint:
                 save_state(state_path)
             if epoch_checkpoint and verbosity > 0:
