@@ -536,12 +536,17 @@ class ThreeBlindMice():
             symbol_zs = candelabrum[key][-1, feature_indices['price_zs']]
             volume_zs = candelabrum[key][-1, feature_indices['volume_zs']]
             symbol_wema = candelabrum[key][-1, feature_indices['price_wema']]
+            open_close = [symbol_open, symbol_close]
+            symbol_max = max(open_close)
+            symbol_min = min(open_close)
+            median = symbol_max - ((symbol_max - symbol_min) / 2)
+            pos_forecast = 0.5 < (sum(symbol_forecast) / len(symbol_forecast))
             signals = [
-                -0.5 <= symbol_zs <= 0.5,
-                -0.5 <= volume_zs <= 0.5,
+                -1 <= symbol_zs <= 1,
+                -1 <= volume_zs <= 1,
                 symbol_close > symbol_wema,
-                symbol_trend > 0,
-                symbol_close > symbol_open,
+                symbol_trend > 2,
+                symbol_close > median,
                 ]
             rating = 0
             for signal in signals:

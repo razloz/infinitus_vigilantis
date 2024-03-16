@@ -142,9 +142,9 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.0999
+        n_learning_rate = 0.999
         n_betas = (0.9, 0.999)
-        n_weight_decay = 0.0099
+        n_weight_decay = 0.099
         self.optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=n_learning_rate,
@@ -305,7 +305,7 @@ class Cauldron(torch.nn.Module):
     def train_network(
         self,
         checkpoint=100,
-        epoch_samples=4,
+        epoch_samples=5,
         hours=3,
         warmup=5,
         validate=True,
