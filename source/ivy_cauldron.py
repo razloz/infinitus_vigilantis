@@ -122,10 +122,10 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_heads = n_batch
+        n_heads = 3
         n_layers = 3
-        n_model = n_batch * 9
-        n_hidden = n_model ** 3
+        n_model = 9
+        n_hidden = 256 ** 2
         n_dropout = 1 - (φ - 1)
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -156,7 +156,11 @@ class Cauldron(torch.nn.Module):
             maximize=False,
             )
         self.piphi = torch.tensor(
-            [[-1,  π,  1], [-φ,  0,  φ], [-1, -π, 1]],
+            [
+                [-1,  π,  1],
+                [-φ,  0,  φ],
+                [-1, -π, 1],
+            ],
             device=self.DEVICE,
             dtype=torch.float,
             )
@@ -259,22 +263,23 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, inputs):
         """Returns predictions from inputs."""
-        dims = self.constants['output_dims']
-        n_batch = self.constants['n_batch']
+        batch_affix = self.constants['batch_affix']
         indices = self.piphi_indices
         piphify = self.piphify
         inputs = [piphify(t) for t in inputs]
-        inputs = torch.stack(inputs).flatten().unsqueeze(0)
-        state = self.network(inputs, inputs).view(*dims)
+        n_inputs = len(inputs)
+        inputs = torch.stack(inputs).view(n_inputs, 9)
+        inputs[:, 0] = -batch_affix
+        inputs[:, -1] = batch_affix
+        state = self.network(inputs, inputs)
         state = state[topk(state[:, 4].flatten(), 1).indices].flatten()
         outputs = stack([state[i].mean(0) for i in indices])
-        outputs = topk(outputs, n_batch, sorted=False, largest=True)
+        outputs = topk(outputs, n_inputs, sorted=False, largest=True)
         return outputs.values.sigmoid().unsqueeze(1)
 
     def get_datasets(self, tensor_data, benchmark_data=False, training=False):
         """Prepare tensor data for network input."""
         constants = self.constants
-        batch_affix = constants['batch_affix']
         n_model = constants['n_model']
         if not benchmark_data:
             tensor_data = tensor_data.unsqueeze(0)
@@ -305,18 +310,20 @@ class Cauldron(torch.nn.Module):
     def train_network(
         self,
         checkpoint=100,
-        epoch_samples=5,
+        epoch_samples=1,
         hours=3,
         warmup=5,
         validate=True,
         quicksave=False,
-        reinforce=False,
+        reinforce=True,
         ):
         """Batched training over hours."""
+        get_state_dicts = self.get_state_dicts
         constants = self.constants
         n_batch = constants['n_batch']
         verbosity = self.verbosity
         forward = self.forward
+        load_state = self.load_state
         save_state = self.save_state
         state_path = self.state_path
         validate_network = self.validate_network
@@ -343,7 +350,8 @@ class Cauldron(torch.nn.Module):
                 target_dataset[benchmark, batch_start:batch_end],
                 )
         optimizer = self.optimizer
-        loss_fn = torch.nn.HuberLoss(reduction='sum')
+        loss_fn = torch.nn.MSELoss(reduction='mean')
+        sqrt = math.sqrt
         debug_mode = self.debug_mode
         debug_anomalies = self.debug_anomalies
         save_best_result = self.save_best_result
@@ -372,6 +380,8 @@ class Cauldron(torch.nn.Module):
                         loss += loss_fn(predictions, targets)
                 else:
                     least_loss = inf
+                    best_state = None
+                    best_prediction = None
                     while True:
                         for step in batch_range:
                             optimizer.zero_grad()
@@ -381,17 +391,33 @@ class Cauldron(torch.nn.Module):
                             loss = loss_fn(predictions, target_step)
                             loss.backward()
                             optimizer.step()
-                        batch_loss = loss.item()
+                        batch_loss = sqrt(loss.item())
+                        # print('sqrt(mse)', batch_loss)
                         if batch_loss < least_loss:
                             least_loss = batch_loss
+                            # print('least_loss', least_loss)
+                            best_state = get_state_dicts()
+                            best_prediction = predictions.clone().detach()
+                            # print(best_prediction)
+                            # print('best_prediction', best_prediction.shape)
                         else:
+                            load_state(state=best_state)
+                            # print(predictions)
+                            # print('predictions', predictions.shape)
+                            batch_loss = least_loss
+                            # print('batch_loss', batch_loss)
+                            predictions = best_prediction
+                            # print(predictions)
+                            # print('predictions', predictions.shape)
                             break
                 n_sample += 1
             if not reinforce:
                 loss.backward()
                 optimizer.step()
+                epoch_error = sqrt(loss.item() / epoch_samples)
+            else:
+                epoch_error = batch_loss
             elapsed = (time.time() - start_time) / 3600
-            epoch_error = loss.item() / epoch_samples
             ts = get_timestamp()
             epoch_checkpoint = epoch % checkpoint == 0
             if warmup > 0:
@@ -410,6 +436,7 @@ class Cauldron(torch.nn.Module):
             if quicksave or epoch_checkpoint:
                 save_state(state_path)
             if epoch_checkpoint and verbosity > 0:
+                print(f'targets: \n{targets}')
                 print(f'predictions: \n{predictions}')
                 epoch_msg = ''
                 epoch_msg += '\n*********************************************'
