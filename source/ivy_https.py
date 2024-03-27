@@ -64,11 +64,11 @@ HOME_FOOT = """
             </div>
             <div style="grid-column:3/3;grid-row:1/20;height:auto;width:100%;overflow:scroll;">
                 <div style="display:grid;gap:0px;">
-                    <div style="grid-column:1/1;grid-row:1/9;">
-                        <img width="100%" height="700px" src="{2}" id="viewport_chart"></img>
+                    <div style="grid-column:4/10;grid-row:1/1;">
+                        <img width="100%" height="100%" src="{2}" id="viewport_chart"></img>
                     </div>
-                    <div style="grid-column:1/1;grid-row:10/15;">
-                        <img width="100%" height="60%" src="{3}" id="viewport_forecast"></img>
+                    <div style="grid-column:10/10;grid-row:1/1;">
+                        <img width="100%" height="100%" src="{3}" id="viewport_forecast"></img>
                     </div>
                 </div>
             </div>
