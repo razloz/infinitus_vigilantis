@@ -31,8 +31,8 @@ __version__ = 'gardneri'
 class Cauldron(torch.nn.Module):
     def __init__(
         self,
-        input_labels=('price_zs',),
-        target_labels=('trend',),
+        input_labels=('price_zs', 'price_sdev', 'price_wema', 'close'),
+        target_labels=('price_zs', 'price_sdev', 'price_wema', 'close'),
         verbosity=1,
         no_caching=True,
         set_weights=True,
@@ -111,7 +111,6 @@ class Cauldron(torch.nn.Module):
         target_indices = [features.index(l) for l in target_labels]
         n_benchmarks, n_time, n_features = benchmarks.shape
         n_batch = 34
-        n_forecast = 1
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
         self.training_targets = torch.zeros(
@@ -121,16 +120,20 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         self.validation_targets = torch.zeros(
-            n_forecast,
+            n_batch,
             n_targets,
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_base = 32
-        n_model = n_batch * n_inputs
-        n_hidden = n_model
-        n_heads = 2
-        n_layers = 64
+        self.fib_ext = torch.tensor(
+            [0.00, 0.118, 0.250, 0.382, 0.500, 0.618, 0.750, 0.882, 1.00],
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
+        n_model = self.fib_ext.shape[0] * 2
+        n_hidden = 64
+        n_heads = 3
+        n_layers = 128
         n_dropout = 1 - (φ - 1)
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -183,9 +186,7 @@ class Cauldron(torch.nn.Module):
             'n_time': n_time,
             'n_symbols': n_symbols,
             'n_features': n_features,
-            'n_base': n_base,
             'n_batch': n_batch,
-            'n_forecast': n_forecast,
             'n_inputs': n_inputs,
             'n_targets': n_targets,
             'n_model': n_model,
@@ -261,25 +262,39 @@ class Cauldron(torch.nn.Module):
             bytes_obj = torch.save(bytes_obj, buffer_io)
             return bytes_obj
 
+    def fibify(self, price_array, extensions=None):
+        """Fibonacci Extensions."""
+        if extensions is None:
+            price_delta = price_array.max() - price_array.min()
+            last_close = price_array[-1]
+            fib_ext = price_delta * self.fib_ext
+            fib_high = last_close + fib_ext
+            fib_low = last_close - fib_ext
+            extensions = torch.cat([fib_high.flip(0), fib_low]).unsqueeze(-1)
+        ext_target = torch.full_like(extensions, 0.0)
+        price_locations = list()
+        for closing_price in price_array:
+            ext_target *= 0
+            ext_target += closing_price
+            ext_dist = torch.cdist(extensions, ext_target, p=1.0)
+            ext_dist = ((1 - ext_dist.mean(-1)) ** 2).softmax(-1)
+            price_locations.append(ext_dist.clone().detach())
+        price_locations = torch.stack(price_locations)
+        return (price_locations, extensions)
+
+    def index_to_price(self, predictions, extensions):
+        """"""
+        prices = list()
+        for probs in predictions:
+            ext_index = probs.argmax()
+            price = extensions[ext_index]
+            prices.append(price)
+        prices = torch.cat(prices)
+        return prices.flatten().unsqueeze(-1)
+
     def forward(self, inputs):
         """Returns predictions from inputs."""
-        inputs = inputs.flatten().unsqueeze(0)
-        return self.network(
-            inputs,
-            inputs.flip(0),
-            ).sigmoid().mean(-1).squeeze(0)
-        # indices = self.piphi_indices
-        # n_base = self.constants['n_base']
-        # n_batch = inputs.shape[0]
-        # state = self.network(inputs, inputs).view(n_batch * n_base, 9)
-        # activation = topk(state[:, 4], 1).indices
-        # cluster = state[activation].flatten()
-        # cluster[4] *= 0
-        # return cluster.sum(0).sigmoid().squeeze(0)
-        #state = state[activation].flatten().mean(0).sigmoid().squeeze(0)
-        #state = stack([state[i].mean(0) for i in indices])
-        #prediction = topk(state, 1).values
-        #return prediction.sigmoid().squeeze(0)
+        return self.network(inputs, inputs).softmax(-1)
 
     def get_datasets(self, tensor_data, benchmark_data=False, training=False):
         """Prepare tensor data for network input."""
@@ -287,25 +302,6 @@ class Cauldron(torch.nn.Module):
             tensor_data = tensor_data.unsqueeze(0)
         inputs = tensor_data[:, :, self.input_indices].clone().detach()
         targets = tensor_data[:, :, self.target_indices].clone().detach()
-        # inputs = inputs.sigmoid()
-        # inputs[:, :, 0][inputs[:, :, 0] > 0.5] = 0.75
-        # inputs[:, :, 0][inputs[:, :, 0] <= 0.5] = 0.25
-        # n_batch, n_time, n_features = inputs.shape
-        # batch_affix = self.constants['batch_affix']
-        # n_base = self.constants['n_base']
-        # inf = torch.inf
-        # piphi = self.piphi
-        # inputs = interpolate(inputs, n_base)
-        # inputs = [
-            # (ᶓ * (f ** piphi)).flatten().sigmoid().log_softmax(0)
-            # for b in inputs for t in b for f in t
-            # ]
-        # inputs = torch.stack(inputs).view(n_batch, n_time, n_base, 9)
-        # inputs[:, :, :, 0] = -batch_affix
-        # inputs[:, :, :, -1] = -batch_affix
-        # inputs = inputs.view(n_batch, n_time, n_base * 9)
-        targets[targets > 0] = 1
-        targets[targets <= 0] = 0
         if not benchmark_data:
             inputs = inputs.squeeze(0)
             targets = targets.squeeze(0)
@@ -329,13 +325,10 @@ class Cauldron(torch.nn.Module):
     def train_network(
         self,
         checkpoint=100,
-        epoch_samples=12,
+        epoch_samples=5,
         hours=3,
-        warmup=5,
-        depth=3,
         validate=True,
         quicksave=False,
-        reinforce=False,
         ):
         """Batched training over hours."""
         get_state_dicts = self.get_state_dicts
@@ -380,6 +373,7 @@ class Cauldron(torch.nn.Module):
         epoch_checkpoint = False
         checkpoint_error = 0
         inf = torch.inf
+        fibify = self.fibify
         if verbosity > 0:
             logging.info('Training started.')
         start_time = time.time()
@@ -389,85 +383,40 @@ class Cauldron(torch.nn.Module):
             epoch_error = 0
             n_sample = 0
             loss = None
-            if not reinforce:
-                optimizer.zero_grad()
+            optimizer.zero_grad()
             while n_sample < epoch_samples:
                 batch, targets = random_batch()
-                uptrend = targets.shape[0] / 2
-                targets = targets.sum(0).squeeze(0)
-                trending = 1 if targets > uptrend else 0
-                targets *= 0
-                targets += trending
-                if not reinforce:
-                    predictions = forward(batch)
-                    if loss is None:
-                        loss = loss_fn(predictions, targets)
-                    else:
-                        loss += loss_fn(predictions, targets)
+                inputs_probs, inputs_ext = fibify(
+                    batch[:, 3],
+                    extensions=None,
+                    )
+                targets_probs, targets_ext = fibify(
+                    targets[:, 3],
+                    extensions=inputs_ext,
+                    )
+                predictions = forward(inputs_probs)
+                if loss is None:
+                    loss = loss_fn(predictions, targets_probs)
                 else:
-                    least_loss = inf
-                    best_state = None
-                    best_prediction = None
-                    delving = int(depth)
-                    while True:
-                        optimizer.zero_grad()
-                        predictions = forward(batch)
-                        loss = loss_fn(predictions, targets)
-                        loss.backward()
-                        optimizer.step()
-                        batch_loss = loss.item()
-                        if delving > 0:
-                            delving -= 1
-                        if batch_loss < least_loss:
-                            least_loss = batch_loss
-                            best_state = get_state_dicts()
-                            best_prediction = predictions.clone().detach()
-                        else:
-                            if delving == 0:
-                                load_state(state=best_state)
-                                batch_loss = least_loss
-                                predictions = best_prediction
-                                checkpoint_error += least_loss
-                                if debug_mode:
-                                    debug_anomalies(file_name=f'{time.time()}')
-                                    print(predictions, targets)
-                                break
+                    loss += loss_fn(predictions, targets_probs)
                 n_sample += 1
-            if not reinforce:
-                loss.backward()
-                optimizer.step()
-                epoch_error = sqrt(loss.item() / epoch_samples)
-                if debug_mode:
-                    debug_anomalies(file_name=f'{time.time()}')
-                    print('inputs', batch.flatten())
-                    print('output', predictions, 'target', targets)
-                    print('batch mse', epoch_error)
-            else:
-                epoch_error = inf
+            loss.backward()
+            optimizer.step()
+            epoch_error = sqrt(loss.item() / epoch_samples)
+            if debug_mode:
+                debug_anomalies(file_name=f'{time.time()}')
             elapsed = (time.time() - start_time) / 3600
             ts = get_timestamp()
             epoch_checkpoint = epoch % checkpoint == 0
-            if reinforce:
-                if epoch_checkpoint:
-                    checkpoint_error /= checkpoint
-                    epoch_error = sqrt(checkpoint_error)
-                    checkpoint_error = 0
-                if warmup > 0:
-                    warmup -= 1
-                if epoch_error < best_epoch:
-                    best_epoch = epoch_error
-                    if warmup == 0:
-                        ts = self.get_timestamp()
-                        f = ts.replace('-','').replace(':','').replace(' ','')
-                        f = f'snapshot.{f}.{best_epoch}'
-                        save_best_result(
-                            best_epoch,
-                            result_key='best_epoch',
-                            file_name=snapshot_path.format(f),
-                            )
             if quicksave or epoch_checkpoint:
                 save_state(state_path)
             if epoch_checkpoint and verbosity > 0:
+                print(inputs_probs)
+                print('inputs_probs', inputs_probs.shape)
+                print(targets_probs)
+                print('targets_probs', targets_probs.shape)
+                print(predictions)
+                print('predictions', predictions.shape)
                 epoch_msg = ''
                 epoch_msg += '\n*********************************************'
                 epoch_msg += f'\ntimestamp: {ts}'
@@ -492,7 +441,8 @@ class Cauldron(torch.nn.Module):
         """Benchmarks back-testing."""
         constants = self.constants
         n_batch = constants['n_batch']
-        n_forecast = constants['n_forecast']
+        fibify = self.fibify
+        index_to_price = self.index_to_price
         forward = self.forward
         verbosity = self.verbosity
         n_correct = 0
@@ -526,25 +476,34 @@ class Cauldron(torch.nn.Module):
                 shuffle=False,
                 drop_last=True,
                 )
+            forecast = list()
             for batch, targets in validation_data:
-                predictions = forward(batch)
-                uptrend = targets.shape[0] / 2
-                targets = targets.sum(0).squeeze(0)
-                trending = 1 if targets > uptrend else 0
-                targets *= 0
-                targets += trending
+                inputs_probs, inputs_ext = fibify(
+                    batch[:, 3],
+                    extensions=None,
+                    )
+                targets_probs, targets_ext = fibify(
+                    targets[:, 3],
+                    extensions=inputs_ext,
+                    )
+                predictions = forward(inputs_probs)
+                forecast.append(index_to_price(predictions, inputs_ext))
+                predictions_indices = predictions.argmax(-1)
+                targets_indices = targets_probs.argmax(-1)
+                index_check = predictions_indices == targets_indices
                 correct = 0
-                if any([
-                    predictions > 0.5 and targets == 1,
-                    predictions <= 0.5 and targets == 0,
-                    ]):
-                    correct += 1
+                for result in index_check:
+                    if result is True:
+                        correct += 1
                 results[benchmark]['correct'] += correct
-                results[benchmark]['total'] += 1
+                results[benchmark]['total'] += n_batch
                 n_correct += correct
-                n_total += 1
-            predictions = forward(final_batch[benchmark])
-            results[benchmark]['forecast'] = predictions.flatten().tolist()
+                n_total += n_batch
+            inputs_probs, inputs_ext = fibify(final_batch[benchmark, :, 3])
+            predictions = forward(inputs_probs)
+            forecast.append(index_to_price(predictions, inputs_ext))
+            forecast = torch.cat(forecast)
+            results[benchmark]['forecast'] = forecast.flatten().tolist()
         results['validation.metrics'] = {
             'accuracy': 0.0,
             'correct': n_correct,
@@ -575,6 +534,8 @@ class Cauldron(torch.nn.Module):
         constants = self.constants
         n_batch = constants['n_batch']
         n_symbols = constants['n_symbols']
+        fibify = self.fibify
+        index_to_price = self.index_to_price
         forward = self.forward
         symbols = self.symbols
         verbosity = self.verbosity
@@ -596,6 +557,14 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['forecast'] = list()
                 results[symbol]['symbol'] = sym_ticker
                 results[symbol]['total'] = 0
+            data_trim = int(candles.shape[0])
+            print('data_trim before: ', data_trim)
+            while data_trim % n_batch != 0:
+                data_trim -= 1
+            print('data_trim after: ', data_trim)
+            print('candles before: ', candles.shape)
+            candles = candles[-data_trim:, :]
+            print('candles after: ', candles.shape)
             datasets = self.get_datasets(
                 candles,
                 benchmark_data=False,
@@ -603,6 +572,7 @@ class Cauldron(torch.nn.Module):
                 )
             input_dataset = datasets[0][:-n_batch, :]
             target_dataset = datasets[1][n_batch:, :]
+            print('datasets mod batch: ', datasets[0].shape[0] % n_batch == 0)
             final_batch = datasets[0][-n_batch:, :]
             validation_data = DataLoader(
                 TensorDataset(input_dataset, target_dataset),
@@ -610,25 +580,38 @@ class Cauldron(torch.nn.Module):
                 shuffle=False,
                 drop_last=True,
                 )
+            forecast = list()
             for batch, targets in validation_data:
-                predictions = forward(batch)
-                uptrend = targets.shape[0] / 2
-                targets = targets.sum(0).squeeze(0)
-                trending = 1 if targets > uptrend else 0
-                targets *= 0
-                targets += trending
+                inputs_probs, inputs_ext = fibify(
+                    batch[:, 3],
+                    extensions=None,
+                    )
+                targets_probs, targets_ext = fibify(
+                    targets[:, 3],
+                    extensions=inputs_ext,
+                    )
+                predictions = forward(inputs_probs)
+                forecast.append(index_to_price(predictions, inputs_ext))
+                predictions_indices = predictions.argmax(-1)
+                targets_indices = targets_probs.argmax(-1)
+                index_check = predictions_indices == targets_indices
                 correct = 0
-                if any([
-                    predictions > 0.5 and targets == 1,
-                    predictions <= 0.5 and targets == 0,
-                    ]):
-                    correct += 1
+                for result in index_check:
+                    if result is True:
+                        correct += 1
                 results[symbol]['correct'] += correct
-                results[symbol]['total'] += 1
+                results[symbol]['total'] += n_batch
                 n_correct += correct
-                n_total += 1
-            predictions = forward(final_batch)
-            results[symbol]['forecast'] = predictions.flatten().tolist()
+                n_total += n_batch
+            inputs_probs, inputs_ext = fibify(final_batch[:, 3])
+            predictions = forward(inputs_probs)
+            forecast.append(index_to_price(predictions, inputs_ext))
+            forecast = torch.cat(forecast)
+            results[symbol]['forecast'] = forecast.flatten().tolist()
+            print('total days:', results[symbol]['total'])
+            print('forecast len:', len(results[symbol]['forecast']))
+            #print(results[symbol]['forecast'])
+            #print('symbol', symbol, 'shape', forecast.shape)
         results['validation.metrics'] = {
             'correct': n_correct,
             'total': n_total,
@@ -650,6 +633,7 @@ class Cauldron(torch.nn.Module):
                 ),
             )
         print(f'{ts()}: back-test routine end.')
+        return results
 
     def inscribe_sigil(self, charts_path):
         """Plot final batch predictions from the candelabrum."""
@@ -667,7 +651,7 @@ class Cauldron(torch.nn.Module):
         for symbol, results in metrics.items():
             if symbol == 'validation.metrics':
                 continue
-            forecast = sum(results['forecast'])
+            forecast = sum(results['forecast']) / len(results['forecast'])
             ax = fig.add_subplot()
             ax.set_xlabel('Up-trend Likelihood', fontweight='bold')
             ax.grid(True, color=(0.3, 0.3, 0.3))

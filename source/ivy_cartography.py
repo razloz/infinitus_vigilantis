@@ -17,8 +17,8 @@ plt.style.use('dark_background')
 verbose = False
 
 
-def cartography(symbol, features, candles, timestamps,
-                chart_path=None, chart_size=0):
+def cartography(symbol, features, candles, timestamps, batch_size=34,
+                chart_path=None, chart_size=0, forecast=None):
     """Charting for IVy candles."""
     global plt
     if not chart_path: chart_path = './charts/active.png'
@@ -27,14 +27,30 @@ def cartography(symbol, features, candles, timestamps,
                      'price_wema', 'volume_wema', 'price_mid', 'volume_mid',
                      'price_dh', 'volume_dh', 'price_dl', 'volume_dl',]
     feature_indices = {f: features.index(f) for f in plot_features}
+    data_trim = int(candles.shape[0])
+    while data_trim % batch_size != 0:
+        data_trim -= 1
+    candles = candles[-data_trim:, :]
     data_len = len(candles)
-    if chart_size == 0:
-        chart_size = data_len
-    elif chart_size < data_len:
+    rescale = False
+    if 0 != chart_size < data_len:
         candles = candles[-chart_size:]
-        data_len = len(candles)
+        timestamps = timestamps[-chart_size:]
+        data_len = len(timestamps)
+        rescale = True
+    else:
+        chart_size = data_len
+    if forecast is not None:
+        if rescale:
+            forecast = forecast[-(data_len + batch_size):]
+        else:
+            forecast += [None for _ in range(batch_size)]
+        print(len(forecast))
+        timestamps += ['' for _ in range(batch_size)]
+        data_len = len(timestamps)
+        print(data_len)
     data_range = range(data_len)
-    timestamps = timestamps[-data_len:]
+    features_range = range(len(candles))
     ohlc = ['open', 'high', 'low', 'close']
     ohlc = candles[:, [feature_indices[k] for k in ohlc]].flatten()
     fig = plt.figure(figsize=(19.20, 10.80), dpi=100, constrained_layout=False)
@@ -75,10 +91,10 @@ def cartography(symbol, features, candles, timestamps,
     # Fibonacci retracements
     pkws = {
         'alpha': 1.0,
-        'color': '#FFA600',
+        'color': '#F3E6D0',
         'label': None,
         'linestyle': 'dotted',
-        'linewidth': wid_cdls * 0.75,
+        'linewidth': wid_line,
         }
     fib_x = [data_range[0], data_range[-1]]
     fib_range = ylim_high - ylim_low
@@ -104,9 +120,9 @@ def cartography(symbol, features, candles, timestamps,
     thick_lines = False
     for y in fib_lines:
         if thick_lines:
-            pkws['linewidth'] = wid_cdls * 0.75
+            pkws['linewidth'] = wid_line
         else:
-            pkws['linewidth'] = wid_cdls * 0.50
+            pkws['linewidth'] = wid_line * 0.9
         fib_axes.plot(fib_x, [y, y], **pkws)
         thick_lines = not thick_lines
     # Candle stuff
@@ -117,32 +133,31 @@ def cartography(symbol, features, candles, timestamps,
     cdl_vol = candles[:, feature_indices['volume']].flatten()
     y_loc = [ylim_low, ylim_high]
     labels_set = [False, False]
-    data_end = data_range[-1]
-    for i in data_range:
+    data_end = features_range[-1]
+    for i in features_range:
         x_loc = [i, i]
         # Candles
-        if cdl_open[i] is not None:
-            wick_data = [cdl_low[i], cdl_high[i]]
-            candle_data = [cdl_close[i], cdl_open[i]]
-            ax1.plot(x_loc, wick_data, color='white',
-                     linestyle='solid', linewidth=wid_wick, alpha=1)
-            if cdl_close[i] > cdl_open[i]:
-                cdl_color=(0.33, 1, 0.33, 1)
-            else:
-                cdl_color=(1, 0.33, 0.33, 1)
-            ax1.plot(x_loc, candle_data, color=cdl_color,
-                     linestyle='solid', linewidth=wid_cdls, alpha=1)
-            # Volume
-            volume_data = [0, cdl_vol[i]]
-            ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
-                     linestyle='solid', linewidth=wid_cdls)
+        wick_data = [cdl_low[i], cdl_high[i]]
+        candle_data = [cdl_close[i], cdl_open[i]]
+        ax1.plot(x_loc, wick_data, color='white',
+                 linestyle='solid', linewidth=wid_wick, alpha=1)
+        if cdl_close[i] > cdl_open[i]:
+            cdl_color=(0.33, 1, 0.33, 1)
+        else:
+            cdl_color=(1, 0.33, 0.33, 1)
+        ax1.plot(x_loc, candle_data, color=cdl_color,
+                 linestyle='solid', linewidth=wid_cdls, alpha=1)
+        # Volume
+        volume_data = [0, cdl_vol[i]]
+        ax2.plot(x_loc, volume_data, color=(0.33, 0.33, 1, 1),
+                 linestyle='solid', linewidth=wid_cdls)
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     for key in plot_features:
         if key in ['open', 'high', 'low', 'close', 'volume']:
             continue
         cdl_data = candles[:, feature_indices[key]].flatten()
-        cdl_range = range(len(cdl_data))
+        #cdl_range = range(len(cdl_data))
         pkws['label'] = f'{key}: {round(float(cdl_data[-1]), 3)}'
         dev_feats = ['price_mid', 'price_dh', 'price_dl',
                      'volume_mid', 'volume_dh', 'volume_dl']
@@ -160,9 +175,17 @@ def cartography(symbol, features, candles, timestamps,
                 pkws['linewidth'] = wid_line * 0.87
             pkws['color'] = (0.7, 0.7, 1, 0.7)
         if key not in ['volume_wema', 'volume_mid', 'volume_dh', 'volume_dl']:
-            ax1.plot(cdl_range, cdl_data, **pkws)
+            ax1.plot(features_range, cdl_data, **pkws)
         else:
-            ax2.plot(cdl_range, cdl_data, **pkws)
+            ax2.plot(features_range, cdl_data, **pkws)
+    # Plot Forecast
+    if forecast is not None:
+        pkws['alpha'] = 1.0
+        pkws['color'] = '#FFA600'
+        pkws['label'] = f'Forecast: {forecast[-1]}'
+        pkws['linestyle'] = 'solid'
+        pkws['linewidth'] = wid_line * 1.1
+        ax1.plot(data_range, forecast, **pkws)
     # Finalize
     rnc = round(float(cdl_close[-1]), 3)
     t = f'[ {rnc} ]   {symbol}  @  {timestamps[-1]}'

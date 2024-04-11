@@ -513,13 +513,17 @@ class ThreeBlindMice():
         cauldron = ivy_cauldron.Cauldron()
         if not skip_validation:
             chit_chat('\b: back-testing neural network')
-            cauldron.backtest_network()
+            metrics = cauldron.backtest_network()
+        else:
+            with open(cauldron.backtest_path, 'rb') as backtest_file:
+                metrics = pickle.load(backtest_file)
         chit_chat('\b: inscribing sigils')
-        metrics = cauldron.inscribe_sigil(charts_path)
+        # metrics = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
         features = cauldron.features
         candelabrum = cauldron.candelabrum
-        n_half = int(cauldron.constants['n_batch'] / 2)
+        n_batch = cauldron.constants['n_batch']
+        n_half = int(n_batch / 2)
         _labels = ('close', 'trend', 'price_zs', 'price_wema', 'volume_zs')
         feature_indices = {k: features.index(k) for k in _labels}
         picks = dict()
@@ -528,7 +532,7 @@ class ThreeBlindMice():
             key = int(key)
             picks[symbols[key]] = value
             accuracy = float(value['accuracy'] * 0.01)
-            prediction = sum(value['forecast'])
+            #prediction = sum(value['forecast'])
             #symbol_forecast = [1 if p > 0.5 else 0 for p in predictions]
             symbol_open = candelabrum[key][0, feature_indices['close']]
             symbol_close = candelabrum[key][-1, feature_indices['close']]
@@ -540,7 +544,7 @@ class ThreeBlindMice():
             symbol_max = max(open_close)
             symbol_min = min(open_close)
             median = symbol_max - ((symbol_max - symbol_min) / 2)
-            pos_forecast = prediction > 0.5
+            #pos_forecast = prediction > 0.5
             signals = [
                 symbol_zs <= 0.5,
                 symbol_trend > 6,
@@ -559,17 +563,20 @@ class ThreeBlindMice():
             chit_chat('\b: plotting charts')
             read_csv = pandas.read_csv
             chart_path = abspath(path.join(charts_path, '{}_market.png'))
-            for symbol, candles in enumerate(candelabrum):
-                symbol = symbols[symbol]
+            for symbol_index, candles in enumerate(candelabrum):
+                symbol = symbols[symbol_index]
                 if symbol in ('QQQ', 'SPY'):
                     continue
+                forecast = metrics[symbol_index]['forecast']
                 cartography(
                     symbol,
                     features,
                     candles,
                     read_csv(candles_path.format(symbol)).timestamp.tolist(),
                     chart_path=chart_path.format(symbol),
-                    chart_size=365,
+                    chart_size=200,
+                    forecast=forecast,
+                    batch_size=n_batch,
                     )
         chit_chat('\b: building html documents')
         cabinet = ivy_https.build(

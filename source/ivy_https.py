@@ -31,15 +31,13 @@ HOME_BODY = """
                 document.getElementById("viewport_features").src=features;
                 document.getElementById("viewport_metrics").src=metrics;
                 document.getElementById("viewport_chart").src=chart;
-                document.getElementById("viewport_forecast").src=forecast;
             }
             function quickJump() {
                 let symbol = document.getElementById("symbol_select").value.toUpperCase();
                 let features = symbol + "_features.html";
                 let metrics = symbol + "_metrics.html";
                 let chart = "./charts/" + symbol + "_market.png";
-                let forecast = "./charts/" + symbol + "_forecast.png";
-                changeView(features, metrics, chart, forecast);
+                changeView(features, metrics, chart);
             }
         </script>
         <div style="display:grid;gap:5px;">
@@ -62,13 +60,10 @@ HOME_FOOT = """
                     </div>
                 </div>
             </div>
-            <div style="grid-column:3/3;grid-row:1/20;height:auto;width:100%;overflow:scroll;">
+            <div style="grid-column:3/3;grid-row:1/20;height:100%;width:100%;overflow:scroll;">
                 <div style="display:grid;gap:0px;">
-                    <div style="grid-column:4/10;grid-row:1/1;">
-                        <img width="100%" height="100%" src="{2}" id="viewport_chart"></img>
-                    </div>
-                    <div style="grid-column:10/10;grid-row:1/1;">
-                        <img width="100%" height="100%" src="{3}" id="viewport_forecast"></img>
+                    <div style="grid-column:1/1;grid-row:1/1;">
+                        <img width="100%" height="900px" src="{2}" id="viewport_chart"></img>
                     </div>
                 </div>
             </div>
@@ -99,7 +94,7 @@ COMPASS_PICKS_HEAD = """
                         <b>Top Picks:</b><br>
 """
 COMPASS_BUTTON = """
-                        <button onClick="changeView({0}, {1}, {2}, {3})"><b>{4}</b></button><br>
+                        <button onClick="changeView({0}, {1}, {2})"><b>{3}</b></button><br>
 """
 COMPASS_PICKS_TAIL = """
                     </div>
@@ -170,7 +165,6 @@ def make_compass(symbols, picks):
                 """'{}_features.html'""".format(symbol),
                 """'{}_metrics.html'""".format(symbol),
                 """'./charts/{}_market.png'""".format(symbol),
-                """'./charts/{}_forecast.png'""".format(symbol),
                 """{}""".format(symbol),
             )
         )
@@ -186,7 +180,6 @@ def build(symbols, features, candelabrum, metrics, picks):
         f'{default_symbol}_features.html',
         f'{default_symbol}_metrics.html',
         f'./charts/{default_symbol}_market.png',
-        f'./charts/{default_symbol}_forecast.png',
     )
     cabinet['home.html'] = ''.join([HOME_HEAD, HOME_BODY, COMPASS, FOOTER])
     compass_files = generate_compass(symbols, features, candelabrum, metrics)
