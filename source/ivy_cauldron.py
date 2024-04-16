@@ -130,10 +130,15 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
+        self.fib_range = torch.zeros(
+            len(self.fib_ext) * 2,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
         n_model = self.fib_ext.shape[0] * 2
-        n_hidden = 64
+        n_hidden = 3 * (n_model ** 2)
         n_heads = 3
-        n_layers = 128
+        n_layers = 3
         n_dropout = 1 - (φ - 1)
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
@@ -264,6 +269,7 @@ class Cauldron(torch.nn.Module):
 
     def fibify(self, price_array, extensions=None):
         """Fibonacci Extensions."""
+        fib_range = self.fib_range.clone().detach()
         if extensions is None:
             price_delta = price_array.max() - price_array.min()
             last_close = price_array[-1]
@@ -271,14 +277,27 @@ class Cauldron(torch.nn.Module):
             fib_high = last_close + fib_ext
             fib_low = last_close - fib_ext
             extensions = torch.cat([fib_high.flip(0), fib_low]).unsqueeze(-1)
-        ext_target = torch.full_like(extensions, 0.0)
         price_locations = list()
+        ext_len = len(extensions)
         for closing_price in price_array:
-            ext_target *= 0
-            ext_target += closing_price
-            ext_dist = torch.cdist(extensions, ext_target, p=1.0)
-            ext_dist = ((1 - ext_dist.mean(-1)) ** 2).softmax(-1)
-            price_locations.append(ext_dist.clone().detach())
+            ext_loc = 0
+            finding_location = True
+            while finding_location:
+                finding_location = closing_price < extensions[ext_loc]
+                if finding_location:
+                    ext_loc += 1
+                    if ext_loc == ext_len:
+                        finding_location = False
+                else:
+                    if 0 != ext_loc < ext_len:
+                        ext_high = extensions[ext_loc - 1]
+                        ext_low = extensions[ext_loc]
+                        dist_high = ext_high - closing_price
+                        dist_low = closing_price - ext_low
+                        ext_loc -= 1 if dist_high < dist_low else 0
+            ext_array = fib_range.clone().detach()
+            ext_array[ext_loc] = 1
+            price_locations.append(ext_array.softmax(-1))
         price_locations = torch.stack(price_locations)
         return (price_locations, extensions)
 
@@ -324,11 +343,11 @@ class Cauldron(torch.nn.Module):
 
     def train_network(
         self,
-        checkpoint=100,
-        epoch_samples=5,
+        checkpoint=1,
+        epoch_samples=20,
         hours=3,
         validate=True,
-        quicksave=False,
+        quicksave=True,
         ):
         """Batched training over hours."""
         get_state_dicts = self.get_state_dicts
@@ -341,8 +360,9 @@ class Cauldron(torch.nn.Module):
         state_path = self.state_path
         validate_network = self.validate_network
         snapshot_path = path.join(self.root_folder, 'cauldron', '{}.state')
-        epoch = 0
-        elapsed = 0
+        epoch_msg = '\n*********************************************'
+        epoch_msg += '\ntimestamp: {}\nepoch: {}\nelapsed: {}\nerror: {}'
+        epoch_msg += '\n*********************************************\n'
         best_epoch = self.validation_results['best_epoch']
         benchmarks = self.benchmarks
         n_benchmarks = benchmarks.shape[0] - 1
@@ -353,6 +373,16 @@ class Cauldron(torch.nn.Module):
             )
         input_dataset = datasets[0][:, :-n_batch, :]
         target_dataset = datasets[1][:, n_batch:, :]
+        training_data = list()
+        for benchmark, candles in enumerate(input_dataset):
+            training_data.append(
+                DataLoader(
+                    TensorDataset(candles, target_dataset[benchmark]),
+                    batch_size=n_batch,
+                    shuffle=False,
+                    drop_last=True,
+                    ),
+                )
         batch_max = input_dataset.shape[1] - n_batch - 1
         def random_batch():
             benchmark = randint(0, n_benchmarks)
@@ -363,8 +393,7 @@ class Cauldron(torch.nn.Module):
                 target_dataset[benchmark, batch_start:batch_end],
                 )
         optimizer = self.optimizer
-        loss_fn = torch.nn.MSELoss(reduction='mean')
-        sqrt = math.sqrt
+        loss_fn = torch.nn.CrossEntropyLoss()
         debug_mode = self.debug_mode
         debug_anomalies = self.debug_anomalies
         save_best_result = self.save_best_result
@@ -374,58 +403,63 @@ class Cauldron(torch.nn.Module):
         checkpoint_error = 0
         inf = torch.inf
         fibify = self.fibify
+        fib_len = self.fib_range.shape[-1]
+        epoch_elements = fib_len * n_batch * epoch_samples
+        epoch = 0
+        elapsed = 0
         if verbosity > 0:
             logging.info('Training started.')
+        self.train()
         start_time = time.time()
         while elapsed < hours:
-            self.train()
             epoch += 1
             epoch_error = 0
-            n_sample = 0
-            loss = None
-            optimizer.zero_grad()
-            while n_sample < epoch_samples:
-                batch, targets = random_batch()
-                inputs_probs, inputs_ext = fibify(
-                    batch[:, 3],
-                    extensions=None,
-                    )
-                targets_probs, targets_ext = fibify(
-                    targets[:, 3],
-                    extensions=inputs_ext,
-                    )
-                predictions = forward(inputs_probs)
-                if loss is None:
-                    loss = loss_fn(predictions, targets_probs)
-                else:
-                    loss += loss_fn(predictions, targets_probs)
-                n_sample += 1
-            loss.backward()
-            optimizer.step()
-            epoch_error = sqrt(loss.item() / epoch_samples)
-            if debug_mode:
-                debug_anomalies(file_name=f'{time.time()}')
-            elapsed = (time.time() - start_time) / 3600
-            ts = get_timestamp()
+            for benchmarks in training_data:
+                n_sample = 0
+                while n_sample < epoch_samples:
+                    loss = None
+                    optimizer.zero_grad()
+                    for inputs, targets in benchmarks:
+                        inputs_probs, inputs_ext = fibify(
+                            inputs[:, 3],
+                            extensions=None,
+                            )
+                        targets_probs, targets_ext = fibify(
+                            targets[:, 3],
+                            extensions=None,
+                            )
+                        for probs_index, probs in enumerate(targets_probs):
+                            t = probs.argmax()
+                            probs[t] += 5.0
+                            if t != 0:
+                                probs[t - 1] += 3
+                            if t + 1 != fib_len:
+                                probs[t + 1] += 3
+                        targets_probs = targets_probs.softmax(-1)
+                        predictions = forward(inputs_probs)
+                        if loss is None:
+                            loss = loss_fn(predictions.log(), targets_probs)
+                        else:
+                            loss += loss_fn(predictions.log(), targets_probs)
+                    loss.backward()
+                    optimizer.step()
+                    epoch_error = loss.item()
+                    n_sample += 1
+                    if debug_mode:
+                        print(inputs_probs)
+                        print('inputs_probs', inputs_probs.shape)
+                        print(targets_probs)
+                        print('targets_probs', targets_probs.shape)
+                        print(predictions)
+                        print('predictions', predictions.shape)
+                        debug_anomalies(file_name=f'{time.time()}')
+                elapsed = (time.time() - start_time) / 3600
+                ts = get_timestamp()
+                if verbosity > 0:
+                    print(epoch_msg.format(ts, epoch, elapsed, epoch_error))
             epoch_checkpoint = epoch % checkpoint == 0
             if quicksave or epoch_checkpoint:
                 save_state(state_path)
-            if epoch_checkpoint and verbosity > 0:
-                print(inputs_probs)
-                print('inputs_probs', inputs_probs.shape)
-                print(targets_probs)
-                print('targets_probs', targets_probs.shape)
-                print(predictions)
-                print('predictions', predictions.shape)
-                epoch_msg = ''
-                epoch_msg += '\n*********************************************'
-                epoch_msg += f'\ntimestamp: {ts}'
-                epoch_msg += f'\nepoch: {epoch}'
-                epoch_msg += f'\nelapsed: {elapsed}'
-                epoch_msg += f'\nerror: {epoch_error}'
-                epoch_msg += '\n*********************************************\n'
-                print(epoch_msg)
-                logging.info(epoch_msg)
         if validate:
             r = validate_network()
             if verbosity > 0:
@@ -436,6 +470,76 @@ class Cauldron(torch.nn.Module):
             save_state(state_path)
         if verbosity > 0:
             logging.info(f'Training finished after {elapsed} hours.')
+
+    def calibrate_network(
+        self,
+        dataset,
+        depth=20,
+        max_delve=60,
+        target_loss=0.99,
+        ):
+        """Calibrate network policies to fit symbol data."""
+        from copy import deepcopy
+        get_state_dicts = self.get_state_dicts
+        constants = self.constants
+        n_batch = constants['n_batch']
+        forward = self.forward
+        optimizer = self.optimizer
+        loss_fn = torch.nn.CrossEntropyLoss()
+        fibify = self.fibify
+        fib_len = self.fib_range.shape[-1]
+        inf = torch.inf
+        visits = 0
+        previous_loss = inf
+        delving = True
+        best_state = deepcopy(get_state_dicts())
+        self.train()
+        start_time = time.time()
+        while delving:
+            loss = None
+            optimizer.zero_grad()
+            for batch, targets in dataset:
+                inputs_probs, inputs_ext = fibify(
+                    batch[:, 3],
+                    extensions=None,
+                    )
+                targets_probs, targets_ext = fibify(
+                    targets[:, 3],
+                    extensions=None,
+                    )
+                for probs_index, probs in enumerate(targets_probs):
+                    t = probs.argmax()
+                    probs[t] += 5.0
+                    if t != 0:
+                        probs[t - 1] += 3
+                    if t + 1 != fib_len:
+                        probs[t + 1] += 3
+                targets_probs = targets_probs.softmax(-1)
+                predictions = forward(inputs_probs)
+                if loss is None:
+                    loss = loss_fn(predictions.log(), targets_probs)
+                else:
+                    loss += loss_fn(predictions.log(), targets_probs)
+            loss.backward()
+            optimizer.step()
+            if loss < previous_loss:
+                best_state = deepcopy(get_state_dicts())
+            if visits != depth:
+                visits += 1
+            else:
+                exit_condition = any([
+                    loss >= previous_loss,
+                    time.time() - start_time >= max_delve,
+                    loss <= target_loss,
+                    ])
+                if exit_condition:
+                    delving = False
+                else:
+                    previous_loss = loss
+            print('loss:', loss / visits)
+        self.load_state(state=best_state)
+        self.eval()
+        return True
 
     def validate_network(self):
         """Benchmarks back-testing."""
@@ -476,6 +580,7 @@ class Cauldron(torch.nn.Module):
                 shuffle=False,
                 drop_last=True,
                 )
+            self.calibrate_network(validation_data)
             forecast = list()
             for batch, targets in validation_data:
                 inputs_probs, inputs_ext = fibify(
@@ -484,26 +589,28 @@ class Cauldron(torch.nn.Module):
                     )
                 targets_probs, targets_ext = fibify(
                     targets[:, 3],
-                    extensions=inputs_ext,
+                    extensions=None,
                     )
                 predictions = forward(inputs_probs)
                 forecast.append(index_to_price(predictions, inputs_ext))
                 predictions_indices = predictions.argmax(-1)
                 targets_indices = targets_probs.argmax(-1)
                 index_check = predictions_indices == targets_indices
-                correct = 0
-                for result in index_check:
-                    if result is True:
-                        correct += 1
+                correct = sum([1 if c else 0 for c in index_check])
                 results[benchmark]['correct'] += correct
                 results[benchmark]['total'] += n_batch
                 n_correct += correct
                 n_total += n_batch
+                print('predictions_indices', predictions_indices)
+                print('targets_indices', targets_indices)
+                print('index_check', index_check)
+                print('correct', correct)
             inputs_probs, inputs_ext = fibify(final_batch[benchmark, :, 3])
             predictions = forward(inputs_probs)
             forecast.append(index_to_price(predictions, inputs_ext))
             forecast = torch.cat(forecast)
             results[benchmark]['forecast'] = forecast.flatten().tolist()
+            self.load_state()
         results['validation.metrics'] = {
             'accuracy': 0.0,
             'correct': n_correct,
@@ -558,13 +665,9 @@ class Cauldron(torch.nn.Module):
                 results[symbol]['symbol'] = sym_ticker
                 results[symbol]['total'] = 0
             data_trim = int(candles.shape[0])
-            print('data_trim before: ', data_trim)
             while data_trim % n_batch != 0:
                 data_trim -= 1
-            print('data_trim after: ', data_trim)
-            print('candles before: ', candles.shape)
             candles = candles[-data_trim:, :]
-            print('candles after: ', candles.shape)
             datasets = self.get_datasets(
                 candles,
                 benchmark_data=False,
@@ -572,7 +675,6 @@ class Cauldron(torch.nn.Module):
                 )
             input_dataset = datasets[0][:-n_batch, :]
             target_dataset = datasets[1][n_batch:, :]
-            print('datasets mod batch: ', datasets[0].shape[0] % n_batch == 0)
             final_batch = datasets[0][-n_batch:, :]
             validation_data = DataLoader(
                 TensorDataset(input_dataset, target_dataset),
@@ -580,6 +682,7 @@ class Cauldron(torch.nn.Module):
                 shuffle=False,
                 drop_last=True,
                 )
+            self.calibrate_network(validation_data)
             forecast = list()
             for batch, targets in validation_data:
                 inputs_probs, inputs_ext = fibify(
@@ -588,17 +691,14 @@ class Cauldron(torch.nn.Module):
                     )
                 targets_probs, targets_ext = fibify(
                     targets[:, 3],
-                    extensions=inputs_ext,
+                    extensions=None,
                     )
                 predictions = forward(inputs_probs)
                 forecast.append(index_to_price(predictions, inputs_ext))
                 predictions_indices = predictions.argmax(-1)
                 targets_indices = targets_probs.argmax(-1)
                 index_check = predictions_indices == targets_indices
-                correct = 0
-                for result in index_check:
-                    if result is True:
-                        correct += 1
+                correct = sum([1 if c else 0 for c in index_check])
                 results[symbol]['correct'] += correct
                 results[symbol]['total'] += n_batch
                 n_correct += correct
@@ -608,10 +708,7 @@ class Cauldron(torch.nn.Module):
             forecast.append(index_to_price(predictions, inputs_ext))
             forecast = torch.cat(forecast)
             results[symbol]['forecast'] = forecast.flatten().tolist()
-            print('total days:', results[symbol]['total'])
-            print('forecast len:', len(results[symbol]['forecast']))
-            #print(results[symbol]['forecast'])
-            #print('symbol', symbol, 'shape', forecast.shape)
+            self.load_state()
         results['validation.metrics'] = {
             'correct': n_correct,
             'total': n_total,
