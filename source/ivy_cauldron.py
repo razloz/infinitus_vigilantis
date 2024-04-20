@@ -35,7 +35,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('price_zs', 'price_sdev', 'price_wema', 'close'),
         verbosity=1,
         no_caching=True,
-        set_weights=True,
+        set_weights=False,
         try_cuda=True,
         debug_mode=False,
         ):
@@ -113,18 +113,6 @@ class Cauldron(torch.nn.Module):
         n_batch = 34
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
-        self.training_targets = torch.zeros(
-            n_batch,
-            n_targets,
-            device=self.DEVICE,
-            dtype=torch.float,
-            )
-        self.validation_targets = torch.zeros(
-            n_batch,
-            n_targets,
-            device=self.DEVICE,
-            dtype=torch.float,
-            )
         self.fib_ext = torch.tensor(
             [0.00, 0.118, 0.250, 0.382, 0.500, 0.618, 0.750, 0.882, 1.00],
             device=self.DEVICE,
@@ -135,11 +123,12 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_model = self.fib_ext.shape[0] * 2
-        n_hidden = 3 * (n_model ** 2)
-        n_heads = 3
+        n_fibs = int(self.fib_range.shape[-1])
+        n_model = n_batch * n_fibs
+        n_hidden = 2048
+        n_heads = n_batch
         n_layers = 3
-        n_dropout = 1 - (φ - 1)
+        n_dropout = 0.5
         n_eps = (1 / 137) ** 3
         self.network = torch.nn.Transformer(
             d_model=n_model,
@@ -150,12 +139,12 @@ class Cauldron(torch.nn.Module):
             dropout=n_dropout,
             activation='gelu',
             layer_norm_eps=n_eps,
-            batch_first=True,
+            batch_first=False,
             norm_first=False,
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.0999
+        n_learning_rate = 0.999
         n_betas = (0.9, 0.999)
         n_weight_decay = 0.0099
         self.optimizer = torch.optim.AdamW(
@@ -168,18 +157,18 @@ class Cauldron(torch.nn.Module):
             foreach=True,
             maximize=False,
             )
-        self.piphi = torch.tensor(
-            [
-                [-1,  π,  1],
-                [-φ,  0,  φ],
-                [-1, -π, 1],
-            ],
-            device=self.DEVICE,
-            dtype=torch.float,
-            )
-        piphi_indices = [i for i in range(9) if i != 4]
-        self.piphi_indices = list(combinations(piphi_indices, 2))
-        self.piphi_indices = [[*i] for i in self.piphi_indices]
+        # self.piphi = torch.tensor(
+            # [
+                # [-1,  π,  1],
+                # [-φ,  0,  φ],
+                # [-1, -π, 1],
+            # ],
+            # device=self.DEVICE,
+            # dtype=torch.float,
+            # )
+        # piphi_indices = [i for i in range(9) if i != 4]
+        # self.piphi_indices = list(combinations(piphi_indices, 2))
+        # self.piphi_indices = [[*i] for i in self.piphi_indices]
         self.benchmarks = benchmarks
         self.candelabrum = candelabrum
         self.set_weights = set_weights
@@ -204,6 +193,7 @@ class Cauldron(torch.nn.Module):
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
             'batch_affix': n_eps ** 2,
+            'output_dims': [n_batch, n_fibs],
             }
         self.validation_results = {
             'best_backtest': 0.0,
@@ -235,7 +225,7 @@ class Cauldron(torch.nn.Module):
             if self.verbosity > 0:
                 logging.info('No state found, creating default.')
             if self.set_weights:
-                i = self.constants['n_eps']
+                i = self.constants['batch_affix']
                 if self.verbosity > 0:
                     logging.info(f'Initializing with bounds of {-i} to {i}')
                 for name, param in self.network.named_parameters():
@@ -313,7 +303,13 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, inputs):
         """Returns predictions from inputs."""
-        return self.network(inputs, inputs).softmax(-1)
+        constants = self.constants
+        affix = constants['batch_affix']
+        dims = constants['output_dims']
+        inputs = inputs.flatten().unsqueeze(0)
+        inputs[0, 0] = affix
+        inputs[0, -1] = affix
+        return self.network(inputs, inputs).view(*dims).softmax(-1)
 
     def get_datasets(self, tensor_data, benchmark_data=False, training=False):
         """Prepare tensor data for network input."""
@@ -344,8 +340,8 @@ class Cauldron(torch.nn.Module):
     def train_network(
         self,
         checkpoint=1,
-        epoch_samples=20,
-        hours=3,
+        epoch_samples=1000,
+        hours=6,
         validate=True,
         quicksave=True,
         ):
@@ -359,9 +355,10 @@ class Cauldron(torch.nn.Module):
         save_state = self.save_state
         state_path = self.state_path
         validate_network = self.validate_network
+        calibrate_network = self.calibrate_network
         snapshot_path = path.join(self.root_folder, 'cauldron', '{}.state')
         epoch_msg = '\n*********************************************'
-        epoch_msg += '\ntimestamp: {}\nepoch: {}\nelapsed: {}\nerror: {}'
+        epoch_msg += '\ntimestamp: {}\nepoch: {}\nelapsed: {}\nleast_loss: {}'
         epoch_msg += '\n*********************************************\n'
         best_epoch = self.validation_results['best_epoch']
         benchmarks = self.benchmarks
@@ -404,61 +401,28 @@ class Cauldron(torch.nn.Module):
         inf = torch.inf
         fibify = self.fibify
         fib_len = self.fib_range.shape[-1]
-        epoch_elements = fib_len * n_batch * epoch_samples
+        # n_elements = fib_len * n_batch
         epoch = 0
         elapsed = 0
         if verbosity > 0:
             logging.info('Training started.')
-        self.train()
         start_time = time.time()
         while elapsed < hours:
             epoch += 1
-            epoch_error = 0
             for benchmarks in training_data:
-                n_sample = 0
-                while n_sample < epoch_samples:
-                    loss = None
-                    optimizer.zero_grad()
-                    for inputs, targets in benchmarks:
-                        inputs_probs, inputs_ext = fibify(
-                            inputs[:, 3],
-                            extensions=None,
-                            )
-                        targets_probs, targets_ext = fibify(
-                            targets[:, 3],
-                            extensions=None,
-                            )
-                        for probs_index, probs in enumerate(targets_probs):
-                            t = probs.argmax()
-                            probs[t] += 5.0
-                            if t != 0:
-                                probs[t - 1] += 3
-                            if t + 1 != fib_len:
-                                probs[t + 1] += 3
-                        targets_probs = targets_probs.softmax(-1)
-                        predictions = forward(inputs_probs)
-                        if loss is None:
-                            loss = loss_fn(predictions.log(), targets_probs)
-                        else:
-                            loss += loss_fn(predictions.log(), targets_probs)
-                    loss.backward()
-                    optimizer.step()
-                    epoch_error = loss.item()
-                    n_sample += 1
-                    if debug_mode:
-                        print(inputs_probs)
-                        print('inputs_probs', inputs_probs.shape)
-                        print(targets_probs)
-                        print('targets_probs', targets_probs.shape)
-                        print(predictions)
-                        print('predictions', predictions.shape)
-                        debug_anomalies(file_name=f'{time.time()}')
+                least_loss = calibrate_network(
+                    benchmarks,
+                    depth=250,
+                    max_delve=600,
+                    )
+                if quicksave:
+                    save_state(state_path)
                 elapsed = (time.time() - start_time) / 3600
                 ts = get_timestamp()
                 if verbosity > 0:
-                    print(epoch_msg.format(ts, epoch, elapsed, epoch_error))
+                    print(epoch_msg.format(ts, epoch, elapsed, least_loss))
             epoch_checkpoint = epoch % checkpoint == 0
-            if quicksave or epoch_checkpoint:
+            if epoch_checkpoint and not quicksave:
                 save_state(state_path)
         if validate:
             r = validate_network()
@@ -466,7 +430,7 @@ class Cauldron(torch.nn.Module):
                 ts = get_timestamp()
                 for k, v in r.items():
                     print(f'{ts}: {k}: {v}')
-        if quicksave is False and not epoch_checkpoint:
+        if not epoch_checkpoint and not quicksave:
             save_state(state_path)
         if verbosity > 0:
             logging.info(f'Training finished after {elapsed} hours.')
@@ -476,7 +440,6 @@ class Cauldron(torch.nn.Module):
         dataset,
         depth=20,
         max_delve=60,
-        target_loss=0.99,
         ):
         """Calibrate network policies to fit symbol data."""
         from copy import deepcopy
@@ -490,7 +453,7 @@ class Cauldron(torch.nn.Module):
         fib_len = self.fib_range.shape[-1]
         inf = torch.inf
         visits = 0
-        previous_loss = inf
+        least_loss = inf
         delving = True
         best_state = deepcopy(get_state_dicts())
         self.train()
@@ -498,6 +461,7 @@ class Cauldron(torch.nn.Module):
         while delving:
             loss = None
             optimizer.zero_grad()
+            n_steps = 0
             for batch, targets in dataset:
                 inputs_probs, inputs_ext = fibify(
                     batch[:, 3],
@@ -508,38 +472,45 @@ class Cauldron(torch.nn.Module):
                     extensions=None,
                     )
                 for probs_index, probs in enumerate(targets_probs):
-                    t = probs.argmax()
-                    probs[t] += 5.0
-                    if t != 0:
-                        probs[t - 1] += 3
-                    if t + 1 != fib_len:
-                        probs[t + 1] += 3
-                targets_probs = targets_probs.softmax(-1)
+                    t = int(probs.argmax())
+                    probs *= 0
+                    probs[t] += 1.0
+                    # if t != 0:
+                        # probs[t - 1] += 3
+                    # if t + 1 != fib_len:
+                        # probs[t + 1] += 3
+                # targets_probs = targets_probs.softmax(-1)
+                # print(targets_probs)
                 predictions = forward(inputs_probs)
                 if loss is None:
                     loss = loss_fn(predictions.log(), targets_probs)
                 else:
                     loss += loss_fn(predictions.log(), targets_probs)
+                n_steps += 1
             loss.backward()
             optimizer.step()
-            if loss < previous_loss:
+            print(f'({visits}) loss: {loss.item()}')
+            mse = (loss.item() / (ᶓ * n_steps)) ** 2
+            visits += 1
+            print(f'({visits}) MSE: {mse}')
+            if mse < least_loss:
                 best_state = deepcopy(get_state_dicts())
-            if visits != depth:
-                visits += 1
-            else:
-                exit_condition = any([
-                    loss >= previous_loss,
-                    time.time() - start_time >= max_delve,
-                    loss <= target_loss,
-                    ])
-                if exit_condition:
+                least_loss = float(mse)
+            if visits >= depth:
+                elapsed = time.time() - start_time
+                if elapsed >= max_delve or loss >= least_loss:
                     delving = False
-                else:
-                    previous_loss = loss
-            print('loss:', loss / visits)
         self.load_state(state=best_state)
         self.eval()
-        return True
+        if self.debug_mode:
+            print(inputs_probs)
+            print('inputs_probs', inputs_probs.shape)
+            print(targets_probs)
+            print('targets_probs', targets_probs.shape)
+            print(predictions)
+            print('predictions', predictions.shape)
+            self.debug_anomalies(file_name=f'{time.time()}')
+        return least_loss
 
     def validate_network(self):
         """Benchmarks back-testing."""
