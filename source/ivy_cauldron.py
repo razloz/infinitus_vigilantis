@@ -157,18 +157,6 @@ class Cauldron(torch.nn.Module):
             foreach=True,
             maximize=False,
             )
-        # self.piphi = torch.tensor(
-            # [
-                # [-1,  π,  1],
-                # [-φ,  0,  φ],
-                # [-1, -π, 1],
-            # ],
-            # device=self.DEVICE,
-            # dtype=torch.float,
-            # )
-        # piphi_indices = [i for i in range(9) if i != 4]
-        # self.piphi_indices = list(combinations(piphi_indices, 2))
-        # self.piphi_indices = [[*i] for i in self.piphi_indices]
         self.benchmarks = benchmarks
         self.candelabrum = candelabrum
         self.set_weights = set_weights
@@ -401,7 +389,6 @@ class Cauldron(torch.nn.Module):
         inf = torch.inf
         fibify = self.fibify
         fib_len = self.fib_range.shape[-1]
-        # n_elements = fib_len * n_batch
         epoch = 0
         elapsed = 0
         if verbosity > 0:
@@ -451,6 +438,9 @@ class Cauldron(torch.nn.Module):
         loss_fn = torch.nn.CrossEntropyLoss()
         fibify = self.fibify
         fib_len = self.fib_range.shape[-1]
+        debug_anomalies = self.debug_anomalies
+        debug_mode = self.debug_mode
+        verbosity = self.verbosity
         inf = torch.inf
         visits = 0
         least_loss = inf
@@ -475,12 +465,6 @@ class Cauldron(torch.nn.Module):
                     t = int(probs.argmax())
                     probs *= 0
                     probs[t] += 1.0
-                    # if t != 0:
-                        # probs[t - 1] += 3
-                    # if t + 1 != fib_len:
-                        # probs[t + 1] += 3
-                # targets_probs = targets_probs.softmax(-1)
-                # print(targets_probs)
                 predictions = forward(inputs_probs)
                 if loss is None:
                     loss = loss_fn(predictions.log(), targets_probs)
@@ -489,10 +473,18 @@ class Cauldron(torch.nn.Module):
                 n_steps += 1
             loss.backward()
             optimizer.step()
-            print(f'({visits}) loss: {loss.item()}')
             mse = (loss.item() / (ᶓ * n_steps)) ** 2
             visits += 1
-            print(f'({visits}) MSE: {mse}')
+            if debug_mode:
+                print(inputs_probs)
+                print('inputs_probs', inputs_probs.shape)
+                print(targets_probs)
+                print('targets_probs', targets_probs.shape)
+                print(predictions)
+                print('predictions', predictions.shape)
+                debug_anomalies(file_name=f'{time.time()}')
+            if verbosity > 0:
+                print(f'({visits}) MSE: {mse}')
             if mse < least_loss:
                 best_state = deepcopy(get_state_dicts())
                 least_loss = float(mse)
@@ -502,14 +494,6 @@ class Cauldron(torch.nn.Module):
                     delving = False
         self.load_state(state=best_state)
         self.eval()
-        if self.debug_mode:
-            print(inputs_probs)
-            print('inputs_probs', inputs_probs.shape)
-            print(targets_probs)
-            print('targets_probs', targets_probs.shape)
-            print(predictions)
-            print('predictions', predictions.shape)
-            self.debug_anomalies(file_name=f'{time.time()}')
         return least_loss
 
     def validate_network(self):
@@ -572,10 +556,6 @@ class Cauldron(torch.nn.Module):
                 results[benchmark]['total'] += n_batch
                 n_correct += correct
                 n_total += n_batch
-                print('predictions_indices', predictions_indices)
-                print('targets_indices', targets_indices)
-                print('index_check', index_check)
-                print('correct', correct)
             inputs_probs, inputs_ext = fibify(final_batch[benchmark, :, 3])
             predictions = forward(inputs_probs)
             forecast.append(index_to_price(predictions, inputs_ext))
