@@ -125,8 +125,8 @@ class Cauldron(torch.nn.Module):
             )
         n_fibs = int(self.fib_range.shape[-1])
         n_model = n_batch * n_fibs
-        n_hidden = 2048
-        n_heads = n_batch
+        n_hidden = 2 ** 10
+        n_heads = 2
         n_layers = 3
         n_dropout = 0.5
         n_eps = (1 / 137) ** 3
@@ -144,16 +144,16 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.999
-        n_betas = (0.9, 0.999)
-        n_weight_decay = 0.0099
+        n_learning_rate = 0.000099
+        n_betas = (0.9, 0.9999)
+        n_weight_decay = 0.000099
         self.optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=n_learning_rate,
             betas=n_betas,
             eps=n_eps,
             weight_decay=n_weight_decay,
-            amsgrad=True,
+            amsgrad=False,
             foreach=True,
             maximize=False,
             )
@@ -291,12 +291,8 @@ class Cauldron(torch.nn.Module):
 
     def forward(self, inputs):
         """Returns predictions from inputs."""
-        constants = self.constants
-        affix = constants['batch_affix']
-        dims = constants['output_dims']
+        dims = self.constants['output_dims']
         inputs = inputs.flatten().unsqueeze(0)
-        inputs[0, 0] = affix
-        inputs[0, -1] = affix
         return self.network(inputs, inputs).view(*dims).softmax(-1)
 
     def get_datasets(self, tensor_data, benchmark_data=False, training=False):
