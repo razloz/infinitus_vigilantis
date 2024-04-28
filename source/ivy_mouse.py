@@ -489,11 +489,7 @@ class ThreeBlindMice():
         while True:
             self.merge_states()
             cauldron = ivy_cauldron.Cauldron(debug_mode=False)
-            cauldron.train_network(
-                hours=hours,
-                checkpoint=checkpoint,
-                validate=True,
-                )
+            cauldron.train_network()
             cauldron = None
             del(cauldron)
             gc.collect()
@@ -513,12 +509,10 @@ class ThreeBlindMice():
         cauldron = ivy_cauldron.Cauldron()
         if not skip_validation:
             chit_chat('\b: back-testing neural network')
-            metrics = cauldron.backtest_network()
+            metrics = cauldron.train_stocks()
         else:
             with open(cauldron.backtest_path, 'rb') as backtest_file:
                 metrics = pickle.load(backtest_file)
-        chit_chat('\b: inscribing sigils')
-        # metrics = cauldron.inscribe_sigil(charts_path)
         symbols = cauldron.symbols
         features = cauldron.features
         candelabrum = cauldron.candelabrum
@@ -527,13 +521,12 @@ class ThreeBlindMice():
         _labels = ('close', 'trend', 'price_zs', 'price_wema', 'volume_zs')
         feature_indices = {k: features.index(k) for k in _labels}
         picks = dict()
+        chit_chat('\b: generating technical rating')
         for key, value in metrics.items():
             if key == 'validation.metrics': continue
             key = int(key)
             picks[symbols[key]] = value
             accuracy = float(value['accuracy'] * 0.01)
-            #prediction = sum(value['forecast'])
-            #symbol_forecast = [1 if p > 0.5 else 0 for p in predictions]
             symbol_open = candelabrum[key][0, feature_indices['close']]
             symbol_close = candelabrum[key][-1, feature_indices['close']]
             symbol_trend = candelabrum[key][-1, feature_indices['trend']]
@@ -544,7 +537,6 @@ class ThreeBlindMice():
             symbol_max = max(open_close)
             symbol_min = min(open_close)
             median = symbol_max - ((symbol_max - symbol_min) / 2)
-            #pos_forecast = prediction > 0.5
             signals = [
                 symbol_zs <= 0.5,
                 symbol_trend > 6,

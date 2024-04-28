@@ -110,7 +110,7 @@ class Cauldron(torch.nn.Module):
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
         n_benchmarks, n_time, n_features = benchmarks.shape
-        n_batch = 34
+        n_batch = 20
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
         self.fib_ext = torch.tensor(
@@ -124,9 +124,9 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         n_fibs = int(self.fib_range.shape[-1])
-        n_model = n_batch * n_fibs
-        n_hidden = 2 ** 10
-        n_heads = 2
+        n_model = n_fibs * n_batch
+        n_hidden = n_model
+        n_heads = 3
         n_layers = 3
         n_dropout = 0.5
         n_eps = (1 / 137) ** 3
@@ -195,6 +195,11 @@ class Cauldron(torch.nn.Module):
                 logging.info(constants_str)
         self.to(self.DEVICE)
         self.load_state()
+        param_count = 0
+        for name, param in self.named_parameters():
+            if 'shape' in dir(param):
+                param_count += math.prod(param.shape, start=1)
+        print('Cauldron parameters:', param_count)
 
     def load_state(self, state_path=None, state=None):
         """Loads the Module."""
@@ -267,12 +272,14 @@ class Cauldron(torch.nn.Module):
                     if ext_loc == ext_len:
                         finding_location = False
                 else:
-                    if 0 != ext_loc < ext_len:
+                    if 0 != ext_loc != ext_len:
                         ext_high = extensions[ext_loc - 1]
                         ext_low = extensions[ext_loc]
                         dist_high = ext_high - closing_price
                         dist_low = closing_price - ext_low
                         ext_loc -= 1 if dist_high < dist_low else 0
+                    elif ext_loc == ext_len:
+                        ext_loc -= 1
             ext_array = fib_range.clone().detach()
             ext_array[ext_loc] = 1
             price_locations.append(ext_array.softmax(-1))
@@ -321,15 +328,218 @@ class Cauldron(torch.nn.Module):
         self.validation_results['best_epoch'] = torch.inf
         self.validation_results['best_validation'] = 0.0
 
-    def train_network(
+    def calibrate(
+        self,
+        dataset,
+        depth=1000,
+        max_delve=300,
+        deep_learn=False,
+        loss_target=0.137,
+        symbol_name='',
+        ):
+        """Calibrate network to fit symbol data."""
+        from copy import deepcopy
+        get_state_dicts = self.get_state_dicts
+        constants = self.constants
+        n_batch = constants['n_batch']
+        forward = self.forward
+        optimizer = self.optimizer
+        loss_fn = torch.nn.CrossEntropyLoss()
+        fibify = self.fibify
+        fib_len = self.fib_range.shape[-1]
+        debug_anomalies = self.debug_anomalies
+        debug_mode = self.debug_mode
+        verbosity = self.verbosity
+        inf = torch.inf
+        visits = 0
+        least_loss = inf
+        delving = True
+        best_state = deepcopy(get_state_dicts())
+        self.train()
+        start_time = time.time()
+        while delving:
+            loss = None
+            optimizer.zero_grad()
+            n_steps = 0
+            for batch, targets in dataset:
+                inputs_probs, inputs_ext = fibify(
+                    batch[:, 3],
+                    extensions=None,
+                    )
+                targets_probs, targets_ext = fibify(
+                    targets[:, 3],
+                    extensions=None,
+                    )
+                for probs_index, probs in enumerate(targets_probs):
+                    t = int(probs.argmax())
+                    probs *= 0
+                    probs[t] += 1.0
+                predictions = forward(inputs_probs)
+                if loss is None:
+                    loss = loss_fn(predictions.log(), targets_probs)
+                else:
+                    loss += loss_fn(predictions.log(), targets_probs)
+                n_steps += 1
+            loss.backward()
+            optimizer.step()
+            mse = (loss.item() / (ᶓ * n_steps)) ** 2
+            visits += 1
+            if debug_mode:
+                print(inputs_probs)
+                print('inputs_probs', inputs_probs.shape)
+                print(targets_probs)
+                print('targets_probs', targets_probs.shape)
+                print(predictions)
+                print('predictions', predictions.shape)
+                print(f'({visits}) MSE: {mse}')
+                debug_anomalies(file_name=f'{time.time()}')
+            if mse < least_loss:
+                best_state = deepcopy(get_state_dicts())
+                least_loss = float(mse)
+            if not deep_learn:
+                elapsed = time.time() - start_time
+                if elapsed >= max_delve:
+                    delving = False
+                elif visits >= depth:
+                    if loss >= least_loss:
+                        delving = False
+            if loss <= loss_target:
+                delving = False
+        self.load_state(state=best_state)
+        self.eval()
+        if verbosity > 0:
+            ts = self.get_timestamp()
+            print(f'{ts}: {symbol_name} visits: {visits}')
+            print(f'{ts}: {symbol_name} least_loss: {least_loss}')
+        return least_loss
+
+    def train_network(self, use_benchmarks=False):
+        """Batched training over hours."""
+        if use_benchmarks:
+            self.train_benchmarks()
+        else:
+            self.train_stocks()
+        return None
+
+    def train_stocks(self):
+        """Train network on stock data."""
+        constants = self.constants
+        n_batch = constants['n_batch']
+        n_symbols = constants['n_symbols']
+        fibify = self.fibify
+        index_to_price = self.index_to_price
+        calibrate = self.calibrate
+        forward = self.forward
+        symbols = self.symbols
+        verbosity = self.verbosity
+        load_state = self.load_state
+        save_state = self.save_state
+        state_path = self.state_path
+        n_correct = 0
+        n_total = 0
+        results = dict()
+        candelabrum = self.candelabrum
+        ts = self.get_timestamp
+        if verbosity > 0:
+            print(f'{ts()}: train_stocks routine start.')
+        start_time = time.time()
+        self.eval()
+        for symbol, candles in enumerate(candelabrum):
+            sym_ticker = str(symbols[symbol]).upper()
+            if verbosity > 0:
+                print(f'{ts()}: {sym_ticker} ({symbol + 1} / {n_symbols})')
+            if symbol not in results:
+                results[symbol] = dict()
+                results[symbol]['accuracy'] = 0
+                results[symbol]['correct'] = 0
+                results[symbol]['forecast'] = list()
+                results[symbol]['symbol'] = sym_ticker
+                results[symbol]['total'] = 0
+            data_trim = int(candles.shape[0])
+            while data_trim % n_batch != 0:
+                data_trim -= 1
+            candles = candles[-data_trim:, :]
+            datasets = self.get_datasets(
+                candles,
+                benchmark_data=False,
+                training=False,
+                )
+            input_dataset = datasets[0][:-n_batch, :]
+            target_dataset = datasets[1][n_batch:, :]
+            final_batch = datasets[0][-n_batch:, :]
+            training_data = DataLoader(
+                TensorDataset(input_dataset, target_dataset),
+                batch_size=n_batch,
+                shuffle=False,
+                drop_last=True,
+                )
+            least_loss = calibrate(training_data, symbol_name=sym_ticker)
+            save_state(state_path)
+            forecast = list()
+            for batch, targets in training_data:
+                inputs_probs, inputs_ext = fibify(
+                    batch[:, 3],
+                    extensions=None,
+                    )
+                targets_probs, targets_ext = fibify(
+                    targets[:, 3],
+                    extensions=None,
+                    )
+                predictions = forward(inputs_probs)
+                forecast.append(index_to_price(predictions, inputs_ext))
+                predictions_indices = predictions.argmax(-1)
+                targets_indices = targets_probs.argmax(-1)
+                index_check = predictions_indices == targets_indices
+                correct = sum([1 if c else 0 for c in index_check])
+                results[symbol]['correct'] += correct
+                results[symbol]['total'] += n_batch
+                n_correct += correct
+                n_total += n_batch
+            inputs_probs, inputs_ext = fibify(final_batch[:, 3])
+            predictions = forward(inputs_probs)
+            forecast.append(index_to_price(predictions, inputs_ext))
+            forecast = torch.cat(forecast)
+            accuracy = results[symbol]['correct'] / results[symbol]['total']
+            results[symbol]['accuracy'] = round(accuracy * 100, 4)
+            results[symbol]['forecast'] = forecast.flatten().tolist()
+            if verbosity > 0:
+                accuracy = results[symbol]['accuracy']
+                print(f'{ts()}: {sym_ticker} accuracy: {accuracy}')
+        results['validation.metrics'] = {
+            'accuracy': round((n_correct / n_total) * 100, 4),
+            'correct': n_correct,
+            'total': n_total,
+            }
+        if verbosity > 0:
+            accuracy = results['validation.metrics']['accuracy']
+            elapsed = (time.time() - start_time) / 3600
+            time_msg = ts()
+            print(f'{time_msg}: over-all accuracy: {accuracy}')
+            print(f'{time_msg}: elapsed: {elapsed} hours.')
+        with open(self.backtest_path, 'wb+') as backtest_file:
+            pickle.dump(results, backtest_file)
+        accuracy = results['validation.metrics']['accuracy']
+        if accuracy > self.validation_results['best_backtest']:
+            self.save_best_result(accuracy, result_key='best_backtest')
+        self.save_state(
+            self.new_state_path.format(
+                'backtest',
+                time.time(),
+                accuracy,
+                ),
+            )
+        print(f'{ts()}: train_stocks routine end.')
+        return results
+
+    def train_benchmarks(
         self,
         checkpoint=1,
         epoch_samples=1000,
-        hours=6,
+        hours=3,
         validate=True,
         quicksave=True,
         ):
-        """Batched training over hours."""
+        """Train network on benchmark data."""
         get_state_dicts = self.get_state_dicts
         constants = self.constants
         n_batch = constants['n_batch']
@@ -418,81 +628,7 @@ class Cauldron(torch.nn.Module):
         if verbosity > 0:
             logging.info(f'Training finished after {elapsed} hours.')
 
-    def calibrate_network(
-        self,
-        dataset,
-        depth=20,
-        max_delve=60,
-        ):
-        """Calibrate network policies to fit symbol data."""
-        from copy import deepcopy
-        get_state_dicts = self.get_state_dicts
-        constants = self.constants
-        n_batch = constants['n_batch']
-        forward = self.forward
-        optimizer = self.optimizer
-        loss_fn = torch.nn.CrossEntropyLoss()
-        fibify = self.fibify
-        fib_len = self.fib_range.shape[-1]
-        debug_anomalies = self.debug_anomalies
-        debug_mode = self.debug_mode
-        verbosity = self.verbosity
-        inf = torch.inf
-        visits = 0
-        least_loss = inf
-        delving = True
-        best_state = deepcopy(get_state_dicts())
-        self.train()
-        start_time = time.time()
-        while delving:
-            loss = None
-            optimizer.zero_grad()
-            n_steps = 0
-            for batch, targets in dataset:
-                inputs_probs, inputs_ext = fibify(
-                    batch[:, 3],
-                    extensions=None,
-                    )
-                targets_probs, targets_ext = fibify(
-                    targets[:, 3],
-                    extensions=None,
-                    )
-                for probs_index, probs in enumerate(targets_probs):
-                    t = int(probs.argmax())
-                    probs *= 0
-                    probs[t] += 1.0
-                predictions = forward(inputs_probs)
-                if loss is None:
-                    loss = loss_fn(predictions.log(), targets_probs)
-                else:
-                    loss += loss_fn(predictions.log(), targets_probs)
-                n_steps += 1
-            loss.backward()
-            optimizer.step()
-            mse = (loss.item() / (ᶓ * n_steps)) ** 2
-            visits += 1
-            if debug_mode:
-                print(inputs_probs)
-                print('inputs_probs', inputs_probs.shape)
-                print(targets_probs)
-                print('targets_probs', targets_probs.shape)
-                print(predictions)
-                print('predictions', predictions.shape)
-                debug_anomalies(file_name=f'{time.time()}')
-            if verbosity > 0:
-                print(f'({visits}) MSE: {mse}')
-            if mse < least_loss:
-                best_state = deepcopy(get_state_dicts())
-                least_loss = float(mse)
-            if visits >= depth:
-                elapsed = time.time() - start_time
-                if elapsed >= max_delve or loss >= least_loss:
-                    delving = False
-        self.load_state(state=best_state)
-        self.eval()
-        return least_loss
-
-    def validate_network(self):
+    def validate_benchmarks(self):
         """Benchmarks back-testing."""
         constants = self.constants
         n_batch = constants['n_batch']
@@ -583,8 +719,8 @@ class Cauldron(torch.nn.Module):
         print(f'{ts()}: validation routine end.')
         return results
 
-    def backtest_network(self):
-        """Candelabrum back-testing."""
+    def validate_stocks(self):
+        """Stock back-testing."""
         constants = self.constants
         n_batch = constants['n_batch']
         n_symbols = constants['n_symbols']
