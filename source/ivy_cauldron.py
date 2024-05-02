@@ -35,7 +35,7 @@ class Cauldron(torch.nn.Module):
         target_labels=('price_zs', 'price_sdev', 'price_wema', 'close'),
         verbosity=1,
         no_caching=True,
-        set_weights=False,
+        set_weights=True,
         try_cuda=True,
         debug_mode=False,
         ):
@@ -110,7 +110,7 @@ class Cauldron(torch.nn.Module):
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
         n_benchmarks, n_time, n_features = benchmarks.shape
-        n_batch = 20
+        n_batch = 60
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
         self.fib_ext = torch.tensor(
@@ -125,8 +125,8 @@ class Cauldron(torch.nn.Module):
             )
         n_fibs = int(self.fib_range.shape[-1])
         n_model = n_fibs * n_batch
-        n_hidden = n_model
-        n_heads = 3
+        n_hidden = n_batch
+        n_heads = n_fibs
         n_layers = 3
         n_dropout = 0.5
         n_eps = (1 / 137) ** 3
@@ -139,14 +139,14 @@ class Cauldron(torch.nn.Module):
             dropout=n_dropout,
             activation='gelu',
             layer_norm_eps=n_eps,
-            batch_first=False,
+            batch_first=True,
             norm_first=False,
             device=self.DEVICE,
             dtype=torch.float,
             )
         n_learning_rate = 0.000099
         n_betas = (0.9, 0.9999)
-        n_weight_decay = 0.000099
+        n_weight_decay = 0.0000099
         self.optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=n_learning_rate,
@@ -333,14 +333,16 @@ class Cauldron(torch.nn.Module):
         dataset,
         depth=1000,
         max_delve=300,
-        deep_learn=False,
-        loss_target=0.137,
+        deep_learn=True,
+        loss_target=0.1618,
+        accuracy_target=0.80,
         symbol_name='',
         ):
         """Calibrate network to fit symbol data."""
         from copy import deepcopy
         get_state_dicts = self.get_state_dicts
         constants = self.constants
+        batch_affix = constants['batch_affix']
         n_batch = constants['n_batch']
         forward = self.forward
         optimizer = self.optimizer
@@ -353,6 +355,7 @@ class Cauldron(torch.nn.Module):
         inf = torch.inf
         visits = 0
         least_loss = inf
+        best_accuracy = 0
         delving = True
         best_state = deepcopy(get_state_dicts())
         self.train()
@@ -361,6 +364,9 @@ class Cauldron(torch.nn.Module):
             loss = None
             optimizer.zero_grad()
             n_steps = 0
+            error_cost = 0
+            n_correct = 0
+            n_total = 0
             for batch, targets in dataset:
                 inputs_probs, inputs_ext = fibify(
                     batch[:, 3],
@@ -379,10 +385,18 @@ class Cauldron(torch.nn.Module):
                     loss = loss_fn(predictions.log(), targets_probs)
                 else:
                     loss += loss_fn(predictions.log(), targets_probs)
+                predictions_indices = predictions.argmax(-1)
+                targets_indices = targets_probs.argmax(-1)
+                index_check = predictions_indices == targets_indices
+                n_correct += sum([1 if c else 0 for c in index_check])
+                n_total += n_batch
                 n_steps += 1
+            accuracy = n_correct / n_total
+            error_cost = (1 - accuracy) + batch_affix
+            loss = (error_cost + ((loss / (ᶓ * n_steps)) ** 2)) / 2
             loss.backward()
             optimizer.step()
-            mse = (loss.item() / (ᶓ * n_steps)) ** 2
+            mae = loss.item()
             visits += 1
             if debug_mode:
                 print(inputs_probs)
@@ -391,11 +405,13 @@ class Cauldron(torch.nn.Module):
                 print('targets_probs', targets_probs.shape)
                 print(predictions)
                 print('predictions', predictions.shape)
-                print(f'({visits}) MSE: {mse}')
+                print(f'accuracy: {accuracy}, error_cost: {error_cost}')
+                print(f'({visits}) MAE: {mae}')
                 debug_anomalies(file_name=f'{time.time()}')
-            if mse < least_loss:
+            if mae < least_loss or accuracy > best_accuracy:
                 best_state = deepcopy(get_state_dicts())
-                least_loss = float(mse)
+                least_loss = float(mae)
+                best_accuracy = float(accuracy)
             if not deep_learn:
                 elapsed = time.time() - start_time
                 if elapsed >= max_delve:
@@ -403,7 +419,7 @@ class Cauldron(torch.nn.Module):
                 elif visits >= depth:
                     if loss >= least_loss:
                         delving = False
-            if loss <= loss_target:
+            if loss <= loss_target or accuracy >= accuracy_target:
                 delving = False
         self.load_state(state=best_state)
         self.eval()
