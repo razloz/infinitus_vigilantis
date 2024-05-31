@@ -509,7 +509,7 @@ class ThreeBlindMice():
         cauldron = ivy_cauldron.Cauldron()
         if not skip_validation:
             chit_chat('\b: back-testing neural network')
-            metrics = cauldron.train_stocks()
+            metrics = cauldron.validate_stocks()
         else:
             with open(cauldron.backtest_path, 'rb') as backtest_file:
                 metrics = pickle.load(backtest_file)
@@ -538,8 +538,9 @@ class ThreeBlindMice():
             symbol_min = min(open_close)
             median = symbol_max - ((symbol_max - symbol_min) / 2)
             signals = [
-                symbol_zs <= 0.5,
-                symbol_trend > 6,
+                symbol_zs <= 0.8,
+                volume_zs <= -0.5,
+                symbol_trend > 3,
                 symbol_close > symbol_wema,
                 symbol_close > symbol_open,
                 symbol_close > median,
@@ -550,7 +551,7 @@ class ThreeBlindMice():
             picks[symbols[key]]['rating'] = float(rating)
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
-        picks = picks.index[:20].tolist()
+        picks = picks.index[:100].tolist()
         if not skip_charts:
             chit_chat('\b: plotting charts')
             read_csv = pandas.read_csv

@@ -28,6 +28,29 @@ __version__ = 'gardneri'
 φ = (1 + math.sqrt(5)) / 2
 
 
+class ModifiedHuberLoss(torch.nn.Module):
+    def __init__(self, reduction='mean'):
+        """Modified Huber Loss for Binary Classification."""
+        super(ModifiedHuberLoss, self).__init__()
+        self.reduction = reduction
+
+    def forward(self, predictions, targets):
+        """Quadratically smoothed hinge loss for classification tasks.
+            args:
+                predictions -> real-valued softmax classifier scores
+                targets -> true binary class labels (+1, -1)
+        """
+        loss = torch.where(
+            targets * predictions > -1,
+            (1 - targets * predictions).clamp(min=0).pow(2),
+            -4 * targets * predictions,
+            )
+        if self.reduction == 'mean':
+            return loss.mean()
+        else:
+            return loss.sum()
+
+
 class Cauldron(torch.nn.Module):
     def __init__(
         self,
@@ -110,7 +133,8 @@ class Cauldron(torch.nn.Module):
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
         n_benchmarks, n_time, n_features = benchmarks.shape
-        n_batch = 60
+        n_batch = 20
+        n_forecast = 20
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
         self.fib_ext = torch.tensor(
@@ -124,12 +148,19 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         n_fibs = int(self.fib_range.shape[-1])
-        n_model = n_fibs * n_batch
-        n_hidden = n_batch
-        n_heads = n_fibs
+        n_duplicate = 20
+        n_model = n_fibs * n_duplicate
+        n_hidden = n_model
+        n_heads = 6
         n_layers = 3
         n_dropout = 0.5
-        n_eps = (1 / 137) ** 3
+        n_eps = 1e-7 # 1e-8
+        n_learning_rate = (φ - 1) ** 21 # 1e-1
+        n_betas = (0.88, 0.99999) # (1 - 1e-1, 1 - 1e-3)
+        n_weight_decay = (1 / 137) ** 5 # 1e-2
+        #self.loss_fn = torch.nn.CrossEntropyLoss()
+        #self.loss_fn = torch.nn.HuberLoss(reduction='sum', delta=1.0)
+        self.loss_fn = ModifiedHuberLoss(reduction='mean')
         self.network = torch.nn.Transformer(
             d_model=n_model,
             nhead=n_heads,
@@ -144,9 +175,12 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_learning_rate = 0.000099
-        n_betas = (0.9, 0.9999)
-        n_weight_decay = 0.0000099
+        # self.optimizer = torch.optim.Rprop(
+            # self.parameters(),
+            # lr=n_learning_rate,
+            # etas=n_etas,
+            # step_sizes=n_step_sizes,
+            # )
         self.optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=n_learning_rate,
@@ -154,8 +188,11 @@ class Cauldron(torch.nn.Module):
             eps=n_eps,
             weight_decay=n_weight_decay,
             amsgrad=False,
-            foreach=True,
             maximize=False,
+            foreach=False,
+            # capturable=False,
+            # differentiable=False,
+            # fused=None,
             )
         self.benchmarks = benchmarks
         self.candelabrum = candelabrum
@@ -169,6 +206,7 @@ class Cauldron(torch.nn.Module):
             'n_symbols': n_symbols,
             'n_features': n_features,
             'n_batch': n_batch,
+            'n_fibs': n_fibs,
             'n_inputs': n_inputs,
             'n_targets': n_targets,
             'n_model': n_model,
@@ -180,15 +218,18 @@ class Cauldron(torch.nn.Module):
             'n_learning_rate': n_learning_rate,
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
-            'batch_affix': n_eps ** 2,
-            'output_dims': [n_batch, n_fibs],
+            'batch_affix': n_eps,
+            'n_duplicate': n_duplicate,
+            'output_dims': [n_fibs],
+            'n_forecast': n_forecast,
             }
         self.validation_results = {
             'best_backtest': 0.0,
             'best_epoch': torch.inf,
             'best_validation': 0.0,
+            'calibration_index': 0,
             }
-        if verbosity > 1:
+        if verbosity > 0:
             for k, v in self.constants.items():
                 constants_str = f'{k.upper()}: {v}'
                 print(constants_str)
@@ -271,6 +312,7 @@ class Cauldron(torch.nn.Module):
                     ext_loc += 1
                     if ext_loc == ext_len:
                         finding_location = False
+                        ext_loc -= 1
                 else:
                     if 0 != ext_loc != ext_len:
                         ext_high = extensions[ext_loc - 1]
@@ -295,12 +337,6 @@ class Cauldron(torch.nn.Module):
             prices.append(price)
         prices = torch.cat(prices)
         return prices.flatten().unsqueeze(-1)
-
-    def forward(self, inputs):
-        """Returns predictions from inputs."""
-        dims = self.constants['output_dims']
-        inputs = inputs.flatten().unsqueeze(0)
-        return self.network(inputs, inputs).view(*dims).softmax(-1)
 
     def get_datasets(self, tensor_data, benchmark_data=False, training=False):
         """Prepare tensor data for network input."""
@@ -327,6 +363,50 @@ class Cauldron(torch.nn.Module):
         self.validation_results['best_backtest'] = 0.0
         self.validation_results['best_epoch'] = torch.inf
         self.validation_results['best_validation'] = 0.0
+        self.validation_results['calibration_index'] = 0
+
+    def forward(self, inputs, targets=None):
+        """Returns predictions from inputs."""
+        constants = self.constants
+        dims = constants['output_dims']
+        n_batch = constants['n_batch']
+        n_duplicate = constants['n_duplicate']
+        n_model = constants['n_model']
+        n_fibs = constants['n_fibs']
+        batch_affix = constants['batch_affix']
+        loss_fn = self.loss_fn
+        network = self.network
+        optimizer = self.optimizer
+        predictions = list()
+        training = True if targets is not None else False
+        mae = 0 if training else None
+        accuracy = 0
+        loss = 0
+        if training:
+            optimizer.zero_grad()
+            targets = (targets + batch_affix).softmax(-1)
+        inputs_stack = list()
+        stack = torch.stack
+        for t in inputs:
+            inputs_stack.append(stack([t for _ in range(n_duplicate)]))
+        inputs_stack = torch.stack(inputs_stack).view(n_batch, n_model)
+        state = network(inputs_stack, inputs_stack)
+        state = state.view(n_batch, n_duplicate, n_fibs)
+        state = state[:, -1, :].view(n_batch, n_fibs).softmax(-1)
+        if training:
+            state_indices = state.argmax(-1)
+            targets_indices = targets.argmax(-1)
+            index_check = state_indices == targets_indices
+            correct = sum([1 if c else 0 for c in index_check])
+            accuracy = correct / n_batch
+            cost = ((1 - accuracy) + batch_affix) ** φ
+            loss = loss_fn(state, targets) ** φ
+            loss = (loss + cost) / (4 * π * n_batch * φ)
+            loss = loss.sqrt() * 4
+            loss.backward()
+            optimizer.step()
+            #print(loss)
+        return state.clone().detach(), float(loss), float(accuracy)
 
     def calibrate(
         self,
@@ -334,8 +414,8 @@ class Cauldron(torch.nn.Module):
         depth=1000,
         max_delve=300,
         deep_learn=True,
-        loss_target=0.1618,
-        accuracy_target=0.80,
+        loss_target=0.9,
+        accuracy_target=0.05,
         symbol_name='',
         ):
         """Calibrate network to fit symbol data."""
@@ -353,20 +433,19 @@ class Cauldron(torch.nn.Module):
         debug_mode = self.debug_mode
         verbosity = self.verbosity
         inf = torch.inf
+        stack = torch.stack
         visits = 0
         least_loss = inf
         best_accuracy = 0
         delving = True
+        epoch_msg = '({0}) loss: {1}, accuracy: {2} (over {3} batches)'
         best_state = deepcopy(get_state_dicts())
         self.train()
         start_time = time.time()
         while delving:
-            loss = None
-            optimizer.zero_grad()
-            n_steps = 0
-            error_cost = 0
-            n_correct = 0
-            n_total = 0
+            accuracy = 0
+            batches = 0
+            loss = 0
             for batch, targets in dataset:
                 inputs_probs, inputs_ext = fibify(
                     batch[:, 3],
@@ -379,25 +458,17 @@ class Cauldron(torch.nn.Module):
                 for probs_index, probs in enumerate(targets_probs):
                     t = int(probs.argmax())
                     probs *= 0
-                    probs[t] += 1.0
-                predictions = forward(inputs_probs)
-                if loss is None:
-                    loss = loss_fn(predictions.log(), targets_probs)
-                else:
-                    loss += loss_fn(predictions.log(), targets_probs)
-                predictions_indices = predictions.argmax(-1)
-                targets_indices = targets_probs.argmax(-1)
-                index_check = predictions_indices == targets_indices
-                n_correct += sum([1 if c else 0 for c in index_check])
-                n_total += n_batch
-                n_steps += 1
-            accuracy = n_correct / n_total
-            error_cost = (1 - accuracy) + batch_affix
-            loss = (error_cost + ((loss / (ᶓ * n_steps)) ** 2)) / 2
-            loss.backward()
-            optimizer.step()
-            mae = loss.item()
+                    probs -= 1.0
+                    probs[t] += 2.0
+                state = forward(inputs_probs, targets_probs)
+                predictions = state[0]
+                loss += state[1]
+                accuracy += state[2]
+                batches += 1
             visits += 1
+            loss /= batches
+            accuracy /= batches
+            print(epoch_msg.format(visits, loss, accuracy, batches))
             if debug_mode:
                 print(inputs_probs)
                 print('inputs_probs', inputs_probs.shape)
@@ -405,12 +476,12 @@ class Cauldron(torch.nn.Module):
                 print('targets_probs', targets_probs.shape)
                 print(predictions)
                 print('predictions', predictions.shape)
-                print(f'accuracy: {accuracy}, error_cost: {error_cost}')
-                print(f'({visits}) MAE: {mae}')
+                print(f'accuracy: {accuracy}, loss: {loss}')
+                print(f'visits: {visits}, batches: {batches}')
                 debug_anomalies(file_name=f'{time.time()}')
-            if mae < least_loss or accuracy > best_accuracy:
+            if loss < least_loss and accuracy > best_accuracy:
                 best_state = deepcopy(get_state_dicts())
-                least_loss = float(mae)
+                least_loss = float(loss)
                 best_accuracy = float(accuracy)
             if not deep_learn:
                 elapsed = time.time() - start_time
@@ -419,7 +490,7 @@ class Cauldron(torch.nn.Module):
                 elif visits >= depth:
                     if loss >= least_loss:
                         delving = False
-            if loss <= loss_target or accuracy >= accuracy_target:
+            if loss <= loss_target and accuracy >= accuracy_target:
                 delving = False
         self.load_state(state=best_state)
         self.eval()
@@ -461,6 +532,10 @@ class Cauldron(torch.nn.Module):
         start_time = time.time()
         self.eval()
         for symbol, candles in enumerate(candelabrum):
+            if symbol < self.validation_results['calibration_index']:
+                continue
+            else:
+                self.validation_results['calibration_index'] = symbol
             sym_ticker = str(symbols[symbol]).upper()
             if verbosity > 0:
                 print(f'{ts()}: {sym_ticker} ({symbol + 1} / {n_symbols})')
@@ -475,6 +550,8 @@ class Cauldron(torch.nn.Module):
             while data_trim % n_batch != 0:
                 data_trim -= 1
             candles = candles[-data_trim:, :]
+            if randint(0, 1) == 0:
+                candles = candles.flip(0)
             datasets = self.get_datasets(
                 candles,
                 benchmark_data=False,
@@ -483,8 +560,21 @@ class Cauldron(torch.nn.Module):
             input_dataset = datasets[0][:-n_batch, :]
             target_dataset = datasets[1][n_batch:, :]
             final_batch = datasets[0][-n_batch:, :]
+            n_half = int(input_dataset.shape[0] / 2)
             training_data = DataLoader(
-                TensorDataset(input_dataset, target_dataset),
+                TensorDataset(
+                    input_dataset[:n_half, :],
+                    target_dataset[:n_half, :],
+                    ),
+                batch_size=n_batch,
+                shuffle=False,
+                drop_last=True,
+                )
+            validation_data = DataLoader(
+                TensorDataset(
+                    input_dataset[n_half:, :],
+                    target_dataset[n_half:, :],
+                    ),
                 batch_size=n_batch,
                 shuffle=False,
                 drop_last=True,
@@ -492,7 +582,7 @@ class Cauldron(torch.nn.Module):
             least_loss = calibrate(training_data, symbol_name=sym_ticker)
             save_state(state_path)
             forecast = list()
-            for batch, targets in training_data:
+            for batch, targets in validation_data:
                 inputs_probs, inputs_ext = fibify(
                     batch[:, 3],
                     extensions=None,
@@ -501,7 +591,7 @@ class Cauldron(torch.nn.Module):
                     targets[:, 3],
                     extensions=None,
                     )
-                predictions = forward(inputs_probs)
+                predictions, loss, accuracy = forward(inputs_probs)
                 forecast.append(index_to_price(predictions, inputs_ext))
                 predictions_indices = predictions.argmax(-1)
                 targets_indices = targets_probs.argmax(-1)
@@ -512,7 +602,7 @@ class Cauldron(torch.nn.Module):
                 n_correct += correct
                 n_total += n_batch
             inputs_probs, inputs_ext = fibify(final_batch[:, 3])
-            predictions = forward(inputs_probs)
+            predictions = forward(inputs_probs)[0]
             forecast.append(index_to_price(predictions, inputs_ext))
             forecast = torch.cat(forecast)
             accuracy = results[symbol]['correct'] / results[symbol]['total']
@@ -526,24 +616,21 @@ class Cauldron(torch.nn.Module):
             'correct': n_correct,
             'total': n_total,
             }
+        self.validation_results['calibration_index'] = 0
+        save_state(state_path)
+        with open(self.backtest_path, 'wb+') as backtest_file:
+            pickle.dump(results, backtest_file)
+        accuracy = results['validation.metrics']['accuracy']
+        if accuracy > self.validation_results['best_backtest']:
+            self.save_best_result(accuracy, result_key='best_backtest')
+        _path = self.new_state_path.format('backtest', time.time(), accuracy)
+        save_state(_path)
         if verbosity > 0:
             accuracy = results['validation.metrics']['accuracy']
             elapsed = (time.time() - start_time) / 3600
             time_msg = ts()
             print(f'{time_msg}: over-all accuracy: {accuracy}')
             print(f'{time_msg}: elapsed: {elapsed} hours.')
-        with open(self.backtest_path, 'wb+') as backtest_file:
-            pickle.dump(results, backtest_file)
-        accuracy = results['validation.metrics']['accuracy']
-        if accuracy > self.validation_results['best_backtest']:
-            self.save_best_result(accuracy, result_key='best_backtest')
-        self.save_state(
-            self.new_state_path.format(
-                'backtest',
-                time.time(),
-                accuracy,
-                ),
-            )
         print(f'{ts()}: train_stocks routine end.')
         return results
 
@@ -751,7 +838,7 @@ class Cauldron(torch.nn.Module):
         candelabrum = self.candelabrum
         ts = self.get_timestamp
         if verbosity > 0:
-            print(f'{ts()}: back-test routine start.')
+            print(f'{ts()}: validate_stocks routine start.')
         self.eval()
         for symbol, candles in enumerate(candelabrum):
             sym_ticker = str(symbols[symbol]).upper()
@@ -781,7 +868,7 @@ class Cauldron(torch.nn.Module):
                 shuffle=False,
                 drop_last=True,
                 )
-            self.calibrate_network(validation_data)
+            #self.calibrate_network(validation_data)
             forecast = list()
             for batch, targets in validation_data:
                 inputs_probs, inputs_ext = fibify(
@@ -792,7 +879,7 @@ class Cauldron(torch.nn.Module):
                     targets[:, 3],
                     extensions=None,
                     )
-                predictions = forward(inputs_probs)
+                predictions, loss, accuracy = forward(inputs_probs)
                 forecast.append(index_to_price(predictions, inputs_ext))
                 predictions_indices = predictions.argmax(-1)
                 targets_indices = targets_probs.argmax(-1)
@@ -803,7 +890,7 @@ class Cauldron(torch.nn.Module):
                 n_correct += correct
                 n_total += n_batch
             inputs_probs, inputs_ext = fibify(final_batch[:, 3])
-            predictions = forward(inputs_probs)
+            predictions = forward(inputs_probs)[0]
             forecast.append(index_to_price(predictions, inputs_ext))
             forecast = torch.cat(forecast)
             results[symbol]['forecast'] = forecast.flatten().tolist()
