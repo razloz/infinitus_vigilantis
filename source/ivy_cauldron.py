@@ -14,8 +14,10 @@ from time import localtime, strftime
 from random import randint
 from os import path, mkdir, environ
 from os.path import dirname, realpath, abspath
-from torch.nn.functional import interpolate
 from torch.nn.init import uniform_
+from torch.nn import Transformer, LayerNorm
+from torch.nn import TransformerDecoder, TransformerDecoderLayer
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.data import DataLoader, TensorDataset
 from torch import topk, stack
 from torch.fft import rfft
@@ -29,22 +31,47 @@ __version__ = 'gardneri'
 
 
 class ModifiedHuberLoss(torch.nn.Module):
-    def __init__(self, reduction='mean'):
-        """Modified Huber Loss for Binary Classification."""
+    def __init__(
+        self,
+        epsilon=1e-10,
+        gamma=0.75,
+        penalties=(0.3, 0.7),
+        reduction='mean',
+        ):
+        """
+        Modified Huber Loss for Binary Classification.
+            kwargs:
+                epsilon     ->  a small float to avoid division by 0
+                gamma       ->  a float less than 1.0
+                penalties   ->  a tuple of floats that sums to 1.0
+                reduction   ->  either 'mean' or 'sum'
+        """
         super(ModifiedHuberLoss, self).__init__()
+        self.alpha = penalties[0]
+        self.beta = penalties[1]
+        self.epsilon = epsilon
+        self.gamma = gamma
         self.reduction = reduction
 
     def forward(self, predictions, targets):
-        """Quadratically smoothed hinge loss for classification tasks.
-            args:
-                predictions -> real-valued softmax classifier scores
-                targets -> true binary class labels (+1, -1)
         """
+        Tensors should be in the shape of [batch, prob_array]
+            args:
+                predictions     ->  tanh prediction classifier scores
+                targets         ->  true binary class labels (+1, -1)
+        """
+        elements = predictions.shape[-1]
+        negative_weight = float(elements - 1)
+        weight_adj = targets.clone().detach()
+        weight_adj[weight_adj < 1] *= -negative_weight
+        weight_adj[weight_adj == 1] *= self.alpha
+        weight_adj[weight_adj > 1] *= self.beta
         loss = torch.where(
             targets * predictions > -1,
             (1 - targets * predictions).clamp(min=0).pow(2),
             -4 * targets * predictions,
             )
+        loss = ((loss + self.epsilon) * weight_adj).pow(1 / self.gamma)
         if self.reduction == 'mean':
             return loss.mean()
         else:
@@ -133,54 +160,85 @@ class Cauldron(torch.nn.Module):
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
         n_benchmarks, n_time, n_features = benchmarks.shape
-        n_batch = 20
-        n_forecast = 20
+        n_batch = 5
+        n_forecast = 5
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
+        fib_ext = [
+            0.00, 0.118, 0.250, 0.382, 0.500,
+            0.618, 0.750, 0.882, 1.00,
+            ]
         self.fib_ext = torch.tensor(
-            [0.00, 0.118, 0.250, 0.382, 0.500, 0.618, 0.750, 0.882, 1.00],
+            fib_ext,
             device=self.DEVICE,
             dtype=torch.float,
             )
+        n_fibs = len(fib_ext) * 2
         self.fib_range = torch.zeros(
-            len(self.fib_ext) * 2,
+            n_fibs,
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_fibs = int(self.fib_range.shape[-1])
-        n_duplicate = 20
+        n_duplicate = 8
+        self.d_range = range(n_duplicate)
         n_model = n_fibs * n_duplicate
         n_hidden = n_model
-        n_heads = 6
+        n_heads = 3
         n_layers = 3
-        n_dropout = 0.5
-        n_eps = 1e-7 # 1e-8
+        n_dropout = φ - 1.5
+        n_eps = 1e-20
         n_learning_rate = (φ - 1) ** 21 # 1e-1
-        n_betas = (0.88, 0.99999) # (1 - 1e-1, 1 - 1e-3)
-        n_weight_decay = (1 / 137) ** 5 # 1e-2
-        #self.loss_fn = torch.nn.CrossEntropyLoss()
-        #self.loss_fn = torch.nn.HuberLoss(reduction='sum', delta=1.0)
+        n_betas = (0.9, 0.9999) # (1 - 1e-1, 1 - 1e-3)
+        n_weight_decay = (1 / 137) ** 3 # 1e-2
         self.loss_fn = ModifiedHuberLoss(reduction='mean')
-        self.network = torch.nn.Transformer(
+        activation_fn = 'gelu'
+        layer_kwargs = dict(
+            d_model=n_model,
+            nhead=n_heads,
+            dim_feedforward=n_hidden,
+            dropout=n_dropout,
+            activation=activation_fn,
+            layer_norm_eps=n_eps,
+            batch_first=True,
+            norm_first=True,
+            bias=True,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
+        norm_kwargs = dict(
+            normalized_shape=n_model,
+            eps=n_eps,
+            elementwise_affine=True,
+            bias=True,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
+        self.encoder = TransformerEncoder(
+            TransformerEncoderLayer(**layer_kwargs),
+            n_layers,
+            LayerNorm(**norm_kwargs),
+            )
+        self.decoder = TransformerDecoder(
+            TransformerDecoderLayer(**layer_kwargs),
+            n_layers,
+            LayerNorm(**norm_kwargs),
+            )
+        self.network = Transformer(
             d_model=n_model,
             nhead=n_heads,
             num_encoder_layers=n_layers,
             num_decoder_layers=n_layers,
             dim_feedforward=n_hidden,
             dropout=n_dropout,
-            activation='gelu',
+            activation=activation_fn,
+            custom_encoder=self.encoder,
+            custom_decoder=self.decoder,
             layer_norm_eps=n_eps,
             batch_first=True,
-            norm_first=False,
+            norm_first=True,
             device=self.DEVICE,
             dtype=torch.float,
             )
-        # self.optimizer = torch.optim.Rprop(
-            # self.parameters(),
-            # lr=n_learning_rate,
-            # etas=n_etas,
-            # step_sizes=n_step_sizes,
-            # )
         self.optimizer = torch.optim.AdamW(
             self.parameters(),
             lr=n_learning_rate,
@@ -190,9 +248,6 @@ class Cauldron(torch.nn.Module):
             amsgrad=False,
             maximize=False,
             foreach=False,
-            # capturable=False,
-            # differentiable=False,
-            # fused=None,
             )
         self.benchmarks = benchmarks
         self.candelabrum = candelabrum
@@ -253,13 +308,17 @@ class Cauldron(torch.nn.Module):
                 self.optimizer.load_state_dict(state['optimizer'])
             if 'network' in state:
                 self.network.load_state_dict(state['network'])
+            if 'encoder' in state:
+                self.encoder.load_state_dict(state['encoder'])
+            if 'decoder' in state:
+                self.decoder.load_state_dict(state['decoder'])
             if 'validation' in state:
                 self.validation_results = dict(state['validation'])
         except FileNotFoundError:
             if self.verbosity > 0:
                 logging.info('No state found, creating default.')
             if self.set_weights:
-                i = self.constants['batch_affix']
+                i = 1e-21
                 if self.verbosity > 0:
                     logging.info(f'Initializing with bounds of {-i} to {i}')
                 for name, param in self.network.named_parameters():
@@ -273,6 +332,8 @@ class Cauldron(torch.nn.Module):
     def get_state_dicts(self):
         """Returns module params in a dictionary."""
         return {
+            'decoder': self.decoder.state_dict(),
+            'encoder': self.encoder.state_dict(),
             'network': self.network.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'validation': dict(self.validation_results),
@@ -365,57 +426,30 @@ class Cauldron(torch.nn.Module):
         self.validation_results['best_validation'] = 0.0
         self.validation_results['calibration_index'] = 0
 
-    def forward(self, inputs, targets=None):
+    def forward(self, inputs):
         """Returns predictions from inputs."""
         constants = self.constants
-        dims = constants['output_dims']
         n_batch = constants['n_batch']
         n_duplicate = constants['n_duplicate']
         n_model = constants['n_model']
         n_fibs = constants['n_fibs']
-        batch_affix = constants['batch_affix']
-        loss_fn = self.loss_fn
-        network = self.network
-        optimizer = self.optimizer
-        predictions = list()
-        training = True if targets is not None else False
-        mae = 0 if training else None
-        accuracy = 0
-        loss = 0
-        if training:
-            optimizer.zero_grad()
-            targets = (targets + batch_affix).softmax(-1)
-        inputs_stack = list()
+        d_range = self.d_range
         stack = torch.stack
-        for t in inputs:
-            inputs_stack.append(stack([t for _ in range(n_duplicate)]))
-        inputs_stack = torch.stack(inputs_stack).view(n_batch, n_model)
-        state = network(inputs_stack, inputs_stack)
+        inputs = stack(
+            [stack([t for _ in d_range]) for t in inputs],
+            ).view(n_batch, n_model)
+        state = self.network(inputs, inputs)
         state = state.view(n_batch, n_duplicate, n_fibs)
-        state = state[:, -1, :].view(n_batch, n_fibs).softmax(-1)
-        if training:
-            state_indices = state.argmax(-1)
-            targets_indices = targets.argmax(-1)
-            index_check = state_indices == targets_indices
-            correct = sum([1 if c else 0 for c in index_check])
-            accuracy = correct / n_batch
-            cost = ((1 - accuracy) + batch_affix) ** φ
-            loss = loss_fn(state, targets) ** φ
-            loss = (loss + cost) / (4 * π * n_batch * φ)
-            loss = loss.sqrt() * 4
-            loss.backward()
-            optimizer.step()
-            #print(loss)
-        return state.clone().detach(), float(loss), float(accuracy)
+        return state[:, -1, :].view(n_batch, n_fibs) #.softmax(-1)
 
     def calibrate(
         self,
         dataset,
-        depth=1000,
-        max_delve=300,
+        depth=9999,
+        max_delve=120,
         deep_learn=True,
-        loss_target=0.9,
-        accuracy_target=0.05,
+        loss_target=0.55,
+        accuracy_target=0.55,
         symbol_name='',
         ):
         """Calibrate network to fit symbol data."""
@@ -426,14 +460,12 @@ class Cauldron(torch.nn.Module):
         n_batch = constants['n_batch']
         forward = self.forward
         optimizer = self.optimizer
-        loss_fn = torch.nn.CrossEntropyLoss()
+        loss_fn = self.loss_fn
         fibify = self.fibify
-        fib_len = self.fib_range.shape[-1]
         debug_anomalies = self.debug_anomalies
         debug_mode = self.debug_mode
         verbosity = self.verbosity
         inf = torch.inf
-        stack = torch.stack
         visits = 0
         least_loss = inf
         best_accuracy = 0
@@ -443,10 +475,12 @@ class Cauldron(torch.nn.Module):
         self.train()
         start_time = time.time()
         while delving:
-            accuracy = 0
-            batches = 0
-            loss = 0
+            dolven_batches = 0
+            dolven_correct = 0
+            dolven_elements = 0
+            dolven_loss = 0
             for batch, targets in dataset:
+                optimizer.zero_grad()
                 inputs_probs, inputs_ext = fibify(
                     batch[:, 3],
                     extensions=None,
@@ -460,24 +494,22 @@ class Cauldron(torch.nn.Module):
                     probs *= 0
                     probs -= 1.0
                     probs[t] += 2.0
-                state = forward(inputs_probs, targets_probs)
-                predictions = state[0]
-                loss += state[1]
-                accuracy += state[2]
-                batches += 1
+                predictions = forward(inputs_probs)
+                loss = loss_fn(predictions.tanh(), targets_probs)
+                loss.backward()
+                optimizer.step()
+                dolven_loss += loss.item()
+                index_match = predictions.argmax(-1) == targets_probs.argmax(-1)
+                dolven_correct += predictions[index_match].shape[0]
+                dolven_elements += n_batch
+                dolven_batches += 1
+            accuracy = dolven_correct / dolven_elements
+            #cost = ((1 - accuracy) + batch_affix) ** φ
+            #loss = (cost * (loss / dolven_batches).pow(φ)).sqrt()
+            loss = dolven_loss / dolven_batches
             visits += 1
-            loss /= batches
-            accuracy /= batches
-            print(epoch_msg.format(visits, loss, accuracy, batches))
+            print(epoch_msg.format(visits, loss, accuracy, dolven_batches))
             if debug_mode:
-                print(inputs_probs)
-                print('inputs_probs', inputs_probs.shape)
-                print(targets_probs)
-                print('targets_probs', targets_probs.shape)
-                print(predictions)
-                print('predictions', predictions.shape)
-                print(f'accuracy: {accuracy}, loss: {loss}')
-                print(f'visits: {visits}, batches: {batches}')
                 debug_anomalies(file_name=f'{time.time()}')
             if loss < least_loss and accuracy > best_accuracy:
                 best_state = deepcopy(get_state_dicts())
@@ -591,18 +623,16 @@ class Cauldron(torch.nn.Module):
                     targets[:, 3],
                     extensions=None,
                     )
-                predictions, loss, accuracy = forward(inputs_probs)
+                predictions = forward(inputs_probs)
                 forecast.append(index_to_price(predictions, inputs_ext))
-                predictions_indices = predictions.argmax(-1)
-                targets_indices = targets_probs.argmax(-1)
-                index_check = predictions_indices == targets_indices
-                correct = sum([1 if c else 0 for c in index_check])
+                index_match = predictions.argmax(-1) == targets_probs.argmax(-1)
+                correct = predictions[index_match].shape[0]
                 results[symbol]['correct'] += correct
                 results[symbol]['total'] += n_batch
                 n_correct += correct
                 n_total += n_batch
             inputs_probs, inputs_ext = fibify(final_batch[:, 3])
-            predictions = forward(inputs_probs)[0]
+            predictions = forward(inputs_probs)
             forecast.append(index_to_price(predictions, inputs_ext))
             forecast = torch.cat(forecast)
             accuracy = results[symbol]['correct'] / results[symbol]['total']

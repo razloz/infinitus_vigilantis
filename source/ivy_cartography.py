@@ -33,6 +33,7 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
     candles = candles[-data_trim:, :]
     data_len = len(candles)
     rescale = False
+    final_date = timestamps[-1]
     if 0 != chart_size < data_len:
         candles = candles[-chart_size:]
         timestamps = timestamps[-chart_size:]
@@ -188,7 +189,7 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
         ax1.plot(data_range, forecast, **pkws)
     # Finalize
     rnc = round(float(cdl_close[-1]), 3)
-    t = f'[ {rnc} ]   {symbol}  @  {timestamps[-1]}'
+    t = f'[ {rnc} ]   {symbol}  @  {final_date}'
     fig.suptitle(t, fontsize=18)
     plt.savefig(str(chart_path))
     plt.clf()
