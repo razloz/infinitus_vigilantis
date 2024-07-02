@@ -20,7 +20,7 @@ from torch.nn import TransformerDecoder, TransformerDecoderLayer
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.data import DataLoader, TensorDataset
 from torch import topk, stack
-from torch.fft import rfft
+from torch.fft import fft
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
@@ -160,8 +160,8 @@ class Cauldron(torch.nn.Module):
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
         n_benchmarks, n_time, n_features = benchmarks.shape
-        n_batch = 5
-        n_forecast = 5
+        n_batch = 34
+        n_forecast = 34
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
         fib_ext = [
@@ -179,18 +179,33 @@ class Cauldron(torch.nn.Module):
             device=self.DEVICE,
             dtype=torch.float,
             )
-        n_duplicate = 8
-        self.d_range = range(n_duplicate)
-        n_model = n_fibs * n_duplicate
-        n_hidden = n_model
+        n_gru = n_fibs
         n_heads = 3
         n_layers = 3
+        n_model = n_batch * n_fibs
+        n_hidden = n_model
         n_dropout = φ - 1.5
-        n_eps = 1e-20
+        n_eps = 1e-10
         n_learning_rate = (φ - 1) ** 21 # 1e-1
-        n_betas = (0.9, 0.9999) # (1 - 1e-1, 1 - 1e-3)
-        n_weight_decay = (1 / 137) ** 3 # 1e-2
-        self.loss_fn = ModifiedHuberLoss(reduction='mean')
+        n_betas = (0.7, 0.997) # (0.9, 0.999)
+        n_weight_decay = (1 / 137) ** 2 # 1e-2
+        self.gru = torch.nn.GRU(
+            input_size=n_fibs * n_batch,
+            hidden_size=n_batch,
+            num_layers=n_fibs,
+            bias=False,
+            batch_first=False,
+            dropout=n_dropout,
+            bidirectional=True,
+            device=self.DEVICE,
+            dtype=torch.float,
+            )
+        self.loss_fn = ModifiedHuberLoss(
+            epsilon=n_eps,
+            gamma=3/7,
+            penalties=(0.00001, 0.99999),
+            reduction='mean',
+            )
         activation_fn = 'gelu'
         layer_kwargs = dict(
             d_model=n_model,
@@ -226,8 +241,6 @@ class Cauldron(torch.nn.Module):
         self.network = Transformer(
             d_model=n_model,
             nhead=n_heads,
-            num_encoder_layers=n_layers,
-            num_decoder_layers=n_layers,
             dim_feedforward=n_hidden,
             dropout=n_dropout,
             activation=activation_fn,
@@ -235,7 +248,7 @@ class Cauldron(torch.nn.Module):
             custom_decoder=self.decoder,
             layer_norm_eps=n_eps,
             batch_first=True,
-            norm_first=True,
+            norm_first=False,
             device=self.DEVICE,
             dtype=torch.float,
             )
@@ -245,9 +258,9 @@ class Cauldron(torch.nn.Module):
             betas=n_betas,
             eps=n_eps,
             weight_decay=n_weight_decay,
-            amsgrad=False,
+            amsgrad=True,
             maximize=False,
-            foreach=False,
+            foreach=True,
             )
         self.benchmarks = benchmarks
         self.candelabrum = candelabrum
@@ -264,6 +277,7 @@ class Cauldron(torch.nn.Module):
             'n_fibs': n_fibs,
             'n_inputs': n_inputs,
             'n_targets': n_targets,
+            'n_gru': n_gru,
             'n_model': n_model,
             'n_heads': n_heads,
             'n_layers': n_layers,
@@ -274,8 +288,7 @@ class Cauldron(torch.nn.Module):
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
             'batch_affix': n_eps,
-            'n_duplicate': n_duplicate,
-            'output_dims': [n_fibs],
+            'output_size': n_batch * n_fibs,
             'n_forecast': n_forecast,
             }
         self.validation_results = {
@@ -312,13 +325,15 @@ class Cauldron(torch.nn.Module):
                 self.encoder.load_state_dict(state['encoder'])
             if 'decoder' in state:
                 self.decoder.load_state_dict(state['decoder'])
+            if 'gru' in state:
+                self.gru.load_state_dict(state['decoder'])
             if 'validation' in state:
                 self.validation_results = dict(state['validation'])
         except FileNotFoundError:
             if self.verbosity > 0:
                 logging.info('No state found, creating default.')
             if self.set_weights:
-                i = 1e-21
+                i = self.constants['n_eps']
                 if self.verbosity > 0:
                     logging.info(f'Initializing with bounds of {-i} to {i}')
                 for name, param in self.network.named_parameters():
@@ -336,6 +351,7 @@ class Cauldron(torch.nn.Module):
             'encoder': self.encoder.state_dict(),
             'network': self.network.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'gru': self.gru.state_dict(),
             'validation': dict(self.validation_results),
             }
 
@@ -430,34 +446,39 @@ class Cauldron(torch.nn.Module):
         """Returns predictions from inputs."""
         constants = self.constants
         n_batch = constants['n_batch']
-        n_duplicate = constants['n_duplicate']
+        n_heads = constants['n_heads']
         n_model = constants['n_model']
         n_fibs = constants['n_fibs']
-        d_range = self.d_range
-        stack = torch.stack
-        inputs = stack(
-            [stack([t for _ in d_range]) for t in inputs],
-            ).view(n_batch, n_model)
-        state = self.network(inputs, inputs)
-        state = state.view(n_batch, n_duplicate, n_fibs)
-        return state[:, -1, :].view(n_batch, n_fibs) #.softmax(-1)
+        output_size = constants['output_size']
+        gru_layer = self.gru(inputs.flatten().unsqueeze(0))[1]
+        fft_layer = fft(gru_layer.transpose(0, 1), n=n_model, dim=-1)
+        fft_layer = (fft_layer.real.cosh() * fft_layer.imag.sinh()).tanh()
+        state = self.network(
+            fft_layer,
+            fft_layer,
+            )[-1, -output_size:].view(
+                    n_batch,
+                    n_fibs,
+                    ).tanh().softmax(-1)
+        return state
 
     def calibrate(
         self,
         dataset,
-        depth=9999,
-        max_delve=120,
-        deep_learn=True,
-        loss_target=0.55,
-        accuracy_target=0.55,
+        depth=3,
+        max_delve=45,
+        deep_learn=False,
+        loss_target=9999,
+        accuracy_target=0.95,
         symbol_name='',
         ):
         """Calibrate network to fit symbol data."""
         from copy import deepcopy
         get_state_dicts = self.get_state_dicts
         constants = self.constants
-        batch_affix = constants['batch_affix']
         n_batch = constants['n_batch']
+        n_eps = constants['n_eps']
+        output_size = constants['output_size']
         forward = self.forward
         optimizer = self.optimizer
         loss_fn = self.loss_fn
@@ -495,7 +516,8 @@ class Cauldron(torch.nn.Module):
                     probs -= 1.0
                     probs[t] += 2.0
                 predictions = forward(inputs_probs)
-                loss = loss_fn(predictions.tanh(), targets_probs)
+                loss = loss_fn(predictions, targets_probs)
+                loss = (loss * output_size ** 2) * n_eps
                 loss.backward()
                 optimizer.step()
                 dolven_loss += loss.item()
@@ -540,7 +562,7 @@ class Cauldron(torch.nn.Module):
             self.train_stocks()
         return None
 
-    def train_stocks(self):
+    def train_stocks(self, random_flip=False):
         """Train network on stock data."""
         constants = self.constants
         n_batch = constants['n_batch']
@@ -582,8 +604,9 @@ class Cauldron(torch.nn.Module):
             while data_trim % n_batch != 0:
                 data_trim -= 1
             candles = candles[-data_trim:, :]
-            if randint(0, 1) == 0:
-                candles = candles.flip(0)
+            if random_flip:
+                if randint(0, 1) == 0:
+                    candles = candles.flip(0)
             datasets = self.get_datasets(
                 candles,
                 benchmark_data=False,
@@ -909,12 +932,10 @@ class Cauldron(torch.nn.Module):
                     targets[:, 3],
                     extensions=None,
                     )
-                predictions, loss, accuracy = forward(inputs_probs)
+                predictions = forward(inputs_probs)
+                index_match = predictions.argmax(-1) == targets_probs.argmax(-1)
+                correct = predictions[index_match].shape[0]
                 forecast.append(index_to_price(predictions, inputs_ext))
-                predictions_indices = predictions.argmax(-1)
-                targets_indices = targets_probs.argmax(-1)
-                index_check = predictions_indices == targets_indices
-                correct = sum([1 if c else 0 for c in index_check])
                 results[symbol]['correct'] += correct
                 results[symbol]['total'] += n_batch
                 n_correct += correct

@@ -22,6 +22,7 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
     """Charting for IVy candles."""
     global plt
     if not chart_path: chart_path = './charts/active.png'
+    print('Plotting', chart_path)
     if verbose: print(f'Cartography: creating chart for {symbol}...')
     plot_features = ['open', 'high', 'low', 'close', 'volume',
                      'price_wema', 'volume_wema', 'price_mid', 'volume_mid',
@@ -32,24 +33,24 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
         data_trim -= 1
     candles = candles[-data_trim:, :]
     data_len = len(candles)
-    rescale = False
+    if data_len < data_trim:
+        print('Error in cartography: data_len < data_trim')
+        return None
     final_date = timestamps[-1]
-    if 0 != chart_size < data_len:
-        candles = candles[-chart_size:]
-        timestamps = timestamps[-chart_size:]
-        data_len = len(timestamps)
-        rescale = True
-    else:
-        chart_size = data_len
+    candles = candles[-chart_size:]
+    timestamps = timestamps[-chart_size:]
+    if len(timestamps) != chart_size:
+        print('Error in cartography: len(timestamps) != chart_size')
+        return None
+    data_len = len(timestamps)
     if forecast is not None:
-        if rescale:
-            forecast = forecast[-(data_len + batch_size):]
-        else:
-            forecast += [None for _ in range(batch_size)]
-        print(len(forecast))
-        timestamps += ['' for _ in range(batch_size)]
+        forecast_len = chart_size + batch_size
+        forecast = forecast[-forecast_len:]
+        if len(forecast) != forecast_len:
+            print('Error in cartography: len(forecast) != forecast_len')
+            return None
+        timestamps += [' ' for _ in range(batch_size)]
         data_len = len(timestamps)
-        print(data_len)
     data_range = range(data_len)
     features_range = range(len(candles))
     ohlc = ['open', 'high', 'low', 'close']
@@ -186,7 +187,7 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
         pkws['label'] = f'Forecast: {forecast[-1]}'
         pkws['linestyle'] = 'solid'
         pkws['linewidth'] = wid_line * 1.1
-        ax1.plot(data_range, forecast, **pkws)
+        ax1.plot(range(len(forecast)), forecast, **pkws)
     # Finalize
     rnc = round(float(cdl_close[-1]), 3)
     t = f'[ {rnc} ]   {symbol}  @  {final_date}'

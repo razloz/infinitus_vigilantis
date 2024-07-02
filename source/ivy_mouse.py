@@ -501,7 +501,15 @@ class ThreeBlindMice():
         chit_chat('\b: starting server')
         asyncio.run(__start_server__(self.address), debug=debug)
 
-    def build_https(self, skip_charts=True, skip_validation=True):
+    def build_https(
+        self,
+        skip_charts=True,
+        skip_validation=True,
+        price_limit=55.0,
+        ):
+        """
+        Create website documents.
+        """
         from pandas import read_csv
         candles_path = path.join(ROOT_PATH, 'candelabrum', '{}.ivy')
         https_path = HTTPS_PATH
@@ -525,10 +533,10 @@ class ThreeBlindMice():
         for key, value in metrics.items():
             if key == 'validation.metrics': continue
             key = int(key)
-            picks[symbols[key]] = value
+            symbol_close = candelabrum[key][-1, feature_indices['close']]
+            if symbol_close > price_limit: continue
             accuracy = float(value['accuracy'] * 0.01)
             symbol_open = candelabrum[key][0, feature_indices['close']]
-            symbol_close = candelabrum[key][-1, feature_indices['close']]
             symbol_trend = candelabrum[key][-1, feature_indices['trend']]
             symbol_zs = candelabrum[key][-1, feature_indices['price_zs']]
             volume_zs = candelabrum[key][-1, feature_indices['volume_zs']]
@@ -548,6 +556,7 @@ class ThreeBlindMice():
             rating = 0
             for signal in signals:
                 rating += 1 if signal else 0
+            picks[symbols[key]] = value
             picks[symbols[key]]['rating'] = float(rating)
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
@@ -567,7 +576,7 @@ class ThreeBlindMice():
                     candles,
                     read_csv(candles_path.format(symbol)).timestamp.tolist(),
                     chart_path=chart_path.format(symbol),
-                    chart_size=200,
+                    chart_size=600,
                     forecast=forecast,
                     batch_size=n_batch,
                     )
