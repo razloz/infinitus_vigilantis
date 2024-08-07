@@ -5,13 +5,7 @@ import math
 import os
 import pickle
 import time
-import gc
-import matplotlib.gridspec as gridspec
-import matplotlib.pyplot as plt
-from mpl_toolkits import mplot3d
-from itertools import combinations
 from time import localtime, strftime
-from random import randint
 from os import path, mkdir, environ
 from os.path import dirname, realpath, abspath
 from torch.nn.init import uniform_
@@ -19,15 +13,10 @@ from torch.nn import Transformer, LayerNorm
 from torch.nn import TransformerDecoder, TransformerDecoderLayer
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.data import DataLoader, TensorDataset
-from torch import topk, stack
-from torch.fft import fft
 __author__ = 'Daniel Ward'
 __copyright__ = 'Copyright 2024, Daniel Ward'
 __license__ = 'GPL v3'
 __version__ = 'gardneri'
-ᶓ = math.e
-π = math.pi
-φ = (1 + math.sqrt(5)) / 2
 
 
 class ModifiedHuberLoss(torch.nn.Module):
@@ -57,8 +46,8 @@ class ModifiedHuberLoss(torch.nn.Module):
         """
         Tensors should be in the shape of [batch, prob_array]
             args:
-                predictions     ->  softmax classifier scores
-                targets         ->  binary class labels (1, 0)
+                predictions     ->  real-valued classifier scores
+                targets         ->  true binary class labels (+1, -1)
         """
         elements = predictions.shape[-1]
         weight_adj = targets.clone().detach()
@@ -80,8 +69,9 @@ class ModifiedHuberLoss(torch.nn.Module):
 class Cauldron(torch.nn.Module):
     def __init__(
         self,
-        input_labels=('pct_chg', 'price_zs', 'volume_zs'),
-        target_labels=('pct_chg',),
+        input_labels=None,
+        target_labels=None,
+        trend_label='trend',
         verbosity=1,
         no_caching=True,
         set_weights=False,
@@ -168,41 +158,22 @@ class Cauldron(torch.nn.Module):
             target_labels = features
         input_indices = [features.index(l) for l in input_labels]
         target_indices = [features.index(l) for l in target_labels]
+        self.trend_index = features.index(trend_label)
         self.dataset_inputs = candle_stack[:, :, input_indices]
         self.dataset_targets = candle_stack[:, :, target_indices]
         n_time, n_symbols, n_features = candle_stack.shape
         n_inputs = len(input_indices)
         n_targets = len(target_indices)
-        n_heads = 5
+        n_heads = n_batch
         n_layers = 3
         n_model = n_symbols
-        n_gru = n_symbols
-        n_hidden = n_symbols
-        n_dropout = φ - 1.5
+        n_hidden = 2 ** 11
+        n_dropout = 0.3
         n_eps = 1e-10
-        n_learning_rate = (φ - 1) ** 21 # 1e-1
-        n_betas = (0.9, 0.999) # (0.9, 0.999)
-        n_weight_decay = (1 / 137) ** 5 # 1e-2
-        n_gamma = 3/4
-        penalty_delta = 1.3e-5
-        n_penalties = (penalty_delta, 1 - penalty_delta)
-        self.gru = torch.nn.GRU(
-            input_size=n_gru,
-            hidden_size=n_symbols,
-            num_layers=n_inputs,
-            bias=True,
-            batch_first=True,
-            dropout=n_dropout,
-            bidirectional=True,
-            device=self.DEVICE,
-            dtype=torch.float,
-            )
-        self.loss_fn = ModifiedHuberLoss(
-            epsilon=n_eps,
-            gamma=n_gamma,
-            penalties=n_penalties,
-            reduction='mean',
-            )
+        n_learning_rate = 1e-5
+        n_betas = (0.9, 0.9999)
+        n_weight_decay = 1e-8
+        self.loss_fn = torch.nn.MSELoss(reduction='mean')
         activation_fn = 'gelu'
         layer_kwargs = dict(
             d_model=n_model,
@@ -246,7 +217,7 @@ class Cauldron(torch.nn.Module):
             betas=n_betas,
             eps=n_eps,
             weight_decay=n_weight_decay,
-            amsgrad=True,
+            amsgrad=False,
             maximize=False,
             foreach=True,
             )
@@ -262,7 +233,6 @@ class Cauldron(torch.nn.Module):
             'n_batch': n_batch,
             'n_inputs': n_inputs,
             'n_targets': n_targets,
-            'n_gru': n_gru,
             'n_model': n_model,
             'n_heads': n_heads,
             'n_layers': n_layers,
@@ -273,14 +243,6 @@ class Cauldron(torch.nn.Module):
             'n_learning_rate': n_learning_rate,
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
-            'n_gamma': n_gamma,
-            'n_penalties': n_penalties,
-            }
-        self.validation_results = {
-            'best_backtest': 0.0,
-            'best_epoch': torch.inf,
-            'best_validation': 0.0,
-            'calibration_index': 0,
             }
         if verbosity > 0:
             for k, v in self.constants.items():
@@ -310,15 +272,11 @@ class Cauldron(torch.nn.Module):
                 self.encoder.load_state_dict(state['encoder'])
             if 'decoder' in state:
                 self.decoder.load_state_dict(state['decoder'])
-            if 'gru' in state:
-                self.gru.load_state_dict(state['decoder'])
-            if 'validation' in state:
-                self.validation_results = dict(state['validation'])
         except FileNotFoundError:
             if self.verbosity > 0:
                 logging.info('No state found, creating default.')
             if self.set_weights:
-                i = self.constants['n_eps']
+                i = 0.01 * self.constants['n_eps']
                 if self.verbosity > 0:
                     logging.info(f'Initializing with bounds of {-i} to {i}')
                 for name, param in self.network.named_parameters():
@@ -336,8 +294,6 @@ class Cauldron(torch.nn.Module):
             'encoder': self.encoder.state_dict(),
             'network': self.network.state_dict(),
             'optimizer': self.optimizer.state_dict(),
-            'gru': self.gru.state_dict(),
-            'validation': dict(self.validation_results),
             }
 
     def save_state(self, real_path, to_buffer=False, buffer_io=None):
@@ -353,37 +309,22 @@ class Cauldron(torch.nn.Module):
             bytes_obj = torch.save(bytes_obj, buffer_io)
             return bytes_obj
 
-    def reset_metrics(self):
-        """Reset network metrics."""
-        self.validation_results['best_backtest'] = 0.0
-        self.validation_results['best_epoch'] = torch.inf
-        self.validation_results['best_validation'] = 0.0
-        self.validation_results['calibration_index'] = 0
-
-    def forward(self, inputs):
-        """Returns predictions from inputs."""
-        gru = self.gru
-        network = self.network
-        state = list()
-        for t in inputs.split(1):
-            g = gru(t[0].transpose(0, 1))[1]
-            state.append(network(g, g)[-1].softmax(-1))
-        state = torch.stack(state)
-        return state
-
     def train_network(self, target_accuracy=0.995, target_loss=1e-37):
         """Train network on stock data."""
         constants = self.constants
         n_batch = constants['n_batch']
         n_eps = constants['n_eps']
         n_symbols = constants['n_symbols']
-        forward = self.forward
+        n_features = constants['n_features']
+        n_elements = n_features * n_symbols
+        network = self.network
         loss_fn = self.loss_fn
         optimizer = self.optimizer
         verbosity = self.verbosity
         load_state = self.load_state
         save_state = self.save_state
         state_path = self.state_path
+        trend_index = self.trend_index
         n_correct = 0
         n_total = 0
         results = dict()
@@ -398,170 +339,58 @@ class Cauldron(torch.nn.Module):
         final_batch = self.dataset_inputs[-n_batch:]
         n_half = int(input_dataset.shape[0] / 2)
         training_data = DataLoader(
-            TensorDataset(input_dataset[:n_half], target_dataset[:n_half]),
+            TensorDataset(
+                input_dataset[:n_half],
+                target_dataset[:n_half],
+                ),
             batch_size=n_batch,
             shuffle=False,
             drop_last=True,
             )
         validation_data = DataLoader(
-            TensorDataset(input_dataset[n_half:], target_dataset[n_half:]),
+            TensorDataset(
+                input_dataset[n_half:],
+                target_dataset[n_half:],
+                ),
             batch_size=n_batch,
             shuffle=False,
             drop_last=True,
             )
         accuracy = 0
+        batch_steps = range(n_batch)
+        accuracy_check = range(n_symbols)
         while accuracy < target_accuracy:
             accuracy = 0
             epoch_loss = 0
-            batch_count = 0
-            epoch_min = 1
-            epoch_max = -1
+            total_steps = 0
             for batch, targets in training_data:
-                targets[targets > 0] = 1
-                targets[targets <= 0] = 0
-                targets = targets.squeeze(-1)
-                predictions = forward(batch)
-                loss = loss_fn(predictions, targets) / n_batch
-                correct = 0
-                for i, b in enumerate(predictions.split(1)):
-                    for ii, p in enumerate(b.flatten().split(1)):
-                        t = targets[i, ii]
-                        if p > 0.5 < t or p <= 0.5 >= t:
-                            correct += 1
-                correct = correct / (n_batch * n_symbols)
-                loss = loss * ((1 - correct) + n_eps)
-                loss.backward()
-                optimizer.step()
-                p_max = predictions.max()
-                p_min = predictions.min()
-                if p_max > epoch_max:
-                    epoch_max = p_max
-                if p_min < epoch_min:
-                    epoch_min = p_min
-                accuracy += correct
-                epoch_loss += loss.item()
-                batch_count += 1
-            accuracy = accuracy / batch_count
-            loss = loss / batch_count
+                for step in batch_steps:
+                    inputs = batch[step].transpose(0, 1).sigmoid()
+                    target = targets[step].transpose(0, 1).sigmoid()
+                    predictions = network(inputs, target)
+                    loss = loss_fn(predictions, target)
+                    future_trend = predictions[trend_index]
+                    target = target[trend_index]
+                    correct = 0
+                    for i in accuracy_check:
+                        condi_pos = future_trend[i] >= 0.5 <= target[i]
+                        condi_neg = future_trend[i] < 0.5 > target[i]
+                        correct += 1 if condi_pos or condi_neg else 0
+                    correct = correct / n_symbols
+                    loss = (loss / n_elements) * ((1 - correct) + n_eps)
+                    loss.backward()
+                    optimizer.step()
+                    accuracy += correct
+                    epoch_loss += loss.item()
+                    total_steps += 1
+                    #vmsg = 'steps {0}; loss {1}; accuracy {2};'
+                    #print(vmsg.format(total_steps, loss.item(), correct))
+            accuracy = accuracy / total_steps
+            epoch_loss = epoch_loss / total_steps
             save_state(state_path)
             if verbosity > 0:
-                vmsg = f'\n{ts()}:\n    accuracy; {accuracy}, loss; {loss}'
-                vmsg += f'\n    epoch_max; {epoch_max}, epoch_min; {epoch_min}'
-                print(vmsg)
-            if loss <= target_loss:
+                print(f'\n{ts()}:\n    accuracy {accuracy}; loss {epoch_loss};')
+            if epoch_loss <= target_loss:
                 break
-        # with open(self.backtest_path, 'wb+') as backtest_file:
-            # pickle.dump(results, backtest_file)
-        # results['validation.metrics']['accuracy'] = accuracy
-        # if accuracy > self.validation_results['best_backtest']:
-            # self.save_best_result(accuracy, result_key='best_backtest')
-        # _path = self.new_state_path.format('backtest', time.time(), accuracy)
-        # save_state(_path)
-        # if verbosity > 0:
-            # accuracy = results['validation.metrics']['accuracy']
-            # elapsed = (time.time() - start_time) / 3600
-            # time_msg = ts()
-            # print(f'{time_msg}: over-all accuracy: {accuracy}')
-            # print(f'{time_msg}: elapsed: {elapsed} hours.')
         print(f'{ts()}: train_stocks routine end.')
         return results
-
-    def validate_network(self):
-        """Stock back-testing."""
-        constants = self.constants
-        n_batch = constants['n_batch']
-        n_symbols = constants['n_symbols']
-        fibify = self.fibify
-        index_to_price = self.index_to_price
-        forward = self.forward
-        symbols = self.symbols
-        verbosity = self.verbosity
-        n_correct = 0
-        n_total = 0
-        results = dict()
-        candelabrum = self.candelabrum
-        ts = self.get_timestamp
-        if verbosity > 0:
-            print(f'{ts()}: validate_stocks routine start.')
-        self.eval()
-        for symbol, candles in enumerate(candelabrum):
-            sym_ticker = str(symbols[symbol]).upper()
-            print(f'{ts()}: {sym_ticker} ({symbol + 1} / {n_symbols})')
-            if symbol not in results:
-                results[symbol] = dict()
-                results[symbol]['accuracy'] = 0
-                results[symbol]['correct'] = 0
-                results[symbol]['forecast'] = list()
-                results[symbol]['symbol'] = sym_ticker
-                results[symbol]['total'] = 0
-            data_trim = int(candles.shape[0])
-            while data_trim % n_batch != 0:
-                data_trim -= 1
-            candles = candles[-data_trim:, :]
-            datasets = self.get_datasets(
-                candles,
-                benchmark_data=False,
-                training=False,
-                )
-            input_dataset = datasets[0][:-n_batch, :]
-            target_dataset = datasets[1][n_batch:, :]
-            final_batch = datasets[0][-n_batch:, :]
-            validation_data = DataLoader(
-                TensorDataset(input_dataset, target_dataset),
-                batch_size=n_batch,
-                shuffle=False,
-                drop_last=True,
-                )
-            #self.calibrate_network(validation_data)
-            forecast = list()
-            for batch, targets in validation_data:
-                inputs_probs, inputs_ext = fibify(
-                    batch[:, 3],
-                    extensions=None,
-                    )
-                targets_probs, targets_ext = fibify(
-                    targets[:, 3],
-                    extensions=None,
-                    )
-                predictions = forward(inputs_probs)
-                index_match = predictions.argmax(-1) == targets_probs.argmax(-1)
-                correct = predictions[index_match].shape[0]
-                forecast.append(index_to_price(predictions, inputs_ext))
-                results[symbol]['correct'] += correct
-                results[symbol]['total'] += n_batch
-                n_correct += correct
-                n_total += n_batch
-            inputs_probs, inputs_ext = fibify(final_batch[:, 3])
-            predictions = forward(inputs_probs)[0]
-            forecast.append(index_to_price(predictions, inputs_ext))
-            forecast = torch.cat(forecast)
-            results[symbol]['forecast'] = forecast.flatten().tolist()
-            self.load_state()
-        results['validation.metrics'] = {
-            'correct': n_correct,
-            'total': n_total,
-            }
-        for key in results:
-            correct = results[key]['correct']
-            total = results[key]['total']
-            results[key]['accuracy'] = round((correct / total) * 100, 4)
-        with open(self.backtest_path, 'wb+') as backtest_file:
-            pickle.dump(results, backtest_file)
-        accuracy = results['validation.metrics']['accuracy']
-        if accuracy > self.validation_results['best_backtest']:
-            self.save_best_result(accuracy, result_key='best_backtest')
-        self.save_state(
-            self.new_state_path.format(
-                'backtest',
-                time.time(),
-                accuracy,
-                ),
-            )
-        print(f'{ts()}: back-test routine end.')
-        return results
-
-    def debug_anomalies(self, *args, **kwargs):
-        """Does things..."""
-        self.eval()
-        self.train()
-        return None
