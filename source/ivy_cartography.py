@@ -17,14 +17,14 @@ plt.style.use('dark_background')
 verbose = False
 
 
-def cartography(symbol, features, candles, timestamps, batch_size=34,
-                chart_path=None, chart_size=0, forecast=None):
+def cartography(symbol, features, candles, timestamps, batch_size=5,
+                chart_path=None, chart_size=200, forecast=None):
     """Charting for IVy candles."""
     global plt
     if not chart_path: chart_path = './charts/active.png'
     print('Plotting', chart_path)
     if verbose: print(f'Cartography: creating chart for {symbol}...')
-    plot_features = ['open', 'high', 'low', 'close', 'volume',
+    plot_features = ['open', 'high', 'low', 'close', 'volume', 'trend',
                      'price_wema', 'volume_wema', 'price_mid', 'volume_mid',
                      'price_dh', 'volume_dh', 'price_dl', 'volume_dl',]
     feature_indices = {f: features.index(f) for f in plot_features}
@@ -44,11 +44,8 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
         return None
     data_len = len(timestamps)
     if forecast is not None:
-        forecast_len = chart_size + batch_size
-        forecast = forecast[-forecast_len:]
-        if len(forecast) != forecast_len:
-            print('Error in cartography: len(forecast) != forecast_len')
-            return None
+        f_size = chart_size + batch_size
+        forecast = forecast[-f_size:]
         timestamps += [' ' for _ in range(batch_size)]
         data_len = len(timestamps)
     data_range = range(data_len)
@@ -56,10 +53,11 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
     ohlc = ['open', 'high', 'low', 'close']
     ohlc = candles[:, [feature_indices[k] for k in ohlc]].flatten()
     fig = plt.figure(figsize=(19.20, 10.80), dpi=100, constrained_layout=False)
-    sargs = dict(ncols=1, nrows=2, figure=fig, height_ratios=[4,1])
+    sargs = dict(ncols=1, nrows=3, figure=fig, height_ratios=[6,2,1])
     spec = gridspec.GridSpec(**sargs)
     ax1 = fig.add_subplot(spec[0, 0])
     ax2 = fig.add_subplot(spec[1, 0], sharex=ax1)
+    ax3 = fig.add_subplot(spec[2, 0], sharex=ax1)
     plt.xticks(ticks=data_range, labels=timestamps,
                rotation=13, fontweight='bold')
     plt.subplots_adjust(left=0.09, bottom=0.09, right=0.91,
@@ -81,18 +79,22 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
     ax2.set_ylabel('Volume', fontweight='bold')
     ax2.yaxis.set_major_locator(mticker.AutoLocator())
     ax2.yaxis.set_major_formatter(mticker.EngFormatter())
+    ax3.grid(True, color=(0.4, 0.4, 0.4))
+    ax3.set_ylim((-0.01, 1.01))
+    ax3.set_ylabel('Trend Forecast', fontweight='bold')
     xticks = ax1.xaxis.get_ticklabels()
     plt.setp(xticks[:], visible=False)
+    plt.setp(ax2.xaxis.get_ticklabels()[:], visible=False)
     # Dynamic width stuff
     tbb = ax1.get_tightbbox(fig.canvas.get_renderer()).get_points()
     xb = tbb[1][0] - tbb[0][0]
-    wid_base = (xb / chart_size) * 0.5
+    wid_base = (xb / data_len) * 0.5
     wid_wick = wid_base * 0.21
     wid_cdls = wid_base * 0.89
     wid_line = wid_base * 0.34
     # Fibonacci retracements
     pkws = {
-        'alpha': 1.0,
+        'alpha': 0.5,
         'color': '#F3E6D0',
         'label': None,
         'linestyle': 'dotted',
@@ -102,15 +104,14 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
     fib_range = ylim_high - ylim_low
     fib_lines = [
         round(float(ylim_high), 2),
-        round(float(ylim_high - (fib_range * 0.118)), 2),
-        round(float(ylim_high - (fib_range * 0.250)), 2),
-        round(float(ylim_high - (fib_range * 0.382)), 2),
-        round(float(ylim_high - (fib_range * 0.500)), 2),
-        round(float(ylim_high - (fib_range * 0.618)), 2),
-        round(float(ylim_high - (fib_range * 0.750)), 2),
-        round(float(ylim_high - (fib_range * 0.882)), 2),
+        0.118, 0.250, 0.382, 0.500, 0.618, 0.750, 0.882,
         round(float(ylim_low), 2),
         ]
+    fib_len = len(fib_lines) - 1
+    for i, v in enumerate(fib_lines):
+        if i == 0 or i == fib_len:
+            continue
+        fib_lines[i] = round(float(ylim_high - (fib_range * v)), 2)
     fib_axes = ax1.twinx()
     fib_axes.grid(False)
     fib_axes.set_ylabel('Retracements', fontweight='bold')
@@ -128,6 +129,7 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
         fib_axes.plot(fib_x, [y, y], **pkws)
         thick_lines = not thick_lines
     # Candle stuff
+    pkws['alpha'] = 1.0
     cdl_open = candles[:, feature_indices['open']].flatten()
     cdl_high = candles[:, feature_indices['high']].flatten()
     cdl_low = candles[:, feature_indices['low']].flatten()
@@ -156,7 +158,7 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
     # Per sample plots
     pkws = {'linestyle': 'solid', 'linewidth': wid_line}
     for key in plot_features:
-        if key in ['open', 'high', 'low', 'close', 'volume']:
+        if key in ['open', 'high', 'low', 'close', 'volume', 'trend']:
             continue
         cdl_data = candles[:, feature_indices[key]].flatten()
         #cdl_range = range(len(cdl_data))
@@ -182,12 +184,19 @@ def cartography(symbol, features, candles, timestamps, batch_size=34,
             ax2.plot(features_range, cdl_data, **pkws)
     # Plot Forecast
     if forecast is not None:
-        pkws['alpha'] = 1.0
-        pkws['color'] = '#FFA600'
-        pkws['label'] = f'Forecast: {forecast[-1]}'
+        trend = candles[:, feature_indices['trend']].flatten()
+        trend = [0.75 if t > 0 else 0.25 for t in trend]
+        trend += [0.5 for _ in range(batch_size)]
+        x_range = range(len(trend))
         pkws['linestyle'] = 'solid'
         pkws['linewidth'] = wid_line * 1.1
-        ax1.plot(range(len(forecast)), forecast, **pkws)
+        pkws['alpha'] = 0.5
+        pkws['color'] = '#6F00FF'
+        pkws['label'] = 'Trend'
+        ax3.plot(x_range, trend, **pkws)
+        pkws['color'] = '#FFF5AB'
+        pkws['label'] = 'Forecast'
+        ax3.plot(x_range, forecast, **pkws)
     # Finalize
     rnc = round(float(cdl_close[-1]), 3)
     t = f'[ {rnc} ]   {symbol}  @  {final_date}'

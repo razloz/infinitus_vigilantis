@@ -31,7 +31,6 @@ PUSHED_PATH = path.join(ROOT_PATH, 'resources', 'ivy.pushed')
 HTTPS_PATH = path.join(ROOT_PATH, 'https')
 PATHING = (
     path.join(ROOT_PATH, 'cauldron', 'cauldron.state'),
-    path.join(ROOT_PATH, 'candelabrum', 'candelabrum.benchmarks'),
     path.join(ROOT_PATH, 'candelabrum', 'candelabrum.candles'),
     path.join(ROOT_PATH, 'candelabrum', 'candelabrum.features'),
     path.join(ROOT_PATH, 'candelabrum', 'candelabrum.symbols'),
@@ -41,7 +40,6 @@ REQUEST_HEADERS = (
     b'10000100',
     b'10000010',
     b'10000001',
-    b'10000000',
 )
 
 
@@ -302,11 +300,9 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=1):
         cauldron = ivy_cauldron.Cauldron()
         state_path = cauldron.state_path
         chit_chat(f'\b: training network for {hours} hours')
-        cauldron.train_network(
-            hours=hours,
-            checkpoint=checkpoint,
-            validate=False,
-            )
+        cauldron = ivy_cauldron.Cauldron(debug_mode=False)
+        cauldron.train_network()
+        cauldron.validate_network()
         cauldron = None
         del(cauldron)
         gc.collect()
@@ -388,7 +384,6 @@ def __merge_states__(*args, **kwargs):
             finalize=True,
         )
     )
-    base_cauldron.reset_metrics()
     base_cauldron.save_state(state_path)
     for file_name in cauldron_files:
         if file_name == 'cauldron.state':
@@ -488,8 +483,9 @@ class ThreeBlindMice():
         checkpoint = int(self.settings['checkpoint'])
         while True:
             self.merge_states()
-            cauldron = ivy_cauldron.Cauldron(debug_mode=False)
+            cauldron = ivy_cauldron.Cauldron(verbosity=3, debug_mode=False)
             cauldron.train_network()
+            cauldron.validate_network()
             cauldron = None
             del(cauldron)
             gc.collect()
@@ -516,31 +512,28 @@ class ThreeBlindMice():
         charts_path = abspath(path.join(https_path, 'charts'))
         cauldron = ivy_cauldron.Cauldron()
         if not skip_validation:
-            chit_chat('\b: back-testing neural network')
-            metrics = cauldron.validate_stocks()
+            chit_chat('\b: validating network')
+            metrics = cauldron.validate_network()
         else:
-            with open(cauldron.backtest_path, 'rb') as backtest_file:
-                metrics = pickle.load(backtest_file)
-        symbols = cauldron.symbols
+            with open(cauldron.validation_path, 'rb') as file_obj:
+                metrics = pickle.load(file_obj)
         features = cauldron.features
         candelabrum = cauldron.candelabrum
         n_batch = cauldron.constants['n_batch']
-        n_half = int(n_batch / 2)
         _labels = ('close', 'trend', 'price_zs', 'price_wema', 'volume_zs')
         feature_indices = {k: features.index(k) for k in _labels}
         picks = dict()
         chit_chat('\b: generating technical rating')
-        for key, value in metrics.items():
-            if key == 'validation.metrics': continue
-            key = int(key)
-            symbol_close = candelabrum[key][-1, feature_indices['close']]
+        for i, (symbol_name, symbol_data) in enumerate(candelabrum.items()):
+            symbol_close = symbol_data[-1, feature_indices['close']]
             if symbol_close > price_limit: continue
-            accuracy = float(value['accuracy'] * 0.01)
-            symbol_open = candelabrum[key][0, feature_indices['close']]
-            symbol_trend = candelabrum[key][-1, feature_indices['trend']]
-            symbol_zs = candelabrum[key][-1, feature_indices['price_zs']]
-            volume_zs = candelabrum[key][-1, feature_indices['volume_zs']]
-            symbol_wema = candelabrum[key][-1, feature_indices['price_wema']]
+            symbol_metrics = metrics[i]
+            accuracy = float(symbol_metrics['accuracy'] * 0.01)
+            symbol_open = symbol_data[0, feature_indices['close']]
+            symbol_trend = symbol_data[-1, feature_indices['trend']]
+            symbol_zs = symbol_data[-1, feature_indices['price_zs']]
+            volume_zs = symbol_data[-1, feature_indices['volume_zs']]
+            symbol_wema = symbol_data[-1, feature_indices['price_wema']]
             open_close = [symbol_open, symbol_close]
             symbol_max = max(open_close)
             symbol_min = min(open_close)
@@ -556,8 +549,8 @@ class ThreeBlindMice():
             rating = 0
             for signal in signals:
                 rating += 1 if signal else 0
-            picks[symbols[key]] = value
-            picks[symbols[key]]['rating'] = float(rating)
+            picks[symbol_name] = symbol_metrics
+            picks[symbol_name]['rating'] = float(rating)
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
         picks = picks.index[:100].tolist()
@@ -565,24 +558,23 @@ class ThreeBlindMice():
             chit_chat('\b: plotting charts')
             read_csv = pandas.read_csv
             chart_path = abspath(path.join(charts_path, '{}_market.png'))
-            for symbol_index, candles in enumerate(candelabrum):
-                symbol = symbols[symbol_index]
+            for ndx, (symbol, candles) in enumerate(candelabrum.items()):
                 if symbol in ('QQQ', 'SPY'):
                     continue
-                forecast = metrics[symbol_index]['forecast']
+                forecast = metrics[ndx]['forecast']
                 cartography(
                     symbol,
                     features,
                     candles,
                     read_csv(candles_path.format(symbol)).timestamp.tolist(),
                     chart_path=chart_path.format(symbol),
-                    chart_size=600,
+                    chart_size=200,
                     forecast=forecast,
                     batch_size=n_batch,
                     )
         chit_chat('\b: building html documents')
         cabinet = ivy_https.build(
-            symbols,
+            list(candelabrum.keys()),
             features,
             candelabrum,
             metrics,

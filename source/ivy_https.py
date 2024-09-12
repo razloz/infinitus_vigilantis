@@ -128,7 +128,7 @@ def build_metrics(metrics):
     label_string = """<div style="padding:5px;grid-column:1/1;"><h3>"""
     value_string = """<div style="padding:5px;grid-column:2/10;"><h3>"""
     for key, value in metrics.items():
-        if key == 'forecast':
+        if key in ['forecast', 'target']:
             continue
         label_string += f'{key}:<br>'.upper()
         if key == 'accuracy':
@@ -142,8 +142,7 @@ def build_metrics(metrics):
 
 def generate_compass(symbols, features, candelabrum, metrics):
     files = dict()
-    for index, candles in enumerate(candelabrum):
-        symbol = symbols[index]
+    for index, (symbol, candles) in enumerate(candelabrum.items()):
         if symbol in ('QQQ', 'SPY'):
             continue
         files[f'{symbol}_features.html'] = build_features(features, candles)

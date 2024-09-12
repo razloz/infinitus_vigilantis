@@ -117,7 +117,7 @@ class Candelabrum:
             end=datetime(*datetime.today().timetuple()[:3]),
             limit=10000,
             timeframe=TimeFrame.Day,
-            adjustment=Adjustment.ALL,
+            adjustment=Adjustment('all'),
             )
         watchlist = list(ivy_watchlist)
         n_glob = 3
@@ -148,25 +148,24 @@ class Candelabrum:
         return candles.iloc[n_trim:].copy()
 
     def light_candles(self):
-        from torch import cat, cuda, device, save, stack, tensor
+        from torch import cuda, device, tensor
         from torch import float as tfloat
         omenize = self.omenize
         dev = device('cuda:0' if cuda.is_available() else 'cpu')
         cdl_args = dict(device=dev, dtype=tfloat)
         tensorize = lambda df: tensor(df.to_numpy(), **cdl_args)
-        lit_candles = list()
-        symbols = list()
+        lit_candles = {}
         for symbol in ivy_watchlist:
             if symbol not in ('QQQ', 'SPY'):
+                print(f'{symbol}: lighting candles...')
                 candles = omenize(symbol, reverse_dataset=False)
                 if len(candles) == 0:
                     continue
-                lit_candles.append(tensorize(candles))
-                symbols.append(symbol)
-        return (symbols, lit_candles)
+                lit_candles[symbol] = tensorize(candles)
+        return lit_candles
 
     def get_benchmarks(self):
-        from torch import cat, cuda, device, save, tensor
+        from torch import cat, cuda, device, tensor
         from torch import float as tfloat
         omenize = self.omenize
         dev = device('cuda:0' if cuda.is_available() else 'cpu')
@@ -189,8 +188,8 @@ class Candelabrum:
         with open(self.DATA_FEATURES, 'wb+') as file_obj:
             dump(features, file_obj)
         save(benchmarks, self.DATA_BENCHMARKS)
-        symbols, lit_candles = self.light_candles()
+        lit_candles = self.light_candles()
         with open(self.DATA_SYMBOLS, 'wb+') as file_obj:
-            dump(symbols, file_obj)
+            dump(list(lit_candles.keys()), file_obj)
         save(lit_candles, self.DATA_CANDLES)
 

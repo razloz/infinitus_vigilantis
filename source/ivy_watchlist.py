@@ -117,5 +117,5 @@ small_cap = (
     'ZWS',
     )
 
-ivy_watchlist = sorted(set(composite_index + small_cap))
+ivy_watchlist = sorted(set(composite_index))
 
