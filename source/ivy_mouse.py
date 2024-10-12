@@ -366,6 +366,24 @@ def __merge_states__(*args, **kwargs):
                     base_cauldron.optimizer.state_dict(),
                 )
             )
+            proxy_cauldron.decoder.load_state_dict(
+                __merge_params__(
+                    proxy_cauldron.decoder.state_dict(),
+                    base_cauldron.decoder.state_dict(),
+                )
+            )
+            proxy_cauldron.encoder.load_state_dict(
+                __merge_params__(
+                    proxy_cauldron.encoder.state_dict(),
+                    base_cauldron.encoder.state_dict(),
+                )
+            )
+            proxy_cauldron.normalizer.load_state_dict(
+                __merge_params__(
+                    proxy_cauldron.normalizer.state_dict(),
+                    base_cauldron.normalizer.state_dict(),
+                )
+            )
     del(base_cauldron)
     gc.collect()
     base_cauldron = ivy_cauldron.Cauldron()
@@ -381,6 +399,27 @@ def __merge_states__(*args, **kwargs):
         __merge_params__(
             base_cauldron.optimizer.state_dict(),
             proxy_cauldron.optimizer.state_dict(),
+            finalize=True,
+        )
+    )
+    base_cauldron.decoder.load_state_dict(
+        __merge_params__(
+            base_cauldron.decoder.state_dict(),
+            proxy_cauldron.decoder.state_dict(),
+            finalize=True,
+        )
+    )
+    base_cauldron.encoder.load_state_dict(
+        __merge_params__(
+            base_cauldron.encoder.state_dict(),
+            proxy_cauldron.encoder.state_dict(),
+            finalize=True,
+        )
+    )
+    base_cauldron.normalizer.load_state_dict(
+        __merge_params__(
+            base_cauldron.normalizer.state_dict(),
+            proxy_cauldron.normalizer.state_dict(),
             finalize=True,
         )
     )
@@ -483,7 +522,7 @@ class ThreeBlindMice():
         checkpoint = int(self.settings['checkpoint'])
         while True:
             self.merge_states()
-            cauldron = ivy_cauldron.Cauldron(verbosity=3, debug_mode=False)
+            cauldron = ivy_cauldron.Cauldron(verbosity=2, debug_mode=False)
             cauldron.train_network()
             cauldron.validate_network()
             cauldron = None
