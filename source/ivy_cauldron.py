@@ -96,9 +96,13 @@ class Cauldron(torch.nn.Module):
         network_path = path.join(root_folder, 'cauldron')
         if not path.exists(network_path):
             mkdir(network_path)
+        wax_path = path.join(network_path, 'wax')
+        if not path.exists(wax_path):
+            mkdir(wax_path)
         best_results_path = path.join(network_path, 'best_results')
         if not path.exists(best_results_path):
             mkdir(best_results_path)
+        self.symbol_state_path = path.join(wax_path, '{0}.state')
         self.best_state_path = path.join(best_results_path, '{0}.state')
         self.new_state_path = path.join(best_results_path, '{0}.{1}.{2}.state')
         self.state_path = path.join(network_path, 'cauldron.state')
@@ -117,6 +121,7 @@ class Cauldron(torch.nn.Module):
             verbosity = 3
             logging.debug('Enabled debug mode autograd anomaly detection.')
         else:
+            torch.autograd.set_detect_anomaly(False)
             logging_level = logging.INFO
         logging.getLogger('asyncio').setLevel(logging_level)
         logging.basicConfig(
@@ -149,17 +154,20 @@ class Cauldron(torch.nn.Module):
         self.trend_index = features.index(trend_label)
         n_symbols = len(self.symbols)
         n_features = len(self.features)
-        n_batch = 34
-        n_stack_size = 9
-        n_heads = n_features
-        n_layers = 6
-        n_model = n_features
-        n_hidden = n_stack_size * 2 ** 11
-        n_dropout = 0.5
-        n_eps = 1e-10
-        n_learning_rate = 1e-8
-        n_betas = (0.9, 0.999)
-        n_weight_decay = 1e-5
+        n_batch = 10
+        n_stack_size = 4
+        n_feature_expand = 3
+        n_heads = 3
+        n_layers = 4
+        n_model = n_feature_expand
+        n_hidden = n_batch * 2 ** 9
+        n_dropout = 0.118
+        n_eps = 1e-13
+        n_betas = (0.2, 0.8)
+        zeta = 2 * n_layers * n_hidden * n_features
+        zeta = zeta * n_stack_size * n_feature_expand
+        n_learning_rate = 0.34 / zeta
+        n_weight_decay = 9 / zeta
         self.loss_fn = torch.nn.MSELoss(reduction='mean')
         activation_fn = 'gelu'
         layer_kwargs = dict(
@@ -232,6 +240,10 @@ class Cauldron(torch.nn.Module):
             'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
             'n_stack_size': n_stack_size,
+            'n_feature_expand': n_feature_expand,
+            'entropy_rate': 1 - ((((1 + math.sqrt(5)) / 2) - 1) - 0.5),
+            'trend_upper': 1, #7/8,
+            'trend_lower': -1, #1 - 7/8,
             }
         self.best_results = {
             'accuracy': 0,
@@ -280,7 +292,7 @@ class Cauldron(torch.nn.Module):
             if self.verbosity > 2:
                 logging.info('No state found, creating default.')
             if self.set_weights:
-                i = 0.1 * self.constants['n_eps']
+                i = 1
                 if self.verbosity > 2:
                     logging.info(f'Initializing with bounds of {-i} to {i}')
                 for name, param in self.network.named_parameters():
@@ -328,78 +340,150 @@ class Cauldron(torch.nn.Module):
             dataset = dataset.flip(0)
         return dataset_symbol, dataset
 
-    def train_network(self, target_accuracy=0.95, target_loss=1e-37):
+    def randomize_symbols(self, n_symbols):
+        """Randomize the order of symbol indices."""
+        import random
+        symbol_list = [i for i in range(n_symbols)]
+        sorted_symbols = []
+        while len(symbol_list) > 0:
+            i = random.choice(symbol_list)
+            sorted_symbols.append(symbol_list.pop(symbol_list.index(i)))
+        return sorted_symbols
+
+    def get_dataset(self, symbol_index, training=False):
+        constants = self.constants
+        n_batch = self.constants['n_batch']
+        tt_upper = constants['trend_upper']
+        tt_lower = constants['trend_lower']
+        trend_index = self.trend_index
+        dataset = self.candelabrum[self.symbols[symbol_index]]
+        data_steps = int(dataset.shape[0])
+        while data_steps % n_batch != 0:
+            data_steps -= 1
+        data_split = int(data_steps / 2)
+        if training:
+            dataset = dataset[:data_split]
+        else:
+            dataset = dataset[-data_split:]
+        dataset = torch.cat([
+            dataset.flip(0).clone().detach(),
+            dataset.clone().detach(),
+            ])
+        dataset = self.normalizer(dataset.transpose(0, 1))
+        dataset = dataset.transpose(0, 1).tanh()
+        trends = dataset[:, trend_index]
+        trends[trends > 0] = tt_upper
+        trends[trends <= 0] = tt_lower
+        return dataset.clone().detach()
+
+    def forward(self, input_data, use_mask=False):
+        """Returns sentiment from inputs."""
+        constants = self.constants
+        trend_index = self.trend_index
+        stack_size = constants['n_stack_size']
+        features = constants['n_features']
+        feature_expand = constants['n_feature_expand']
+        entropy_rate = constants['entropy_rate']
+        inputs = torch.zeros(stack_size, features, feature_expand)
+        for i, t in enumerate(input_data):
+            inputs[:, i, :] += t
+        if use_mask:
+            foci = inputs[:, trend_index, :].clone().detach()
+            entropy = torch.bernoulli(torch.full_like(inputs, entropy_rate))
+            inputs *= entropy
+            inputs[:, trend_index, :] = foci
+        outputs = self.network(inputs, inputs).tanh()
+        #sentiment = torch.topk(outputs, 1, dim=1, largest=True, sorted=False)
+        #return sentiment.values.squeeze(-1)
+        return outputs[-1].sum(-1)
+
+    def train_network(self, target_accuracy=0.60, target_loss=1e-37):
         """Train network on stock data."""
         self.train()
         sqrt = math.sqrt
         ts = self.get_timestamp
         verbosity = self.verbosity
         if verbosity > 0:
-            print(f'{ts()}: train_network routine start.')
+            print(f'{ts()}: train_network routine start.\n')
         constants = self.constants
         n_batch = constants['n_batch']
         n_eps = constants['n_eps']
         n_symbols = constants['n_symbols']
         n_features = constants['n_features']
-        n_heads = constants['n_heads']
+        #n_heads = constants['n_heads']
         n_hidden = constants['n_hidden']
+        n_layers = constants['n_layers']
         n_stack_size = constants['n_stack_size']
-        n_elements = n_stack_size * n_hidden * n_features
+        n_feature_expand = constants['n_feature_expand']
+        #tt_upper = constants['trend_upper']
+        #tt_lower = constants['trend_lower']
+        n_elements = n_stack_size * n_features * n_feature_expand
+        n_reduce = 2 * n_layers * n_batch * n_elements * n_hidden
+        get_dataset = self.get_dataset
         network = self.network
         loss_fn = self.loss_fn
         optimizer = self.optimizer
         normalizer = self.normalizer
         save_state = self.save_state
+        #symbol_state_path = self.symbol_state_path
         state_path = self.state_path
         trend_index = self.trend_index
-        random_dataset = self.random_dataset
-        stack = torch.stack
-        stack_range = range(n_stack_size)
-        start_time = time.time()
+        symbols = self.symbols
+        #stack = torch.stack
+        forward = self.forward
+        #stack_range = range(n_stack_size)
+        #topk = torch.topk
         accuracy = 0
-        tt_upper = 1 - n_eps
-        tt_lower = n_eps
-        decay = 0.89
-        bernoulli = torch.bernoulli
-        full_like = torch.full_like
-        phi = ((1 + sqrt(5)) / 2) - 1
-        while accuracy < target_accuracy:
+        decay = 0.55
+        #bernoulli = torch.bernoulli
+        #full_like = torch.full_like
+        #entropy_rate = 1 - ((((1 + sqrt(5)) / 2) - 1) - 0.5)
+        sorted_symbols = self.randomize_symbols(n_symbols)
+        start_time = time.time()
+        for symbol_index in sorted_symbols:
+            symbol_name = symbols[symbol_index]
+            # symbol_path = symbol_state_path.format(symbol_name)
+            # if path.exists(symbol_path):
+                # self.load_state(state_path=symbol_path)
+            dataset = get_dataset(symbol_index, training=True)
+            dataset_inputs = dataset[:-n_batch]
+            dataset_targets = dataset[n_batch:]
+            epoch_steps = range(dataset_inputs.shape[0])
+            print(f'{ts()}: Studying {symbol_name}...')
+            #while accuracy < target_accuracy:
             accuracy = 0
             epoch_loss = 0
             total_steps = 0
             decay_step = 0
-            symbol_name, dataset = random_dataset()
-            dataset = normalizer(dataset.transpose(0, 1))
-            dataset = dataset.transpose(0, 1).sigmoid()
-            trends = dataset[:, trend_index]
-            trends[trends > 0.5] = tt_upper
-            trends[trends <= 0.5] = tt_lower
-            dataset_inputs = dataset[:-n_batch]
-            dataset_targets = dataset[n_batch:]
-            for step in range(dataset_inputs.shape[0]):
+            batch_step = 0
+            loss = None
+            for step in epoch_steps:
                 inputs = dataset_inputs[step]
-                inputs = stack([inputs for _ in stack_range])
-                foci = inputs[:, trend_index].clone().detach()
-                entropy = bernoulli(full_like(inputs, phi))
-                inputs *= entropy
-                inputs[:, trend_index] = foci
                 targets = dataset_targets[step]
-                sentiment = network(inputs, inputs)[-1].sigmoid()
-                loss = loss_fn(sentiment, targets)
-                ft = sentiment[trend_index]
-                tt = targets[trend_index]
+                sentiment = forward(inputs, use_mask=True)
+                #print(sentiment)
+                decay_step += 1
+                weight = 1 - decay ** decay_step
+                ft = sentiment[trend_index].clone().detach().sigmoid()
+                tt = targets[trend_index].clone().detach().sigmoid()
                 correct = any([bool(ft > 0.5 < tt), bool(ft <= 0.5 >= tt)])
                 accuracy += 1 if correct else 0
                 total_steps += 1
-                decay_step += 1
-                cost = (1 - accuracy / total_steps) + n_eps
-                cost = n_features * ((cost ** (1 / n_features)) - 1)
-                cost = sqrt(abs(1 / (cost * n_elements)))
-                weight = 1 - decay ** decay_step
-                loss = loss * weight * cost
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
+                batch_step += 1
+                if loss is None:
+                    loss = loss_fn(sentiment, targets) * weight / n_reduce
+                else:
+                    loss += loss_fn(sentiment, targets) * weight / n_reduce
+                if batch_step == n_batch:
+                    cost = (1 - accuracy / n_batch)
+                    cost = n_features * ((cost ** (1 / n_features)) - 1)
+                    cost = abs(cost * n_elements) + n_eps
+                    loss = loss ** sqrt(1 / cost)
+                    loss.backward()
+                    optimizer.step()
+                    epoch_loss += loss.item()
+                    batch_step = 0
+                    loss = None
                 if decay_step == n_batch:
                     decay_step = 0
                 if verbosity > 2:
@@ -408,9 +492,9 @@ class Cauldron(torch.nn.Module):
                     print(f'accuracy: {vv[0]} ; loss: {vv[1]} ;\n')
             accuracy = accuracy / total_steps
             epoch_loss = epoch_loss / total_steps
+            #save_state(symbol_path)
             save_state(state_path)
             if verbosity > 0:
-                #print(f'sentiment: {ft}; target: {tt}')
                 vmsg = '{0} {1}: steps {2}; loss {3}; accuracy {4};\n'
                 print(vmsg.format(
                     ts(),
@@ -419,9 +503,6 @@ class Cauldron(torch.nn.Module):
                     epoch_loss,
                     accuracy,
                     ))
-            if epoch_loss <= target_loss:
-                break
-        return (accuracy, epoch_loss)
 
     def validate_network(self):
         """Test network on new data."""
@@ -435,6 +516,8 @@ class Cauldron(torch.nn.Module):
         n_batch = self.constants['n_batch']
         n_eps = self.constants['n_eps']
         n_stack_size = constants['n_stack_size']
+        tt_upper = constants['trend_upper']
+        tt_lower = constants['trend_lower']
         stack = torch.stack
         stack_range = range(n_stack_size)
         trend_index = self.trend_index
@@ -461,11 +544,13 @@ class Cauldron(torch.nn.Module):
                     'forecast': [],
                     'target': [],
                     }
-            dataset = normalizer(dataset.transpose(0, 1)).transpose(0, 1)
-            dataset_inputs = dataset[:-n_batch].sigmoid()
-            dataset_targets = dataset[n_batch:].sigmoid()
-            dataset_targets[dataset_targets > 0.5] = 1 - n_eps
-            dataset_targets[dataset_targets <= 0.5] = n_eps
+            dataset = normalizer(dataset.transpose(0, 1))
+            dataset = dataset.transpose(0, 1).sigmoid()
+            trends = dataset[:, trend_index]
+            trends[trends > 0.5] = tt_upper
+            trends[trends <= 0.5] = tt_lower
+            dataset_inputs = dataset[:-n_batch]
+            dataset_targets = dataset[n_batch:]
             for step in range(dataset_inputs.shape[0]):
                 inputs = dataset_inputs[step]
                 inputs = stack([inputs for _ in stack_range])
@@ -483,7 +568,7 @@ class Cauldron(torch.nn.Module):
             accuracy = metrics[ndx]['correct'] / metrics[ndx]['total']
             metrics[ndx]['accuracy'] = accuracy
             for final_batch in dataset[-n_batch:]:
-                final_batch = stack([final_batch for _ in range(13)])
+                final_batch = stack([final_batch for _ in stack_range])
                 sentiment = network(final_batch, final_batch)[-1]
                 ft = sentiment[trend_index].sigmoid()
                 metrics[ndx]['forecast'].append(float(ft))
