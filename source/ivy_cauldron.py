@@ -75,6 +75,7 @@ class Cauldron(torch.nn.Module):
         input_labels=None,
         target_labels=None,
         trend_label='trend',
+        foci_label='price_wema',
         verbosity=1,
         no_caching=True,
         set_weights=False,
@@ -97,18 +98,12 @@ class Cauldron(torch.nn.Module):
         network_path = path.join(root_folder, 'cauldron')
         if not path.exists(network_path):
             mkdir(network_path)
-        wax_path = path.join(network_path, 'wax')
-        if not path.exists(wax_path):
-            mkdir(wax_path)
         best_results_path = path.join(network_path, 'best_results')
         if not path.exists(best_results_path):
             mkdir(best_results_path)
-        self.symbol_state_path = path.join(wax_path, '{0}.state')
         self.best_state_path = path.join(best_results_path, '{0}.state')
         self.new_state_path = path.join(best_results_path, '{0}.{1}.{2}.state')
         self.state_path = path.join(network_path, 'cauldron.state')
-        self.backtest_path = path.join(network_path, 'cauldron.backtest')
-        self.validation_path = path.join(network_path, 'cauldron.validation')
         self.session_path = path.join(network_path, f'{time.time()}.state')
         self.logging_path = path.join(root_folder, 'logs', 'ivy_cauldron.log')
         if path.exists(self.logging_path):
@@ -152,8 +147,17 @@ class Cauldron(torch.nn.Module):
             weights_only=True,
             )
         self.candelabrum = candelabrum
+        if input_labels is None:
+            input_labels = [
+                'close', 'trend', 'price_zs', 'price_sdev', 'price_wema',
+                'price_dh', 'price_dl', 'price_mid',
+                ]
+        self.input_labels = input_labels
+        self.inputs_index = [features.index(v) for v in input_labels]
+        n_inputs = len(self.inputs_index)
         self.trend_index = features.index(trend_label)
-        n_batch = 5
+        self.foci_index = features.index(foci_label)
+        n_batch = 8
         self.binary_table = torch.tensor(
             [i for i in product(range(2), repeat=n_batch)],
             device=self.DEVICE,
@@ -162,17 +166,18 @@ class Cauldron(torch.nn.Module):
         n_table = self.binary_table.shape[0]
         n_symbols = len(self.symbols)
         n_features = len(self.features)
-        n_heads = 4
-        n_layers = 4
         n_model = n_table
-        n_hidden = n_batch * 2 ** 11
+        n_heads = n_model
+        n_layers = 4
+        n_hidden = 2 ** 15
         n_dropout = 0.118
         n_eps = 1e-13
-        n_betas = (0.9, 0.999)
-        zeta = 2 * n_layers * n_hidden
-        n_learning_rate = 0.34 / zeta
-        n_weight_decay = 9 / zeta
-        self.loss_fn = torch.nn.MSELoss(reduction='mean')
+        #n_betas = (0.9, 0.99)
+        #zeta = n_batch * n_model * n_hidden
+        n_learning_rate = 0.00999
+        n_lr_decay = 0.999
+        n_weight_decay = 0.999
+        self.loss_fn = torch.nn.CrossEntropyLoss()
         activation_fn = 'gelu'
         layer_kwargs = dict(
             d_model=n_model,
@@ -210,18 +215,17 @@ class Cauldron(torch.nn.Module):
             custom_decoder=self.decoder,
             **layer_kwargs,
             )
-        self.optimizer = torch.optim.AdamW(
+        self.optimizer = torch.optim.Adagrad(
             self.parameters(),
             lr=n_learning_rate,
-            betas=n_betas,
-            eps=n_eps,
+            lr_decay=n_lr_decay,
             weight_decay=n_weight_decay,
-            amsgrad=False,
-            maximize=False,
+            initial_accumulator_value=0,
+            eps=n_eps,
             foreach=True,
             )
         self.normalizer = torch.nn.InstanceNorm1d(
-            num_features=n_features,
+            num_features=n_inputs,
             eps=n_eps,
             momentum=0.1,
             affine=False,
@@ -230,10 +234,11 @@ class Cauldron(torch.nn.Module):
             dtype=torch.float,
             )
         self.constants = {
-            'n_table': n_table,
             'n_symbols': n_symbols,
             'n_features': n_features,
+            'n_inputs': n_inputs,
             'n_batch': n_batch,
+            'n_table': n_table,
             'n_model': n_model,
             'n_heads': n_heads,
             'n_layers': n_layers,
@@ -242,11 +247,12 @@ class Cauldron(torch.nn.Module):
             'activation_fn': str(repr(activation_fn)),
             'n_eps': n_eps,
             'n_learning_rate': n_learning_rate,
-            'n_betas': n_betas,
+            'n_lr_decay': n_lr_decay,
+            #'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
             'entropy_rate': 1 - ((((1 + math.sqrt(5)) / 2) - 1) - 0.5),
-            'trend_upper': 1, #7/8,
-            'trend_lower': -1, #1 - 7/8,
+            'trend_upper': 1,
+            'trend_lower': -1,
             }
         self.best_results = {
             'accuracy': 0,
@@ -363,16 +369,7 @@ class Cauldron(torch.nn.Module):
         data_steps = int(dataset.shape[0])
         while data_steps % n_batch != 0:
             data_steps -= 1
-        # data_split = int(data_steps / 2)
-        # if training:
-            # dataset = dataset[:data_split]
-        # else:
-            # dataset = dataset[-data_split:]
-        # dataset = torch.cat([
-            # dataset.flip(0).clone().detach(),
-            # dataset.clone().detach(),
-            # ])
-        dataset = dataset[-data_steps:]
+        dataset = dataset[-data_steps:, self.inputs_index]
         dataset = self.normalizer(dataset.transpose(0, 1))
         dataset = dataset.transpose(0, 1).tanh()
         trends = dataset[:, trend_index]
@@ -382,12 +379,15 @@ class Cauldron(torch.nn.Module):
 
     def prepare_dataset(self, dataset):
         """Expand features to fit model and create batch targets."""
-        print(f'{self.get_timestamp()}: preparing data...')
+        if self.verbosity > 1:
+            print(f'{self.get_timestamp()}: preparing data...')
         binary_table = self.binary_table
         constants = self.constants
         trend_index = self.trend_index
         n_batch = constants['n_batch']
         n_model = constants['n_model']
+        lim_lower = 0.001
+        lim_upper = 1 - lim_lower
         inputs = dataset[:-n_batch]
         targets = dataset[n_batch:]
         batch_targets = list()
@@ -409,29 +409,28 @@ class Cauldron(torch.nn.Module):
                 target_array.append(correct / n_batch)
             batch_targets.append(target_array)
         batch_targets = torch.tensor(batch_targets)
+        batch_targets[batch_targets < lim_lower] = lim_lower
+        batch_targets[batch_targets > lim_upper] = lim_upper
         return (expanded_inputs, batch_targets)
 
     def forward(self, inputs, use_mask=False):
         """Returns sentiment from inputs."""
-        constants = self.constants
-        trend_index = self.trend_index
-        features = constants['n_features']
-        entropy_rate = constants['entropy_rate']
         if use_mask:
-            foci = inputs[:, trend_index].clone().detach()
+            foci_index = self.foci_index
+            entropy_rate = self.constants['entropy_rate']
+            foci = inputs[:, foci_index].clone().detach()
             entropy = torch.bernoulli(torch.full_like(inputs, entropy_rate))
             inputs *= entropy
-            inputs[:, trend_index] = foci
-        outputs = self.network(inputs, inputs).sigmoid()
-        return outputs[-1]
+            inputs[:, foci_index] = foci
+        return self.network(inputs, inputs).sigmoid().softmax(-1)[-1]
 
-    def train_network(self, target_accuracy=0.60, target_loss=1e-37):
+    def train_network(self, max_time=3600, min_accuracy=0.75):
         """Train network on stock data."""
         self.train()
         sqrt = math.sqrt
         ts = self.get_timestamp
         verbosity = self.verbosity
-        if verbosity > 0:
+        if verbosity > 1:
             print(f'{ts()}: train_network routine start.\n')
         constants = self.constants
         n_batch = constants['n_batch']
@@ -442,7 +441,7 @@ class Cauldron(torch.nn.Module):
         n_hidden = constants['n_hidden']
         n_layers = constants['n_layers']
         n_elements = n_batch * n_model
-        n_reduce = 2 * n_layers * n_elements * n_hidden
+        n_reduce = n_elements * n_hidden
         get_dataset = self.get_dataset
         network = self.network
         loss_fn = self.loss_fn
@@ -456,53 +455,100 @@ class Cauldron(torch.nn.Module):
         prepare_dataset = self.prepare_dataset
         sorted_symbols = self.randomize_symbols(n_symbols)
         start_time = time.time()
+        def timed_out(start_time):
+            elapsed = time.time() - start_time
+            if verbosity > 1:
+                print(f'{ts()}: {elapsed / 60} minutes elapsed\n')
+            if elapsed >= max_time:
+                if verbosity > 1:
+                    print(f'{ts()}: max time reached...terminating.\n')
+                return True
+            else:
+                return False
         for symbol_index in sorted_symbols:
             symbol_name = symbols[symbol_index]
+            if verbosity > 1:
+                print(f'{ts()}: Studying {symbol_name}...')
+            if timed_out(start_time):
+                break
             dataset = get_dataset(symbol_index, training=True)
+            training_slice = int(dataset.shape[0] / 2)
+            while training_slice % n_batch != 0:
+                training_slice -= 1
+            dataset = dataset[:training_slice]
             dataset_inputs, dataset_targets = prepare_dataset(dataset)
             epoch_steps = range(dataset_inputs.shape[0])
-            print(f'{ts()}: Studying {symbol_name}...')
-            accuracy = 0
-            epoch_loss = 0
+            lowest_accuracy = 0
             total_steps = 0
-            for batch_start in range(0, dataset_inputs.shape[0], n_batch):
-                batch_stop = batch_start + n_batch
-                inputs = dataset_inputs[batch_start:batch_stop]
-                targets = dataset_targets[total_steps]
-                sentiment = forward(inputs, use_mask=True)
-                acc = targets[sentiment.argmax()]
-                accuracy += acc
-                cost = ((1 - acc) ** (1 / n_batch)) - 1
-                cost = abs(n_batch * n_elements * cost) + n_eps
-                loss = loss_fn(sentiment, targets) / n_reduce
-                loss = loss ** sqrt(1 / cost)
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-                total_steps += 1
-                if verbosity > 2:
-                    vv = (accuracy / total_steps, epoch_loss / total_steps)
-                    print(sentiment)
-                    print(f'accuracy: {vv[0]} ; loss: {vv[1]} ;\n')
-            accuracy = accuracy / total_steps
-            epoch_loss = epoch_loss / total_steps
-            save_state(state_path)
-            if verbosity > 0:
-                vmsg = '{0} {1}: steps {2}; loss {3}; accuracy {4};\n'
-                print(vmsg.format(
-                    ts(),
-                    symbol_name,
-                    total_steps,
-                    epoch_loss,
-                    accuracy,
-                    ))
+            max_depth = 2 ** 11
+            while min_accuracy > lowest_accuracy:
+                if verbosity > 1 and total_steps > 0:
+                    print(f'{ts()}: lowest accuracy was {lowest_accuracy}')
+                accuracy = 0
+                epoch_loss = 0
+                total_steps = 0
+                if timed_out(start_time):
+                    break
+                lowest_accuracy = 1
+                for batch_start in range(0, dataset_inputs.shape[0], n_batch):
+                    batch_stop = batch_start + n_batch
+                    inputs = dataset_inputs[batch_start:batch_stop]
+                    targets = dataset_targets[total_steps].clone().detach()
+                    depth = 0
+                    while depth < max_depth:
+                        sentiment = forward(inputs, use_mask=True)
+                        acc = float(targets[sentiment.argmax()])
+                        cost = ((1 - (acc / n_batch)) ** (1 / n_batch)) - 1
+                        cost = sqrt(1 / (abs(n_elements * cost) + n_eps))
+                        cost = cost / n_reduce
+                        loss = loss_fn(sentiment, targets.softmax(-1)) * cost
+                        loss.backward()
+                        optimizer.step()
+                        if verbosity > 2:
+                            print(
+                                'sentiment.argmax:',
+                                sentiment.argmax(),
+                                'confidence:',
+                                (sentiment.max() * n_model).sigmoid(),
+                                )
+                        if targets[sentiment.argmax()] >= min_accuracy:
+                            break
+                        depth += 1
+                    #sentiment = forward(inputs, use_mask=True)
+                    #acc = float(targets[sentiment.argmax()])
+                    if acc < lowest_accuracy:
+                        lowest_accuracy = acc
+                    accuracy += acc
+                    total_steps += 1
+                    #targets = targets.softmax(-1)
+                    #onehot = int(targets.argmax())
+                    #targets *= 0
+                    #targets[onehot] += 1
+                    epoch_loss += loss.item()
+                    if verbosity > 2:
+                        print('')
+                        print('cost:', cost)
+                        print(f'accuracy: {acc} ; loss: {loss} ;')
+                        print('')
+                accuracy = accuracy / total_steps
+                epoch_loss = epoch_loss / total_steps
+                save_state(state_path)
+                if verbosity > 1:
+                    vmsg = '{0} {1}: steps {2}; loss {3}; accuracy {4};'
+                    print(vmsg.format(
+                        ts(),
+                        symbol_name,
+                        total_steps,
+                        epoch_loss,
+                        accuracy,
+                        ))
 
     def validate_network(self):
         """Test network on new data."""
         self.eval()
         ts = self.get_timestamp
         verbosity = self.verbosity
-        if verbosity > 0:
+        if verbosity > 1:
             print(f'{ts()}: validate_network routine start.')
         network = self.network
         normalizer = self.normalizer
@@ -527,7 +573,8 @@ class Cauldron(torch.nn.Module):
         validation_correct = 0
         validation_total = 0
         for ndx, (symbol_name, dataset) in enumerate(self.candelabrum.items()):
-            print(f'{ts()} Testing: {ndx}; {symbol_name};')
+            if verbosity > 2:
+                print(f'{ts()} Testing: {ndx}; {symbol_name};')
             if ndx not in metrics.keys():
                 metrics[ndx] = {
                     'symbol': symbol_name,
@@ -566,7 +613,9 @@ class Cauldron(torch.nn.Module):
                 ft = sentiment[trend_index].sigmoid()
                 metrics[ndx]['forecast'].append(float(ft))
                 metrics[ndx]['target'].append(0.5)
-            print(f'{ts()} Results: {ndx}; {symbol_name}; accuracy {accuracy};')
+            if verbosity > 2:
+                vmsg = '{0} Results: {1}; {2}; accuracy {3};'
+                print(vmsg.format(ts(), ndx, symbol_name, accuracy))
         validation_accuracy = validation_correct / validation_total
         metrics['validation.metrics']['accuracy'] = validation_accuracy
         metrics['validation.metrics']['correct'] = validation_correct
@@ -584,7 +633,7 @@ class Cauldron(torch.nn.Module):
             self.best_results['total'] = validation_total
         with open(self.validation_path, 'wb+') as file_obj:
             pickle.dump(metrics, file_obj)
-        if verbosity > 0:
+        if verbosity > 1:
             for k, v in metrics['validation.metrics'].items():
                 print(f'{k}: {v}')
             print(f'{ts()}: validate_network routine end.')

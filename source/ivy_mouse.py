@@ -522,9 +522,9 @@ class ThreeBlindMice():
         checkpoint = int(self.settings['checkpoint'])
         while True:
             self.merge_states()
-            cauldron = ivy_cauldron.Cauldron(verbosity=2, debug_mode=False)
+            cauldron = ivy_cauldron.Cauldron(verbosity=3, debug_mode=False)
             cauldron.train_network()
-            cauldron.validate_network()
+            #cauldron.validate_network()
             cauldron = None
             del(cauldron)
             gc.collect()
