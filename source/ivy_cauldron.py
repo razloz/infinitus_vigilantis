@@ -157,7 +157,7 @@ class Cauldron(torch.nn.Module):
         n_inputs = len(self.inputs_index)
         self.trend_index = features.index(trend_label)
         self.foci_index = features.index(foci_label)
-        n_batch = 8
+        n_batch = 10
         self.binary_table = torch.tensor(
             [i for i in product(range(2), repeat=n_batch)],
             device=self.DEVICE,
@@ -168,15 +168,13 @@ class Cauldron(torch.nn.Module):
         n_features = len(self.features)
         n_model = n_table
         n_heads = n_model
-        n_layers = 4
-        n_hidden = 2 ** 15
-        n_dropout = 0.118
+        n_layers = 3
+        n_hidden = 2 ** 13
+        n_dropout = 0.34
         n_eps = 1e-13
-        #n_betas = (0.9, 0.99)
-        #zeta = n_batch * n_model * n_hidden
-        n_learning_rate = 0.00999
-        n_lr_decay = 0.999
-        n_weight_decay = 0.999
+        n_learning_rate = 9.99e-3
+        n_lr_decay = 9.99e-6
+        n_weight_decay = 9.99e-6
         self.loss_fn = torch.nn.CrossEntropyLoss()
         activation_fn = 'gelu'
         layer_kwargs = dict(
@@ -220,7 +218,7 @@ class Cauldron(torch.nn.Module):
             lr=n_learning_rate,
             lr_decay=n_lr_decay,
             weight_decay=n_weight_decay,
-            initial_accumulator_value=0,
+            initial_accumulator_value=n_eps,
             eps=n_eps,
             foreach=True,
             )
@@ -248,9 +246,8 @@ class Cauldron(torch.nn.Module):
             'n_eps': n_eps,
             'n_learning_rate': n_learning_rate,
             'n_lr_decay': n_lr_decay,
-            #'n_betas': n_betas,
             'n_weight_decay': n_weight_decay,
-            'entropy_rate': 1 - ((((1 + math.sqrt(5)) / 2) - 1) - 0.5),
+            'entropy_rate': 0.66,
             'trend_upper': 1,
             'trend_lower': -1,
             }
@@ -381,6 +378,8 @@ class Cauldron(torch.nn.Module):
         """Expand features to fit model and create batch targets."""
         if self.verbosity > 1:
             print(f'{self.get_timestamp()}: preparing data...')
+        DEVICE = self.DEVICE
+        DTYPE = torch.float
         binary_table = self.binary_table
         constants = self.constants
         trend_index = self.trend_index
@@ -391,7 +390,12 @@ class Cauldron(torch.nn.Module):
         inputs = dataset[:-n_batch]
         targets = dataset[n_batch:]
         batch_targets = list()
-        expanded_inputs = torch.zeros(inputs.shape[0], n_model)
+        expanded_inputs = torch.zeros(
+            inputs.shape[0],
+            n_model,
+            device=DEVICE,
+            dtype=DTYPE,
+            )
         for i, epoch in enumerate(inputs):
             for ii, feature in enumerate(epoch):
                 expanded_inputs[i, ii] += feature
@@ -408,7 +412,11 @@ class Cauldron(torch.nn.Module):
                         correct += 1
                 target_array.append(correct / n_batch)
             batch_targets.append(target_array)
-        batch_targets = torch.tensor(batch_targets)
+        batch_targets = torch.tensor(
+            batch_targets,
+            device=DEVICE,
+            dtype=DTYPE,
+            )
         batch_targets[batch_targets < lim_lower] = lim_lower
         batch_targets[batch_targets > lim_upper] = lim_upper
         return (expanded_inputs, batch_targets)
@@ -424,10 +432,11 @@ class Cauldron(torch.nn.Module):
             inputs[:, foci_index] = foci
         return self.network(inputs, inputs).sigmoid().softmax(-1)[-1]
 
-    def train_network(self, max_time=3600, min_accuracy=0.75):
+    def train_network(self, max_time=3600, min_accuracy=0.89, max_depth=256):
         """Train network on stock data."""
         self.train()
         sqrt = math.sqrt
+        topk = torch.topk
         ts = self.get_timestamp
         verbosity = self.verbosity
         if verbosity > 1:
@@ -469,79 +478,69 @@ class Cauldron(torch.nn.Module):
             symbol_name = symbols[symbol_index]
             if verbosity > 1:
                 print(f'{ts()}: Studying {symbol_name}...')
-            if timed_out(start_time):
-                break
             dataset = get_dataset(symbol_index, training=True)
             training_slice = int(dataset.shape[0] / 2)
             while training_slice % n_batch != 0:
                 training_slice -= 1
             dataset = dataset[:training_slice]
             dataset_inputs, dataset_targets = prepare_dataset(dataset)
-            epoch_steps = range(dataset_inputs.shape[0])
-            lowest_accuracy = 0
+            total_accuracy = 0
+            total_loss = 0
             total_steps = 0
-            max_depth = 2 ** 11
-            while min_accuracy > lowest_accuracy:
-                if verbosity > 1 and total_steps > 0:
-                    print(f'{ts()}: lowest accuracy was {lowest_accuracy}')
-                accuracy = 0
-                epoch_loss = 0
-                total_steps = 0
+            for batch_start in range(0, dataset_inputs.shape[0], n_batch):
+                batch_stop = batch_start + n_batch
+                inputs = dataset_inputs[batch_start:batch_stop]
+                targets = dataset_targets[total_steps]
+                depth = 0
+                while depth < max_depth:
+                    sentiment = forward(inputs, use_mask=True)
+                    confidence = (sentiment.max() * n_model).sigmoid().item()
+                    accuracy = float(targets[sentiment.argmax()])
+                    mean_accuracy = 0
+                    for k in topk(sentiment, 3, dim=-1, largest=True).indices:
+                        mean_accuracy += float(targets[k])
+                    mean_accuracy = mean_accuracy / 3
+                    cost = (1 - (mean_accuracy / n_batch)) ** (1 / n_batch)
+                    cost = abs(n_elements * (cost - 1)) + n_eps
+                    cost = sqrt(1 / cost) / n_reduce
+                    loss = loss_fn(sentiment, targets.softmax(-1)) * cost
+                    loss.backward()
+                    optimizer.step()
+                    if verbosity > 2:
+                        print('pattern index:', sentiment.argmax().item())
+                        print('pattern accuracy:', accuracy)
+                        print('confidence:', confidence)
+                        print('mean_accuracy:', mean_accuracy)
+                        print('cost:', cost)
+                    if mean_accuracy >= min_accuracy <= accuracy:
+                        break
+                    if timed_out(start_time):
+                        break
+                    depth += 1
+                total_accuracy += accuracy
+                total_loss += loss.item()
+                total_steps += 1
+                if verbosity > 1:
+                    print('')
+                    print('symbol_name:', symbol_name)
+                    print('depth:', depth, 'total_steps:', total_steps)
+                    print('')
                 if timed_out(start_time):
                     break
-                lowest_accuracy = 1
-                for batch_start in range(0, dataset_inputs.shape[0], n_batch):
-                    batch_stop = batch_start + n_batch
-                    inputs = dataset_inputs[batch_start:batch_stop]
-                    targets = dataset_targets[total_steps].clone().detach()
-                    depth = 0
-                    while depth < max_depth:
-                        sentiment = forward(inputs, use_mask=True)
-                        acc = float(targets[sentiment.argmax()])
-                        cost = ((1 - (acc / n_batch)) ** (1 / n_batch)) - 1
-                        cost = sqrt(1 / (abs(n_elements * cost) + n_eps))
-                        cost = cost / n_reduce
-                        loss = loss_fn(sentiment, targets.softmax(-1)) * cost
-                        loss.backward()
-                        optimizer.step()
-                        if verbosity > 2:
-                            print(
-                                'sentiment.argmax:',
-                                sentiment.argmax(),
-                                'confidence:',
-                                (sentiment.max() * n_model).sigmoid(),
-                                )
-                        if targets[sentiment.argmax()] >= min_accuracy:
-                            break
-                        depth += 1
-                    #sentiment = forward(inputs, use_mask=True)
-                    #acc = float(targets[sentiment.argmax()])
-                    if acc < lowest_accuracy:
-                        lowest_accuracy = acc
-                    accuracy += acc
-                    total_steps += 1
-                    #targets = targets.softmax(-1)
-                    #onehot = int(targets.argmax())
-                    #targets *= 0
-                    #targets[onehot] += 1
-                    epoch_loss += loss.item()
-                    if verbosity > 2:
-                        print('')
-                        print('cost:', cost)
-                        print(f'accuracy: {acc} ; loss: {loss} ;')
-                        print('')
-                accuracy = accuracy / total_steps
-                epoch_loss = epoch_loss / total_steps
-                save_state(state_path)
-                if verbosity > 1:
-                    vmsg = '{0} {1}: steps {2}; loss {3}; accuracy {4};'
-                    print(vmsg.format(
-                        ts(),
-                        symbol_name,
-                        total_steps,
-                        epoch_loss,
-                        accuracy,
-                        ))
+            total_accuracy = total_accuracy / total_steps
+            total_loss = total_loss / total_steps
+            save_state(state_path)
+            if verbosity > 1:
+                vmsg = '{0} {1}: steps {2}; loss {3}; accuracy {4};'
+                print(vmsg.format(
+                    ts(),
+                    symbol_name,
+                    total_steps,
+                    total_loss,
+                    total_accuracy,
+                    ))
+            if timed_out(start_time):
+                break
 
     def validate_network(self):
         """Test network on new data."""

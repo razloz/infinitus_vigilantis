@@ -292,17 +292,17 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=1):
     merge_states = __merge_states__
     hash_path = HASH_PATH
     pushed_path = PUSHED_PATH
+    state_path = PATHING[0]
     loops = 0
     while True:
         loops += 1
         chit_chat(f'\b: starting loop #{loops}')
         merge_states()
         cauldron = ivy_cauldron.Cauldron()
-        state_path = cauldron.state_path
         chit_chat(f'\b: training network for {hours} hours')
         cauldron = ivy_cauldron.Cauldron(debug_mode=False)
-        cauldron.train_network()
-        cauldron.validate_network()
+        study_sec = hours * 3600
+        cauldron.train_network(max_time=study_sec)
         cauldron = None
         del(cauldron)
         gc.collect()
@@ -523,8 +523,8 @@ class ThreeBlindMice():
         while True:
             self.merge_states()
             cauldron = ivy_cauldron.Cauldron(verbosity=3, debug_mode=False)
-            cauldron.train_network()
-            #cauldron.validate_network()
+            study_sec = hours * 3600
+            cauldron.train_network(max_time=study_sec)
             cauldron = None
             del(cauldron)
             gc.collect()
