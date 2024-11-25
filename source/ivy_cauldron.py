@@ -595,7 +595,8 @@ class Cauldron(torch.nn.Module):
                     print('elapsed minutes:', (time.time() - start_time) / 60)
                     print('symbol_name:', symbol_name)
                     print('depth:', depth, 'total_steps:', total_steps)
-                    print('accuracy:', total_accuracy, 'loss:', loss.item())
+                    print('accuracy:', total_accuracy / total_steps)
+                    print('loss:', total_loss / total_steps)
                     print('')
                 if timed_out(start_time):
                     break
