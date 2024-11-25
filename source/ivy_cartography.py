@@ -21,6 +21,8 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
                 chart_path=None, chart_size=200, forecast=None):
     """Charting for IVy candles."""
     global plt
+    import warnings
+    warnings.filterwarnings('ignore', category=DeprecationWarning)
     if not chart_path: chart_path = './charts/active.png'
     print('Plotting', chart_path)
     if verbose: print(f'Cartography: creating chart for {symbol}...')
@@ -69,7 +71,8 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
     ylim_high = ohlc.max()
     ax1.set_ylim((ylim_low * 0.99, ylim_high * 1.01))
     ytick_step = 0.01 * ylim_high
-    yticks_range = [round(i,2) for i in arange(ylim_low, ylim_high, ytick_step)]
+    y_arange = arange(ylim_low, ylim_high, ytick_step, dtype=float)
+    yticks_range = [round(float(i), 2) for i in y_arange]
     ax1.set_yticks(yticks_range)
     ax1.set_yticklabels(yticks_range)
     ax1.yaxis.set_major_locator(mticker.AutoLocator())
@@ -187,7 +190,9 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
         trend = candles[:, feature_indices['trend']].flatten()
         trend = [0.75 if t > 0 else 0.25 for t in trend]
         trend += [0.5 for _ in range(batch_size)]
-        x_range = range(len(trend))
+        trend_len = len(trend)
+        x_range = range(trend_len)
+        forecast = forecast.flatten()[-trend_len:]
         pkws['linestyle'] = 'solid'
         pkws['linewidth'] = wid_line * 1.1
         pkws['alpha'] = 0.5
@@ -196,7 +201,7 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
         ax3.plot(x_range, trend, **pkws)
         pkws['color'] = '#FFF5AB'
         pkws['label'] = 'Forecast'
-        ax3.plot(x_range, forecast, **pkws)
+        ax3.fill_between(x_range, forecast, 0.5, **pkws)
     # Finalize
     rnc = round(float(cdl_close[-1]), 3)
     t = f'[ {rnc} ]   {symbol}  @  {final_date}'

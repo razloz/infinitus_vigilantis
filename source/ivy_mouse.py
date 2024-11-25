@@ -300,7 +300,7 @@ def __study__(address, update_key, last_push, hours=3, checkpoint=1):
         merge_states()
         cauldron = ivy_cauldron.Cauldron()
         chit_chat(f'\b: training network for {hours} hours')
-        cauldron = ivy_cauldron.Cauldron(debug_mode=False)
+        cauldron = ivy_cauldron.Cauldron(debug_mode=False, client_mode=True)
         study_sec = hours * 3600
         cauldron.train_network(max_time=study_sec)
         cauldron = None
@@ -522,7 +522,7 @@ class ThreeBlindMice():
         checkpoint = int(self.settings['checkpoint'])
         while True:
             self.merge_states()
-            cauldron = ivy_cauldron.Cauldron(verbosity=3, debug_mode=False)
+            cauldron = ivy_cauldron.Cauldron(verbosity=2, debug_mode=False)
             study_sec = hours * 3600
             cauldron.train_network(max_time=study_sec)
             cauldron = None
@@ -549,7 +549,7 @@ class ThreeBlindMice():
         candles_path = path.join(ROOT_PATH, 'candelabrum', '{}.ivy')
         https_path = HTTPS_PATH
         charts_path = abspath(path.join(https_path, 'charts'))
-        cauldron = ivy_cauldron.Cauldron()
+        cauldron = ivy_cauldron.Cauldron(verbosity=3)
         if not skip_validation:
             chit_chat('\b: validating network')
             metrics = cauldron.validate_network()
@@ -565,7 +565,8 @@ class ThreeBlindMice():
         chit_chat('\b: generating technical rating')
         for i, (symbol_name, symbol_data) in enumerate(candelabrum.items()):
             symbol_close = symbol_data[-1, feature_indices['close']]
-            if symbol_close > price_limit: continue
+            if symbol_close > price_limit:
+                continue
             symbol_metrics = metrics[i]
             accuracy = float(symbol_metrics['accuracy'] * 0.01)
             symbol_open = symbol_data[0, feature_indices['close']]

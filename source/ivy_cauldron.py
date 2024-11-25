@@ -81,6 +81,7 @@ class Cauldron(torch.nn.Module):
         set_weights=False,
         try_cuda=True,
         debug_mode=False,
+        client_mode=False,
         ):
         """Predicts the future sentiment from stock data."""
         super(Cauldron, self).__init__()
@@ -104,6 +105,7 @@ class Cauldron(torch.nn.Module):
         self.best_state_path = path.join(best_results_path, '{0}.state')
         self.new_state_path = path.join(best_results_path, '{0}.{1}.{2}.state')
         self.state_path = path.join(network_path, 'cauldron.state')
+        self.validation_path = path.join(candelabrum_path, 'validation.results')
         self.session_path = path.join(network_path, f'{time.time()}.state')
         self.logging_path = path.join(root_folder, 'logs', 'ivy_cauldron.log')
         if path.exists(self.logging_path):
@@ -157,7 +159,7 @@ class Cauldron(torch.nn.Module):
         n_inputs = len(self.inputs_index)
         self.trend_index = features.index(trend_label)
         self.foci_index = features.index(foci_label)
-        n_batch = 10
+        n_batch = 8
         self.binary_table = torch.tensor(
             [i for i in product(range(2), repeat=n_batch)],
             device=self.DEVICE,
@@ -170,11 +172,11 @@ class Cauldron(torch.nn.Module):
         n_heads = n_model
         n_layers = 3
         n_hidden = 2 ** 13
-        n_dropout = 0.34
-        n_eps = 1e-13
-        n_learning_rate = 9.99e-3
+        n_dropout = 0.118
+        n_eps = 1e-21
+        n_learning_rate = 9.99e-5
         n_lr_decay = 9.99e-6
-        n_weight_decay = 9.99e-6
+        n_weight_decay = 9.99e-9
         self.loss_fn = torch.nn.CrossEntropyLoss()
         activation_fn = 'gelu'
         layer_kwargs = dict(
@@ -247,7 +249,7 @@ class Cauldron(torch.nn.Module):
             'n_learning_rate': n_learning_rate,
             'n_lr_decay': n_lr_decay,
             'n_weight_decay': n_weight_decay,
-            'entropy_rate': 0.66,
+            'entropy_rate': 0.892,
             'trend_upper': 1,
             'trend_lower': -1,
             }
@@ -256,8 +258,14 @@ class Cauldron(torch.nn.Module):
             'correct': 0,
             'total': 0,
             }
+        self.inscribed_candles = {
+            'last_update': 0,
+            'symbols': list(),
+            'inputs': list(),
+            'targets': list(),
+            'final': list(),
+            }
         self.to(self.DEVICE)
-        self.load_state()
         if not debug_mode:
             warnings.simplefilter('default')
         if verbosity > 2:
@@ -270,6 +278,43 @@ class Cauldron(torch.nn.Module):
                 if 'shape' in dir(param):
                     param_count += math.prod(param.shape, start=1)
             print('Cauldron parameters:', param_count)
+        self.load_state()
+        if not client_mode:
+            mtime = os.path.getmtime(symbols_path)
+            last_inscription = self.inscribed_candles['last_update']
+            if verbosity > 1:
+                vmsg = '{0}: datasets were updated on {1}.'
+                print(vmsg.format(self.get_timestamp(), time.ctime(mtime)))
+            if last_inscription == 0 or last_inscription < mtime:
+                if verbosity > 1:
+                    vmsg = '{0}: found new candles to inscribe.'
+                    print(vmsg.format(self.get_timestamp()))
+                candles_symbols = list()
+                candles_inputs = list()
+                candles_targets = list()
+                candles_final = list()
+                for symbol_index, symbol in enumerate(self.symbols):
+                    if verbosity > 1:
+                        vmsg = '{0}: inscribing sigils for {1} ({2} / {3})'
+                        print(vmsg.format(
+                            self.get_timestamp(),
+                            symbol,
+                            symbol_index + 1,
+                            n_symbols,
+                            ))
+                    dataset = self.get_dataset(symbol_index)
+                    datasets = self.prepare_dataset(dataset)
+                    dataset_inputs, dataset_targets, last_batch = datasets
+                    candles_symbols.append(symbol)
+                    candles_inputs.append(dataset_inputs)
+                    candles_targets.append(dataset_targets)
+                    candles_final.append(last_batch)
+                self.inscribed_candles['last_update'] = float(mtime)
+                self.inscribed_candles['symbols'] = candles_symbols
+                self.inscribed_candles['inputs'] = candles_inputs
+                self.inscribed_candles['targets'] = candles_targets
+                self.inscribed_candles['final'] = candles_final
+                self.save_state(self.state_path)
 
     def load_state(self, state_path=None, state=None):
         """Loads the Module."""
@@ -294,6 +339,8 @@ class Cauldron(torch.nn.Module):
                 self.normalizer.load_state_dict(state['normalizer'])
             if 'optimizer' in state:
                 self.optimizer.load_state_dict(state['optimizer'])
+            if 'inscribed_candles' in state:
+                self.inscribed_candles = dict(state['inscribed_candles'])
         except FileNotFoundError:
             if self.verbosity > 2:
                 logging.info('No state found, creating default.')
@@ -318,6 +365,7 @@ class Cauldron(torch.nn.Module):
             'network': self.network.state_dict(),
             'normalizer': self.normalizer.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'inscribed_candles': dict(self.inscribed_candles),
             }
 
     def save_state(self, real_path, to_buffer=False, buffer_io=None):
@@ -356,7 +404,8 @@ class Cauldron(torch.nn.Module):
             sorted_symbols.append(symbol_list.pop(symbol_list.index(i)))
         return sorted_symbols
 
-    def get_dataset(self, symbol_index, training=False):
+    def get_dataset(self, symbol_index):
+        """Returns normalized feature data from symbol_index."""
         constants = self.constants
         n_batch = self.constants['n_batch']
         tt_upper = constants['trend_upper']
@@ -387,18 +436,20 @@ class Cauldron(torch.nn.Module):
         n_model = constants['n_model']
         lim_lower = 0.001
         lim_upper = 1 - lim_lower
-        inputs = dataset[:-n_batch]
+        def expand_inputs(inputs):
+            expanded_inputs = torch.zeros(
+                inputs.shape[0],
+                n_model,
+                device=DEVICE,
+                dtype=DTYPE,
+                )
+            for i, epoch in enumerate(inputs):
+                for ii, feature in enumerate(epoch):
+                    expanded_inputs[i, ii] += feature
+            return expanded_inputs
+        inputs = expand_inputs(dataset[:-n_batch])
         targets = dataset[n_batch:]
         batch_targets = list()
-        expanded_inputs = torch.zeros(
-            inputs.shape[0],
-            n_model,
-            device=DEVICE,
-            dtype=DTYPE,
-            )
-        for i, epoch in enumerate(inputs):
-            for ii, feature in enumerate(epoch):
-                expanded_inputs[i, ii] += feature
         for batch_start in range(0, targets.shape[0], n_batch):
             batch_stop = batch_start + n_batch
             batch = targets[batch_start:batch_stop, trend_index]
@@ -419,10 +470,11 @@ class Cauldron(torch.nn.Module):
             )
         batch_targets[batch_targets < lim_lower] = lim_lower
         batch_targets[batch_targets > lim_upper] = lim_upper
-        return (expanded_inputs, batch_targets)
+        last_batch = expand_inputs(dataset[-n_batch:])
+        return (inputs, batch_targets, last_batch)
 
     def forward(self, inputs, use_mask=False):
-        """Returns sentiment from inputs."""
+        """Returns pattern sentiment from inputs."""
         if use_mask:
             foci_index = self.foci_index
             entropy_rate = self.constants['entropy_rate']
@@ -432,7 +484,13 @@ class Cauldron(torch.nn.Module):
             inputs[:, foci_index] = foci
         return self.network(inputs, inputs).sigmoid().softmax(-1)[-1]
 
-    def train_network(self, max_time=3600, min_accuracy=0.89, max_depth=256):
+    def train_network(
+        self,
+        max_time=3600,
+        min_accuracy=0.77,
+        max_depth=1024,
+        n_activations=4,
+        ):
         """Train network on stock data."""
         self.train()
         sqrt = math.sqrt
@@ -451,7 +509,7 @@ class Cauldron(torch.nn.Module):
         n_layers = constants['n_layers']
         n_elements = n_batch * n_model
         n_reduce = n_elements * n_hidden
-        get_dataset = self.get_dataset
+        #get_dataset = self.get_dataset
         network = self.network
         loss_fn = self.loss_fn
         optimizer = self.optimizer
@@ -461,12 +519,12 @@ class Cauldron(torch.nn.Module):
         trend_index = self.trend_index
         symbols = self.symbols
         forward = self.forward
-        prepare_dataset = self.prepare_dataset
+        #prepare_dataset = self.prepare_dataset
+        datasets = self.inscribed_candles
         sorted_symbols = self.randomize_symbols(n_symbols)
-        start_time = time.time()
         def timed_out(start_time):
             elapsed = time.time() - start_time
-            if verbosity > 1:
+            if verbosity > 2:
                 print(f'{ts()}: {elapsed / 60} minutes elapsed\n')
             if elapsed >= max_time:
                 if verbosity > 1:
@@ -474,16 +532,19 @@ class Cauldron(torch.nn.Module):
                 return True
             else:
                 return False
+        start_time = time.time()
         for symbol_index in sorted_symbols:
             symbol_name = symbols[symbol_index]
             if verbosity > 1:
                 print(f'{ts()}: Studying {symbol_name}...')
-            dataset = get_dataset(symbol_index, training=True)
-            training_slice = int(dataset.shape[0] / 2)
+            dataset_inputs = datasets['inputs'][symbol_index]
+            dataset_targets = datasets['targets'][symbol_index]
+            training_slice = int(dataset_inputs.shape[0] / 2)
             while training_slice % n_batch != 0:
                 training_slice -= 1
-            dataset = dataset[:training_slice]
-            dataset_inputs, dataset_targets = prepare_dataset(dataset)
+            dataset_inputs = dataset_inputs[:training_slice]
+            dataset_targets = dataset_targets[:training_slice]
+            #last_batch = datasets['final'][symbol_index]
             total_accuracy = 0
             total_loss = 0
             total_steps = 0
@@ -497,9 +558,16 @@ class Cauldron(torch.nn.Module):
                     confidence = (sentiment.max() * n_model).sigmoid().item()
                     accuracy = float(targets[sentiment.argmax()])
                     mean_accuracy = 0
-                    for k in topk(sentiment, 3, dim=-1, largest=True).indices:
+                    activations = topk(
+                        sentiment,
+                        n_activations,
+                        dim=-1,
+                        largest=True,
+                        sorted=False,
+                        ).indices
+                    for k in activations:
                         mean_accuracy += float(targets[k])
-                    mean_accuracy = mean_accuracy / 3
+                    mean_accuracy = mean_accuracy / n_activations
                     cost = (1 - (mean_accuracy / n_batch)) ** (1 / n_batch)
                     cost = abs(n_elements * (cost - 1)) + n_eps
                     cost = sqrt(1 / cost) / n_reduce
@@ -512,6 +580,7 @@ class Cauldron(torch.nn.Module):
                         print('confidence:', confidence)
                         print('mean_accuracy:', mean_accuracy)
                         print('cost:', cost)
+                        print('loss:', loss.item())
                     if mean_accuracy >= min_accuracy <= accuracy:
                         break
                     if timed_out(start_time):
@@ -522,8 +591,11 @@ class Cauldron(torch.nn.Module):
                 total_steps += 1
                 if verbosity > 1:
                     print('')
+                    print('time:', ts())
+                    print('elapsed minutes:', (time.time() - start_time) / 60)
                     print('symbol_name:', symbol_name)
                     print('depth:', depth, 'total_steps:', total_steps)
+                    print('accuracy:', total_accuracy, 'loss:', loss.item())
                     print('')
                 if timed_out(start_time):
                     break
@@ -545,22 +617,40 @@ class Cauldron(torch.nn.Module):
     def validate_network(self):
         """Test network on new data."""
         self.eval()
+        DEVICE = self.DEVICE
+        DTYPE = torch.float
+        binary_table = self.binary_table
+        sqrt = math.sqrt
+        topk = torch.topk
+        stack = torch.stack
         ts = self.get_timestamp
         verbosity = self.verbosity
         if verbosity > 1:
-            print(f'{ts()}: validate_network routine start.')
+            print(f'{ts()}: validate_network routine start.\n')
+        constants = self.constants
+        n_batch = constants['n_batch']
+        n_eps = constants['n_eps']
+        n_symbols = constants['n_symbols']
+        n_features = constants['n_features']
+        n_model = constants['n_model']
+        n_hidden = constants['n_hidden']
+        n_layers = constants['n_layers']
+        n_elements = n_batch * n_model
+        n_reduce = n_elements * n_hidden
+        #get_dataset = self.get_dataset
         network = self.network
+        loss_fn = self.loss_fn
+        optimizer = self.optimizer
         normalizer = self.normalizer
-        n_batch = self.constants['n_batch']
-        n_eps = self.constants['n_eps']
-        n_stack_size = constants['n_stack_size']
-        tt_upper = constants['trend_upper']
-        tt_lower = constants['trend_lower']
-        stack = torch.stack
-        stack_range = range(n_stack_size)
+        save_state = self.save_state
+        state_path = self.state_path
         trend_index = self.trend_index
-        accuracy = 0
-        total_steps = 0
+        symbols = self.symbols
+        forward = self.forward
+        #prepare_dataset = self.prepare_dataset
+        validation_accuracy = 0
+        validation_correct = 0
+        validation_total = 0
         metrics = {
             'validation.metrics': {
                 'accuracy': 0,
@@ -568,53 +658,60 @@ class Cauldron(torch.nn.Module):
                 'total': 0,
                 },
             }
-        validation_accuracy = 0
-        validation_correct = 0
-        validation_total = 0
-        for ndx, (symbol_name, dataset) in enumerate(self.candelabrum.items()):
-            if verbosity > 2:
-                print(f'{ts()} Testing: {ndx}; {symbol_name};')
-            if ndx not in metrics.keys():
-                metrics[ndx] = {
+        datasets = self.inscribed_candles
+        start_time = time.time()
+        for symbol_index in range(n_symbols):
+            symbol_name = symbols[symbol_index]
+            if verbosity > 1:
+                print(f'{ts()}: testing {symbol_name}...')
+            if symbol_index not in metrics.keys():
+                metrics[symbol_index] = {
                     'symbol': symbol_name,
                     'accuracy': 0,
                     'correct': 0,
                     'total': 0,
                     'forecast': [],
-                    'target': [],
                     }
-            dataset = normalizer(dataset.transpose(0, 1))
-            dataset = dataset.transpose(0, 1).sigmoid()
-            trends = dataset[:, trend_index]
-            trends[trends > 0.5] = tt_upper
-            trends[trends <= 0.5] = tt_lower
-            dataset_inputs = dataset[:-n_batch]
-            dataset_targets = dataset[n_batch:]
-            for step in range(dataset_inputs.shape[0]):
-                inputs = dataset_inputs[step]
-                inputs = stack([inputs for _ in stack_range])
-                targets = dataset_targets[step]
-                sentiment = network(inputs, inputs)[-1].sigmoid()
-                ft = sentiment[trend_index]
-                tt = targets[trend_index]
-                correct = any([bool(ft > 0.5 < tt), bool(ft <= 0.5 >= tt)])
-                metrics[ndx]['forecast'].append(float(ft))
-                metrics[ndx]['target'].append(float(tt))
-                metrics[ndx]['correct'] += 1 if correct else 0
-                metrics[ndx]['total'] += 1
-                validation_correct += 1 if correct else 0
-                validation_total += 1
-            accuracy = metrics[ndx]['correct'] / metrics[ndx]['total']
-            metrics[ndx]['accuracy'] = accuracy
-            for final_batch in dataset[-n_batch:]:
-                final_batch = stack([final_batch for _ in stack_range])
-                sentiment = network(final_batch, final_batch)[-1]
-                ft = sentiment[trend_index].sigmoid()
-                metrics[ndx]['forecast'].append(float(ft))
-                metrics[ndx]['target'].append(0.5)
-            if verbosity > 2:
-                vmsg = '{0} Results: {1}; {2}; accuracy {3};'
-                print(vmsg.format(ts(), ndx, symbol_name, accuracy))
+            dataset_inputs = datasets['inputs'][symbol_index]
+            dataset_targets = datasets['targets'][symbol_index]
+            last_batch = datasets['final'][symbol_index]
+            total_accuracy = 0
+            total_correct = 0
+            total_steps = 0
+            total_batches = 0
+            predictions = list()
+            target_trend = list()
+            for batch_start in range(0, dataset_inputs.shape[0], n_batch):
+                batch_stop = batch_start + n_batch
+                inputs = dataset_inputs[batch_start:batch_stop]
+                targets = dataset_targets[total_batches].clone().detach()
+                sentiment = forward(inputs, use_mask=False)
+                prediction = binary_table[sentiment.argmax()].clone().detach()
+                confidence = (sentiment.max() * n_model).sigmoid().item()
+                accuracy = float(targets[sentiment.argmax()])
+                correct = n_batch * accuracy
+                total_correct += correct
+                total_steps += n_batch
+                validation_correct += correct
+                validation_total += n_batch
+                total_batches += 1
+                predictions.append(prediction)
+            sentiment = forward(last_batch, use_mask=False)
+            prediction = binary_table[sentiment.argmax()].clone().detach()
+            predictions.append(prediction)
+            metrics[symbol_index]['forecast'] = stack(predictions)
+            metrics[symbol_index]['correct'] = total_correct
+            metrics[symbol_index]['total'] = total_steps
+            metrics[symbol_index]['accuracy'] = total_correct / total_steps
+            if verbosity > 1:
+                vmsg = '{0} {1}: correct {2}; total {3}; accuracy {4};'
+                print(vmsg.format(
+                    ts(),
+                    symbol_name,
+                    metrics[symbol_index]['correct'],
+                    metrics[symbol_index]['total'],
+                    metrics[symbol_index]['accuracy'],
+                    ))
         validation_accuracy = validation_correct / validation_total
         metrics['validation.metrics']['accuracy'] = validation_accuracy
         metrics['validation.metrics']['correct'] = validation_correct
@@ -637,3 +734,4 @@ class Cauldron(torch.nn.Module):
                 print(f'{k}: {v}')
             print(f'{ts()}: validate_network routine end.')
         return metrics
+
