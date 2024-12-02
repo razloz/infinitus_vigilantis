@@ -522,7 +522,7 @@ class ThreeBlindMice():
         checkpoint = int(self.settings['checkpoint'])
         while True:
             self.merge_states()
-            cauldron = ivy_cauldron.Cauldron(verbosity=2, debug_mode=False)
+            cauldron = ivy_cauldron.Cauldron(verbosity=1, debug_mode=False)
             study_sec = hours * 3600
             cauldron.train_network(max_time=study_sec)
             cauldron = None

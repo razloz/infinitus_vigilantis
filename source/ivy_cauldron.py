@@ -171,12 +171,12 @@ class Cauldron(torch.nn.Module):
         n_model = n_table
         n_heads = n_model
         n_layers = 3
-        n_hidden = 2 ** 13
-        n_dropout = 0.118
+        n_hidden = 2 ** 12
+        n_dropout = 0.018
         n_eps = 1e-21
         n_learning_rate = 9.99e-5
-        n_lr_decay = 9.99e-6
-        n_weight_decay = 9.99e-9
+        n_lr_decay = 9.99e-9
+        n_weight_decay = 9.99e-13
         self.loss_fn = torch.nn.CrossEntropyLoss()
         activation_fn = 'gelu'
         layer_kwargs = dict(
@@ -488,8 +488,8 @@ class Cauldron(torch.nn.Module):
         self,
         max_time=3600,
         min_accuracy=0.77,
-        max_depth=1024,
-        n_activations=4,
+        max_depth=5,
+        n_activations=2,
         ):
         """Train network on stock data."""
         self.train()
