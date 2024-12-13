@@ -47,7 +47,7 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
     data_len = len(timestamps)
     if forecast is not None:
         f_size = chart_size + batch_size
-        forecast = forecast[-f_size:]
+        forecast = forecast.flatten()[-f_size:]
         timestamps += [' ' for _ in range(batch_size)]
         data_len = len(timestamps)
     data_range = range(data_len)
@@ -192,7 +192,6 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
         trend += [0.5 for _ in range(batch_size)]
         trend_len = len(trend)
         x_range = range(trend_len)
-        forecast = forecast.flatten()[-trend_len:]
         pkws['linestyle'] = 'solid'
         pkws['linewidth'] = wid_line * 1.1
         pkws['alpha'] = 0.5
