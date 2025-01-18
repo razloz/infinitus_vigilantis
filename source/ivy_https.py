@@ -44,19 +44,19 @@ HOME_BODY = """
 """
 
 HOME_FOOT = """
-            <div style="grid-column:2/2;grid-row:1/20;height:auto;width:100%;overflow:scroll;">
-                <div style="display:grid;gap:0px;">
-                    <div style="grid-column:1/1;grid-row:1/1;">
+            <div style="grid-column:2/2;grid-row:1/20;height:900px;width:100%;overflow:scroll;">
+                <div style="display:grid;gap:10px;">
+                    <div style="grid-column:1/1;grid-row:1/4;">
                         <b><i>INDIVIDUAL METRICS</i></b>
-                        <iframe width="100%" height="auto" src="{1}" id="viewport_metrics"></iframe>
+                        <iframe width="100%" height="160px" src="{1}" id="viewport_metrics"></iframe>
                     </div>
-                    <div style="grid-column:1/1;grid-row:2/7;">
+                    <div style="grid-column:1/1;grid-row:5/15;">
                         <b><i>SYMBOL FEATURES</i></b>
-                        <iframe width="100%" height="550px" src="{0}" id="viewport_features"></iframe>
+                        <iframe width="100%" height="675px" src="{0}" id="viewport_features"></iframe>
                     </div>
-                    <div style="grid-column:1/1;grid-row:8/8;">
+                    <div style="grid-column:1/1;grid-row:16/20;">
                         <b><i>TOTAL VALIDATION RESULTS</i></b>
-                        <iframe width="100%" height="auto" src="validation_results.html" id="viewport_validation"></iframe>
+                        <iframe width="100%" height="125px" src="validation_results.html" id="viewport_validation"></iframe>
                     </div>
                 </div>
             </div>
@@ -132,7 +132,7 @@ def build_metrics(metrics):
             continue
         label_string += f'{key}:<br>'.upper()
         if key == 'accuracy':
-            value_string += f'{value}%<br>'
+            value_string += f'{value * 100}%<br>'
         else:
             value_string += f'{value}<br>'
     label_string += """</h3></div>"""

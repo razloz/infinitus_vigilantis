@@ -83,8 +83,8 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
     ax2.yaxis.set_major_locator(mticker.AutoLocator())
     ax2.yaxis.set_major_formatter(mticker.EngFormatter())
     ax3.grid(True, color=(0.4, 0.4, 0.4))
-    ax3.set_ylim((-0.01, 1.01))
-    ax3.set_ylabel('Trend Forecast', fontweight='bold')
+    ax3.set_ylabel('Sentiment', fontweight='bold')
+    ax3.set_ylim((-1.03, 1.03))
     xticks = ax1.xaxis.get_ticklabels()
     plt.setp(xticks[:], visible=False)
     plt.setp(ax2.xaxis.get_ticklabels()[:], visible=False)
@@ -164,7 +164,6 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
         if key in ['open', 'high', 'low', 'close', 'volume', 'trend']:
             continue
         cdl_data = candles[:, feature_indices[key]].flatten()
-        #cdl_range = range(len(cdl_data))
         pkws['label'] = f'{key}: {round(float(cdl_data[-1]), 3)}'
         dev_feats = ['price_mid', 'price_dh', 'price_dl',
                      'volume_mid', 'volume_dh', 'volume_dl']
@@ -187,20 +186,20 @@ def cartography(symbol, features, candles, timestamps, batch_size=5,
             ax2.plot(features_range, cdl_data, **pkws)
     # Plot Forecast
     if forecast is not None:
-        trend = candles[:, feature_indices['trend']].flatten()
-        trend = [0.75 if t > 0 else 0.25 for t in trend]
-        trend += [0.5 for _ in range(batch_size)]
-        trend_len = len(trend)
-        x_range = range(trend_len)
+        zs = candles[:, features.index('price_zs')].flatten()
+        zs[zs > 1] = 1
+        zs[zs < -1] = -1
+        forecast[forecast > 1] = 1
+        forecast[forecast < -1] = -1
         pkws['linestyle'] = 'solid'
         pkws['linewidth'] = wid_line * 1.1
         pkws['alpha'] = 0.5
         pkws['color'] = '#6F00FF'
-        pkws['label'] = 'Trend'
-        ax3.plot(x_range, trend, **pkws)
+        pkws['label'] = 'Z-Score'
+        ax3.plot(range(len(zs)), zs, **pkws)
         pkws['color'] = '#FFF5AB'
-        pkws['label'] = 'Forecast'
-        ax3.fill_between(x_range, forecast, 0.5, **pkws)
+        pkws['label'] = 'Prediction'
+        ax3.fill_between(range(len(forecast)), forecast, 0.0, **pkws)
     # Finalize
     rnc = round(float(cdl_close[-1]), 3)
     t = f'[ {rnc} ]   {symbol}  @  {final_date}'

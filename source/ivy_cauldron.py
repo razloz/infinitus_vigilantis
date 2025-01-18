@@ -25,10 +25,8 @@ __version__ = 'gardneri'
 class Cauldron(torch.nn.Module):
     def __init__(
         self,
-        input_labels=None,
-        target_labels=None,
+        input_labels=['price_zs'],
         target_label='price_zs',
-        foci_label='price_zs',
         verbosity=1,
         no_caching=True,
         set_weights=False,
@@ -102,32 +100,24 @@ class Cauldron(torch.nn.Module):
             weights_only=True,
             )
         self.candelabrum = candelabrum
-        if input_labels is None:
-            input_labels = ['close', 'price_zs', 'price_wema']
-            foci_label = 'price_zs'
         self.input_labels = input_labels
         self.inputs_index = [features.index(v) for v in input_labels]
         n_inputs = len(self.inputs_index)
         self.target_index = features.index(target_label)
-        self.foci_index = input_labels.index(foci_label)
+        n_expand = 32 - n_inputs
+        self.padding = torch.nn.ZeroPad1d((n_expand, 0))
         n_batch = 10
-        self.binary_table = torch.tensor(
-            [i for i in product(range(2), repeat=n_batch)],
-            device=self.DEVICE,
-            dtype=torch.float,
-            )
-        n_table = self.binary_table.shape[0]
         n_symbols = len(self.symbols)
         n_features = len(self.features)
-        n_model = n_table
-        n_heads = 2
-        n_layers = 3
-        n_hidden = 2 ** 8
+        n_model = n_expand + 1
+        n_heads = 4
+        n_layers = 9
+        n_hidden = 2 ** 11
         n_dropout = 0.118
         n_eps = 1e-6
-        n_learning_rate = 9.99e-3
-        n_lr_decay = 9.99e-4
-        n_weight_decay = 9.99e-7
+        n_learning_rate = 0.0999
+        n_lr_decay = 0.0999
+        n_weight_decay = 0.0999
         activation_fn = 'gelu'
         layer_kwargs = dict(
             d_model=n_model,
@@ -174,22 +164,12 @@ class Cauldron(torch.nn.Module):
             eps=n_eps,
             foreach=True,
             )
-        self.normalizer = torch.nn.InstanceNorm1d(
-            num_features=n_features,
-            eps=n_eps,
-            momentum=0.1,
-            affine=False,
-            track_running_stats=False,
-            device=self.DEVICE,
-            dtype=torch.float,
-            )
-        self.loss_fn = torch.nn.CrossEntropyLoss()
+        self.loss_fn = torch.nn.MSELoss(reduction='mean')
         self.constants = {
             'n_symbols': n_symbols,
             'n_features': n_features,
             'n_inputs': n_inputs,
             'n_batch': n_batch,
-            'n_table': n_table,
             'n_model': n_model,
             'n_heads': n_heads,
             'n_layers': n_layers,
@@ -212,7 +192,6 @@ class Cauldron(torch.nn.Module):
             'symbols': list(),
             'inputs': list(),
             'targets': list(),
-            'batch_targets': list(),
             'final': list(),
             }
         self.to(self.DEVICE)
@@ -242,10 +221,9 @@ class Cauldron(torch.nn.Module):
                 candles_symbols = list()
                 candles_inputs = list()
                 candles_targets = list()
-                candles_batch_targets = list()
                 candles_final = list()
                 for symbol_index, symbol in enumerate(self.symbols):
-                    if verbosity > 1:
+                    if verbosity > 2:
                         vmsg = '{0}: inscribing sigils for {1} ({2} / {3})'
                         print(vmsg.format(
                             self.get_timestamp(),
@@ -253,20 +231,20 @@ class Cauldron(torch.nn.Module):
                             symbol_index + 1,
                             n_symbols,
                             ))
-                    dataset = self.get_dataset(symbol_index)
-                    datasets = self.prepare_dataset(dataset)
+                    datasets = self.prepare_dataset(symbol_index)
                     candles_symbols.append(symbol)
                     candles_inputs.append(datasets[0])
                     candles_targets.append(datasets[1])
-                    candles_batch_targets.append(datasets[2])
-                    candles_final.append(datasets[3])
+                    candles_final.append(datasets[2])
                 self.inscribed_candles['last_update'] = float(mtime)
                 self.inscribed_candles['symbols'] = candles_symbols
                 self.inscribed_candles['inputs'] = candles_inputs
                 self.inscribed_candles['targets'] = candles_targets
-                self.inscribed_candles['batch_targets'] = candles_batch_targets
                 self.inscribed_candles['final'] = candles_final
                 self.save_state(self.state_path)
+                if verbosity > 1:
+                    vmsg = '{0}: all candles inscribed with sigils.'
+                    print(vmsg.format(self.get_timestamp()))
 
     def load_state(self, state_path=None, state=None):
         """Loads the Module."""
@@ -287,8 +265,6 @@ class Cauldron(torch.nn.Module):
                 self.encoder.load_state_dict(state['encoder'])
             if 'network' in state:
                 self.network.load_state_dict(state['network'])
-            if 'normalizer' in state:
-                self.normalizer.load_state_dict(state['normalizer'])
             if 'optimizer' in state:
                 self.optimizer.load_state_dict(state['optimizer'])
             if 'inscribed_candles' in state:
@@ -315,7 +291,6 @@ class Cauldron(torch.nn.Module):
             'decoder': self.decoder.state_dict(),
             'encoder': self.encoder.state_dict(),
             'network': self.network.state_dict(),
-            'normalizer': self.normalizer.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'inscribed_candles': dict(self.inscribed_candles),
             }
@@ -343,86 +318,29 @@ class Cauldron(torch.nn.Module):
             sorted_symbols.append(symbol_list.pop(symbol_list.index(i)))
         return sorted_symbols
 
-    def get_dataset(self, symbol_index):
-        """Returns normalized feature data from symbol_index."""
-        constants = self.constants
+    def prepare_dataset(self, symbol_index, epsilon=1e-15):
+        """Expand features to fit model and create batch targets."""
+        if self.verbosity > 2:
+            print(f'{self.get_timestamp()}: preparing data...')
         n_batch = self.constants['n_batch']
+        padding = self.padding
         dataset = self.candelabrum[self.symbols[symbol_index]]
         data_steps = int(dataset.shape[0])
         while data_steps % n_batch != 0:
             data_steps -= 1
         dataset = dataset[-data_steps:]
-        dataset = self.normalizer(dataset.transpose(0, 1))
-        dataset = dataset.transpose(0, 1).tanh()
-        return dataset.clone().detach()
-
-    def prepare_dataset(self, dataset):
-        """Expand features to fit model and create batch targets."""
-        if self.verbosity > 1:
-            print(f'{self.get_timestamp()}: preparing data...')
-        DEVICE = self.DEVICE
-        DTYPE = torch.float
-        binary_table = self.binary_table
-        constants = self.constants
-        n_batch = constants['n_batch']
-        n_model = constants['n_model']
-        n_eps = constants['n_eps']
-        lim_lower = 0.001
-        lim_upper = 1 - lim_lower
-        def expand_inputs(inputs):
-            expanded_inputs = torch.zeros(
-                inputs.shape[0],
-                n_model,
-                device=DEVICE,
-                dtype=DTYPE,
-                )
-            for i, epoch in enumerate(inputs):
-                for ii, feature in enumerate(epoch):
-                    expanded_inputs[i, ii] += feature
-            expanded_inputs[expanded_inputs == 0] += n_eps
-            return expanded_inputs
-        inputs = expand_inputs(dataset[:-n_batch, self.inputs_index])
+        inputs = padding(dataset[:-n_batch, self.inputs_index])
         targets = dataset[n_batch:, self.target_index]
-        batch_targets = list()
-        for batch_start in range(0, targets.shape[0], n_batch):
-            batch_stop = batch_start + n_batch
-            batch = targets[batch_start:batch_stop]
-            target_array = list()
-            for pattern in binary_table:
-                correct = 0
-                for i, t in enumerate(pattern):
-                    if batch[i] > 0 < t or batch[i] <= 0 >= t:
-                        correct += 1
-                target_array.append(correct / n_batch)
-            batch_targets.append(target_array)
-        batch_targets = torch.tensor(
-            batch_targets,
-            device=DEVICE,
-            dtype=DTYPE,
-            )
-        batch_targets[batch_targets < lim_lower] = lim_lower
-        batch_targets[batch_targets > lim_upper] = lim_upper
-        last_batch = expand_inputs(dataset[-n_batch:])
-        return (inputs, targets, batch_targets, last_batch)
+        last_batch = padding(dataset[-n_batch:, self.inputs_index])
+        inputs[inputs == 0] += epsilon
+        last_batch[last_batch == 0] += epsilon
+        return (inputs, targets, last_batch)
 
-    def forward(self, inputs, use_mask=False):
+    def forward(self, inputs):
         """Returns pattern sentiment from inputs."""
-        if use_mask:
-            foci_index = self.foci_index
-            entropy_rate = self.constants['entropy_rate']
-            foci = inputs[:, foci_index].clone().detach()
-            entropy = torch.bernoulli(torch.full_like(inputs, entropy_rate))
-            inputs *= entropy
-            inputs[:, foci_index] = foci
-        return self.network(inputs, inputs)[-1].sigmoid()
+        return self.network(inputs, inputs)[-1, -self.constants['n_batch']:]
 
-    def train_network(
-        self,
-        max_time=3600,
-        min_accuracy=0.77,
-        max_depth=5,
-        n_activations=3,
-        ):
+    def train_network(self, max_time=3600):
         """Train network on stock data."""
         self.train()
         sqrt = math.sqrt
@@ -443,14 +361,13 @@ class Cauldron(torch.nn.Module):
         network = self.network
         loss_fn = self.loss_fn
         optimizer = self.optimizer
-        normalizer = self.normalizer
         save_state = self.save_state
         state_path = self.state_path
-        binary_table = self.binary_table
         symbols = self.symbols
         forward = self.forward
         datasets = self.inscribed_candles
         sorted_symbols = self.randomize_symbols(n_symbols)
+        delve_range = range(n_batch)
         def timed_out(start_time):
             elapsed = time.time() - start_time
             if verbosity > 2:
@@ -468,52 +385,46 @@ class Cauldron(torch.nn.Module):
                 print(f'{ts()}: Studying {symbol_name}...')
             dataset_inputs = datasets['inputs'][symbol_index]
             dataset_targets = datasets['targets'][symbol_index]
-            dataset_batch_targets = datasets['batch_targets'][symbol_index]
             training_slice = int(dataset_inputs.shape[0] / 2)
             while training_slice % n_batch != 0:
                 training_slice -= 1
             training_batches = int(training_slice / n_batch)
             dataset_inputs = dataset_inputs[:training_slice]
             dataset_targets = dataset_targets[:training_slice]
-            dataset_batch_targets = dataset_batch_targets[:training_batches]
-            #if randint(0, 1) == 1:
-            #    dataset_inputs = dataset_inputs.flip(0).flip(-1)
-            #    dataset_targets = dataset_targets.flip(-1)
-            #    dataset_batch_targets = dataset_batch_targets.flip(0).flip(-1)
-            #    print(dataset_inputs[-1])
-            #    print(dataset_targets[-1])
-            #    print(dataset_batch_targets[-1])
             total_accuracy = 0
             total_loss = 0
             total_steps = 0
-            depth = 0
-            loss = None
             for batch_start in range(0, dataset_inputs.shape[0], n_batch):
                 batch_stop = batch_start + n_batch
                 inputs = dataset_inputs[batch_start:batch_stop]
                 targets = dataset_targets[batch_start:batch_stop]
-                batch_targets = dataset_batch_targets[total_steps]
-                encoded_targets = batch_targets.softmax(-1)
-                sentiment = forward(inputs, use_mask=True)
-                prediction = binary_table[sentiment.argmax()]
-                confidence = sentiment.max().item()
+                loss = None
+                for depth in delve_range:
+                    depth += 1
+                    prediction = forward(inputs[:depth])[:depth]
+                    if verbosity > 2:
+                        print('prediction:', prediction.shape)
+                        print(prediction)
+                    if loss:
+                        loss += loss_fn(prediction, targets[:depth])
+                    else:
+                        loss = loss_fn(prediction, targets[:depth])
+                loss.backward()
+                optimizer.step()
+                confidence = prediction.mean(0)
                 correct = 0
                 for i, p in enumerate(prediction):
                     t = targets[i]
                     if t > 0 < p or t <= 0 >= p:
                         correct += 1
                 accuracy = correct / n_batch
-                cost = (1 - (accuracy / n_batch)) ** (1 / n_batch)
-                loss = loss_fn(sentiment.log(), encoded_targets) * cost
-                loss.backward()
-                optimizer.step()
+                #cost = (1 - (accuracy / n_batch)) ** (1 / n_batch)
                 total_accuracy += accuracy
                 total_loss += loss.item()
                 total_steps += 1
                 if verbosity > 2:
-                    print('pattern index:', sentiment.argmax().item())
+                    print('prediction:', prediction.tolist())
                     print('accuracy:', accuracy)
-                    print('confidence:', confidence)
                     print('loss:', loss.item())
             total_accuracy = total_accuracy / total_steps
             total_loss = total_loss / total_steps
@@ -535,7 +446,6 @@ class Cauldron(torch.nn.Module):
         self.eval()
         DEVICE = self.DEVICE
         DTYPE = torch.float
-        binary_table = self.binary_table
         sqrt = math.sqrt
         topk = torch.topk
         stack = torch.stack
@@ -556,7 +466,6 @@ class Cauldron(torch.nn.Module):
         network = self.network
         loss_fn = self.loss_fn
         optimizer = self.optimizer
-        normalizer = self.normalizer
         save_state = self.save_state
         state_path = self.state_path
         symbols = self.symbols
@@ -597,9 +506,8 @@ class Cauldron(torch.nn.Module):
                 batch_stop = batch_start + n_batch
                 inputs = dataset_inputs[batch_start:batch_stop]
                 targets = dataset_targets[batch_start:batch_stop]
-                sentiment = forward(inputs, use_mask=False)
-                prediction = binary_table[sentiment.argmax()]
-                confidence = sentiment.max().item()
+                prediction = forward(inputs)
+                confidence = prediction.mean(0)
                 correct = 0
                 for i, p in enumerate(prediction):
                     ti = targets[i]
@@ -612,8 +520,7 @@ class Cauldron(torch.nn.Module):
                 validation_total += n_batch
                 total_batches += 1
                 predictions.append(prediction.clone().detach())
-            sentiment = forward(last_batch, use_mask=False)
-            prediction = binary_table[sentiment.argmax()]
+            prediction = forward(last_batch)
             predictions.append(prediction.clone().detach())
             metrics[symbol_index]['forecast'] = stack(predictions).flatten()
             metrics[symbol_index]['correct'] = total_correct
