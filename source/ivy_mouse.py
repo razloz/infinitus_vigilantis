@@ -18,9 +18,9 @@ from os import path, listdir
 from os.path import abspath, dirname, getmtime, realpath
 from source.ivy_cartography import cartography
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2024, Daniel Ward'
+__copyright__ = 'Copyright 2025, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = 'gardneri'
+__version__ = 'tres leches'
 ROOT_PATH = abspath(path.join(dirname(realpath(__file__)), '..'))
 CAULDRON_PATH = path.join(ROOT_PATH, 'cauldron')
 LOG_PATH = path.join(ROOT_PATH, 'logs', 'ivy_mouse.log')
@@ -540,7 +540,8 @@ class ThreeBlindMice():
         self,
         skip_charts=True,
         skip_validation=True,
-        price_limit=55.0,
+        price_max=420.69,
+        price_min=1.37,
         ):
         """
         Create website documents.
@@ -559,41 +560,123 @@ class ThreeBlindMice():
         features = cauldron.features
         candelabrum = cauldron.candelabrum
         n_batch = cauldron.constants['n_batch']
-        _labels = ('close', 'trend', 'price_zs', 'price_wema', 'volume_zs')
-        feature_indices = {k: features.index(k) for k in _labels}
+        feature_indices = {k: features.index(k) for k in features}
         picks = dict()
         chit_chat('\b: generating technical rating')
         for i, (symbol_name, symbol_data) in enumerate(candelabrum.items()):
-            symbol_close = symbol_data[-1, feature_indices['close']]
-            if symbol_close > price_limit:
-                continue
             symbol_metrics = metrics[i]
             accuracy = float(symbol_metrics['accuracy'] * 0.01)
+            ohlc_indices = [
+                feature_indices['open'],
+                feature_indices['high'],
+                feature_indices['low'],
+                feature_indices['close'],
+                ]
+            candle_stack = symbol_data[-3:, ohlc_indices]
             symbol_open = symbol_data[0, feature_indices['close']]
+            symbol_close = symbol_data[-1, feature_indices['close']]
             symbol_trend = symbol_data[-1, feature_indices['trend']]
             symbol_zs = symbol_data[-1, feature_indices['price_zs']]
-            volume_zs = symbol_data[-1, feature_indices['volume_zs']]
+            symbol_sdev = symbol_data[-1, feature_indices['price_sdev']]
             symbol_wema = symbol_data[-1, feature_indices['price_wema']]
+            symbol_mid = symbol_data[-1, feature_indices['price_mid']]
+            volume_close = symbol_data[-1, feature_indices['volume_zs']]
+            volume_zs = symbol_data[-1, feature_indices['volume_zs']]
+            volume_wema = symbol_data[-1, feature_indices['volume_wema']]
+            volume_mid = symbol_data[-1, feature_indices['volume_mid']]
             open_close = [symbol_open, symbol_close]
             symbol_max = max(open_close)
             symbol_min = min(open_close)
             median = symbol_max - ((symbol_max - symbol_min) / 2)
-            signals = [
-                symbol_zs <= 0.8,
-                volume_zs <= -0.5,
-                symbol_trend > 3,
-                symbol_close > symbol_wema,
-                symbol_close > symbol_open,
-                symbol_close > median,
+            candle_oc = [candle_stack[-1, 0], candle_stack[-1, 3]]
+            candle_size = max(candle_oc) - min(candle_oc)
+            candle_top = max(candle_stack[-1])
+            candle_wick = candle_top - min(candle_stack[-1])
+            candle_mid = candle_top - (candle_wick * 0.5)
+            candle_upper = candle_top - (candle_wick * 0.25)
+            candle_lower = candle_top - (candle_wick * 0.75)
+            isDoji = candle_size <= symbol_sdev * 0.03
+            stack_open = candle_stack[-1, 0]
+            stack_close = candle_stack[-1, 3]
+            isHammer = stack_open > candle_upper < stack_close
+            isTombstone = stack_open < candle_lower > stack_close
+            wick_1 = [max(candle_stack[0]), min(candle_stack[0])]
+            wick_2 = [max(candle_stack[1]), min(candle_stack[1])]
+            wick_3 = [max(candle_stack[2]), min(candle_stack[2])]
+            c0 = wick_2[0] - wick_2[1]
+            c1 = wick_1[0] + c0
+            c2 = wick_2[0] - (c0 * 0.5)
+            c3 = wick_3[0] + c0
+            isShootingStar = bool(c1 < c2 > c3)
+            c0 = wick_2[0] - wick_2[1]
+            c1 = wick_1[1] - c0
+            c2 = wick_2[0] - (c0 * 0.5)
+            c3 = wick_3[1] - c0
+            isAbandonedBaby = bool(c1 > c2 < c3)
+            # generate fibs
+            dataset_ohlc = list()
+            dataset_ohlc += symbol_data[-34:, feature_indices['open']].tolist()
+            dataset_ohlc += symbol_data[-34:, feature_indices['high']].tolist()
+            dataset_ohlc += symbol_data[-34:, feature_indices['low']].tolist()
+            dataset_ohlc += symbol_data[-34:, feature_indices['close']].tolist()
+            ylim_high = float(max(dataset_ohlc))
+            ylim_low = float(min(dataset_ohlc))
+            fib_range = ylim_high - ylim_low
+            fib_lines = [
+                round(float(ylim_high), 2),
+                0.118, 0.250, 0.382, 0.500, 0.618, 0.750, 0.882,
+                round(float(ylim_low), 2),
                 ]
+            fib_len = len(fib_lines) - 1
+            for i, v in enumerate(fib_lines):
+                if i == 0 or i == fib_len:
+                    continue
+                fib_lines[i] = round(float(ylim_high - (fib_range * v)), 2)
+            # generate current rating
+            signal_weak = all([
+                symbol_close > symbol_open,
+                symbol_close > symbol_mid,
+                symbol_close > symbol_wema,
+                fib_lines[4] >= median,
+                ])
+            signal_strong = all([
+                volume_close < volume_mid,
+                volume_close < volume_wema,
+                volume_wema < volume_mid,
+                ])
+            signal_ultra = all([
+                symbol_trend > -3,
+                -0.3 <= symbol_zs <= 0.3,
+                0.3 <= volume_zs <= -0.3,
+                fib_lines[3] > symbol_close > fib_lines[5],
+                ])
             rating = 0
-            for signal in signals:
-                rating += 1 if signal else 0
+            rating += 1 if ylim_high > symbol_close > ylim_low else 0
+            rating += 0.55 if signal_ultra else 0
+            rating += 0.30 if signal_strong else 0
+            rating += 0.15 if signal_weak else 0
+            rating += 0.55 if isShootingStar or isAbandonedBaby else 0
+            rating += 0.30 if isDoji else 0
+            rating += 0.15 if isHammer or isTombstone else 0
+            rating /= 3
             picks[symbol_name] = symbol_metrics
             picks[symbol_name]['rating'] = float(rating)
+            # end of rating block
         picks = pandas.DataFrame(picks).transpose()
         picks = picks.sort_values(by=['rating', 'accuracy'], ascending=False)
         picks = picks.index[:100].tolist()
+        chit_chat('\b: building html documents')
+        cabinet = ivy_https.build(
+            list(candelabrum.keys()),
+            features,
+            candelabrum,
+            metrics,
+            picks,
+        )
+        for file_path, file_data in cabinet.items():
+            file_path = abspath(path.join(https_path, file_path))
+            with open(file_path, 'w+') as html_file:
+                html_file.write(file_data)
         if not skip_charts:
             chit_chat('\b: plotting charts')
             read_csv = pandas.read_csv
@@ -608,19 +691,7 @@ class ThreeBlindMice():
                     candles,
                     read_csv(candles_path.format(symbol)).timestamp.tolist(),
                     chart_path=chart_path.format(symbol),
-                    chart_size=200,
+                    chart_size=50,
                     forecast=forecast,
                     batch_size=n_batch,
                     )
-        chit_chat('\b: building html documents')
-        cabinet = ivy_https.build(
-            list(candelabrum.keys()),
-            features,
-            candelabrum,
-            metrics,
-            picks,
-        )
-        for file_path, file_data in cabinet.items():
-            file_path = abspath(path.join(https_path, file_path))
-            with open(file_path, 'w+') as html_file:
-                html_file.write(file_data)

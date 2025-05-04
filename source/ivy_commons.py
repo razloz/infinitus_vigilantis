@@ -8,9 +8,9 @@ from threading import Thread, Lock
 from multiprocessing import Process
 from pandas import DataFrame
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2024, Daniel Ward'
+__copyright__ = 'Copyright 2025, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = 'gardneri'
+__version__ = 'tres leches'
 
 
 SILENT = True
