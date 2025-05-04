@@ -1,9 +1,9 @@
 #!./.env/bin/python3
 """Launcher for the Infinitus Vigilantis application."""
 __author__ = 'Daniel Ward'
-__copyright__ = 'Copyright 2024, Daniel Ward'
+__copyright__ = 'Copyright 2025, Daniel Ward'
 __license__ = 'GPL v3'
-__version__ = 'gardneri'
+__version__ = 'tres leches'
 
 
 if __name__ == '__main__':
